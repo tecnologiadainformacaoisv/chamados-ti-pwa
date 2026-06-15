@@ -325,7 +325,7 @@ function initApp() {
   document.getElementById('chamado-form')?.addEventListener('submit', onFormSubmit);
 
   loadTickets();
-  setInterval(loadTickets, 180000); // refresh every 3 min
+  setupRefreshPolling();
 
   const hash = location.hash.replace('#', '') || 'novo-chamado';
   switchTab(hash);
@@ -792,6 +792,33 @@ function doLogout() {
 }
 
 // ============================================================
+// SMART POLLING (Page Visibility API)
+// ============================================================
+function setupRefreshPolling() {
+  let pollTimer = null;
+
+  function scheduleNext() {
+    clearTimeout(pollTimer);
+    // 60s when tab is visible, 5min when hidden/background
+    const delay = document.hidden ? 300000 : 60000;
+    pollTimer = setTimeout(async () => {
+      await loadTickets();
+      scheduleNext();
+    }, delay);
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      // User switched back to this tab: refresh immediately
+      loadTickets();
+    }
+    scheduleNext();
+  });
+
+  scheduleNext();
+}
+
+// ============================================================
 // REFRESH BUTTON
 // ============================================================
 function setupRefresh() {
@@ -868,7 +895,10 @@ const NOTIFY_STATUSES = {
 function setupNotifications() {
   if (!('Notification' in window)) return;
   if (Notification.permission !== 'default') return;
-  if (store.get('notif_dismissed') === '1') return;
+
+  // Re-show 24h after last dismissal
+  const dismissedAt = parseInt(store.get('notif_dismissed_at') || '0');
+  if (dismissedAt > 0 && (Date.now() - dismissedAt) < 86400000) return;
 
   const banner = document.getElementById('notif-banner');
   if (!banner) return;
@@ -877,12 +907,16 @@ function setupNotifications() {
   document.getElementById('notif-enable')?.addEventListener('click', async () => {
     banner.classList.add('hidden');
     const perm = await Notification.requestPermission();
-    if (perm === 'granted') toast('Notificações ativadas! Você será avisado sobre atualizações dos seus chamados.', 'success');
+    if (perm === 'granted') {
+      toast('Notificações ativadas! Você será avisado sobre seus chamados.', 'success');
+    } else if (perm === 'denied') {
+      toast('Permissão negada. Ative nas configurações do navegador se mudar de ideia.', 'error');
+    }
   });
 
   document.getElementById('notif-dismiss')?.addEventListener('click', () => {
     banner.classList.add('hidden');
-    store.set('notif_dismissed', '1');
+    store.set('notif_dismissed_at', String(Date.now()));
   });
 }
 
