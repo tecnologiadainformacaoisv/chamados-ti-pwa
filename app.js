@@ -96,7 +96,6 @@ const STATUS_MAP = {
 // ============================================================
 // STATE
 // ============================================================
-let allTasks = [];
 let myTasks  = [];
 let deferredInstallPrompt = null;
 
@@ -480,12 +479,14 @@ async function loadTickets() {
   setLoadingState('all', true);
   try {
     const userIdx = parseInt(store.get('user_idx'));
-    const [all, mine] = await Promise.all([fetchTasks(), fetchMyTasks(userIdx)]);
-    allTasks = all;
-    // Server-side filter is primary; fall back to client-side if API filter returns nothing
-    myTasks = mine.length > 0
-      ? mine
-      : all.filter(t => Number(getCustomField(t, FIELD_IDS.SOLICITANTE)) === userIdx);
+    const fetched = await fetchMyTasks(userIdx);
+    if (fetched.length > 0) {
+      myTasks = fetched;
+    } else {
+      // Fallback: fetch all tasks and filter client-side
+      const all = await fetchTasks();
+      myTasks = all.filter(t => Number(getCustomField(t, FIELD_IDS.SOLICITANTE)) === userIdx);
+    }
     renderAll();
     updateAlertBadge();
   } catch (err) {
@@ -496,18 +497,16 @@ async function loadTickets() {
 }
 
 function renderAll() {
-  const activeTasks = allTasks.filter(t => t.status?.status !== 'encerrado');
-
-  renderList('list-meus',  applyStatusFilter(myTasks,     getFilterValue('filter-status-meus')),  renderDetailCard);
-  renderList('list-todos', applyStatusFilter(activeTasks, getFilterValue('filter-status-todos')), renderCard);
-
   const myActive = myTasks.filter(t => t.status?.status !== 'encerrado');
-  setCount('count-meus',  myActive.length);
-  setCount('count-todos', activeTasks.length);
 
-  const myOverdue = myActive.filter(isOverdue);
-  const meusTab   = document.querySelector('[data-tab="meus-chamados"]');
-  if (meusTab) meusTab.classList.toggle('has-overdue', myOverdue.length > 0);
+  renderList('list-meus',  applyStatusFilter(myActive,  getFilterValue('filter-status-meus')),  renderDetailCard);
+  renderList('list-todos', applyStatusFilter(myTasks,   getFilterValue('filter-status-todos')), renderDetailCard);
+
+  setCount('count-meus',  myActive.length);
+  setCount('count-todos', myTasks.length);
+
+  const meusTab = document.querySelector('[data-tab="meus-chamados"]');
+  if (meusTab) meusTab.classList.toggle('has-overdue', myActive.filter(isOverdue).length > 0);
 }
 
 function applyStatusFilter(tasks, filterVal) {
@@ -606,9 +605,6 @@ function renderDetailCard(task) {
 
   <div class="detail-footer">
     <span class="detail-update">Atualizado ${timeAgo(task.date_updated)}</span>
-    <a href="https://app.clickup.com/t/${escHtml(task.id)}" target="_blank" rel="noopener" class="ticket-cu-link">
-      Ver no ClickUp ↗
-    </a>
   </div>
 </div>`;
 }
@@ -668,9 +664,6 @@ function renderCard(task) {
   <div class="ticket-footer">
     <span class="ticket-sol">👤 ${escHtml(solName)}</span>
     ${email ? `<span class="ticket-email">✉ ${escHtml(String(email))}</span>` : ''}
-    <a href="https://app.clickup.com/t/${escHtml(task.id)}" target="_blank" rel="noopener" class="ticket-cu-link">
-      Ver no ClickUp ↗
-    </a>
   </div>
 </div>`;
 }
@@ -679,7 +672,7 @@ function renderCard(task) {
 // ALERT BADGE & MODAL
 // ============================================================
 function updateAlertBadge() {
-  const overdue = allTasks.filter(isOverdue);
+  const overdue = myTasks.filter(isOverdue);
   const badge   = document.getElementById('alert-badge');
   badge.textContent = overdue.length;
   badge.classList.toggle('hidden', overdue.length === 0);
@@ -692,7 +685,7 @@ function setupAlertsModal() {
 }
 
 function openAlertsModal() {
-  const overdue = allTasks.filter(isOverdue);
+  const overdue = myTasks.filter(isOverdue);
   const list    = document.getElementById('alerts-list');
 
   if (overdue.length === 0) {
@@ -731,12 +724,12 @@ function closeAlertsModal() {
 // ============================================================
 function setupFilters() {
   document.getElementById('filter-status-meus')?.addEventListener('change', () => {
-    renderList('list-meus', applyStatusFilter(myTasks, getFilterValue('filter-status-meus')), renderDetailCard);
+    const myActive = myTasks.filter(t => t.status?.status !== 'encerrado');
+    renderList('list-meus', applyStatusFilter(myActive, getFilterValue('filter-status-meus')), renderDetailCard);
   });
 
   document.getElementById('filter-status-todos')?.addEventListener('change', () => {
-    const active = allTasks.filter(t => t.status?.status !== 'encerrado');
-    renderList('list-todos', applyStatusFilter(active, getFilterValue('filter-status-todos')));
+    renderList('list-todos', applyStatusFilter(myTasks, getFilterValue('filter-status-todos')), renderDetailCard);
   });
 }
 
