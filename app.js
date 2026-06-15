@@ -97,6 +97,7 @@ const STATUS_MAP = {
 // STATE
 // ============================================================
 let allTasks = [];
+let myTasks  = [];
 let deferredInstallPrompt = null;
 
 // ============================================================
@@ -144,12 +145,35 @@ async function fetchTasks() {
   return data.tasks || [];
 }
 
+async function fetchMyTasks(userIdx) {
+  try {
+    const cf = JSON.stringify([{
+      field_id: FIELD_IDS.SOLICITANTE,
+      operator: '=',
+      value: userIdx
+    }]);
+    const params = new URLSearchParams({
+      order_by: 'created',
+      reverse: 'true',
+      include_closed: 'true',
+      page: '0',
+      custom_fields: cf
+    });
+    const data = await apiRequest('GET', `/list/${LIST_ID}/task?${params}`);
+    return data.tasks || [];
+  } catch {
+    return [];
+  }
+}
+
 // ============================================================
 // HELPERS
 // ============================================================
 function getCustomField(task, fieldId) {
   const f = task.custom_fields?.find(cf => cf.id === fieldId);
   if (!f || f.value === undefined || f.value === null) return null;
+  // ClickUp list endpoint may return dropdown value as {orderindex, id, name} object
+  if (typeof f.value === 'object' && 'orderindex' in f.value) return f.value.orderindex;
   return f.value;
 }
 
@@ -426,7 +450,13 @@ function setLoadingState(which, loading) {
 async function loadTickets() {
   setLoadingState('all', true);
   try {
-    allTasks = await fetchTasks();
+    const userIdx = parseInt(store.get('user_idx'));
+    const [all, mine] = await Promise.all([fetchTasks(), fetchMyTasks(userIdx)]);
+    allTasks = all;
+    // Server-side filter is primary; fall back to client-side if API filter returns nothing
+    myTasks = mine.length > 0
+      ? mine
+      : all.filter(t => Number(getCustomField(t, FIELD_IDS.SOLICITANTE)) === userIdx);
     renderAll();
     updateAlertBadge();
   } catch (err) {
@@ -437,13 +467,6 @@ async function loadTickets() {
 }
 
 function renderAll() {
-  const userIdx = parseInt(store.get('user_idx'));
-
-  const myTasks = allTasks.filter(t => {
-    const v = getCustomField(t, FIELD_IDS.SOLICITANTE);
-    return Number(v) === userIdx;
-  });
-
   const activeTasks = allTasks.filter(t => t.status?.status !== 'encerrado');
 
   renderList('list-meus',  applyStatusFilter(myTasks,     getFilterValue('filter-status-meus')));
@@ -592,8 +615,6 @@ function closeAlertsModal() {
 // ============================================================
 function setupFilters() {
   document.getElementById('filter-status-meus')?.addEventListener('change', () => {
-    const userIdx = parseInt(store.get('user_idx'));
-    const myTasks = allTasks.filter(t => Number(getCustomField(t, FIELD_IDS.SOLICITANTE)) === userIdx);
     renderList('list-meus', applyStatusFilter(myTasks, getFilterValue('filter-status-meus')));
   });
 
