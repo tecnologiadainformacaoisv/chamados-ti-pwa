@@ -33,7 +33,7 @@
       </div>
 
       <form id="setup-form" autocomplete="off" novalidate>
-        <div class="setup-field">
+        <div class="setup-field" id="setup-key-field">
           <label for="setup-api-key">Chave de API do ClickUp</label>
           <div class="input-eye-wrap">
             <input id="setup-api-key" type="password" placeholder="pk_xxxxxxxxxxxxxxx..." autocomplete="off" spellcheck="false">
@@ -44,7 +44,7 @@
               </svg>
             </button>
           </div>
-          <small>Solicite ao responsável de TI para obter a chave</small>
+          <small>Solicite ao responsável de TI o link de acesso</small>
         </div>
 
         <div class="setup-field">
@@ -307,10 +307,6 @@
         <div class="form-group">
           <label for="settings-email">Seu e-mail</label>
           <input id="settings-email" type="email" placeholder="voce@isv.com.br">
-        </div>
-        <div class="form-group">
-          <label for="settings-key-display">Chave API atual</label>
-          <input id="settings-key-display" type="password" readonly class="input-readonly">
         </div>
       </div>
       <div class="modal-footer">

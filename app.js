@@ -114,7 +114,6 @@ const store = {
 async function apiRequest(method, path, body = null) {
   const key = store.get('cu_key');
   if (!key) throw new Error('API key não configurada');
-
   const opts = {
     method,
     headers: { 'Authorization': key, 'Content-Type': 'application/json' }
@@ -128,11 +127,6 @@ async function apiRequest(method, path, body = null) {
     throw new Error(data.err || `Erro HTTP ${res.status}`);
   }
   return res.json();
-}
-
-async function verifyApiKey(key) {
-  const res = await fetch(`${API_BASE}/team`, { headers: { 'Authorization': key } });
-  return res.ok;
 }
 
 async function createTask(payload) {
@@ -218,38 +212,42 @@ function showSetup() {
   document.getElementById('setup-screen').classList.remove('hidden');
   document.getElementById('app').classList.add('hidden');
   populateSelect('setup-name', SOLICITANTES);
+
+  // Hide the key field if already configured via invite link
+  const keyField = document.getElementById('setup-key-field');
+  if (keyField) keyField.classList.toggle('hidden', !!store.get('cu_key'));
+
+  // Eye toggle
+  const eyeBtn = document.getElementById('toggle-key');
+  const keyInput = document.getElementById('setup-api-key');
+  eyeBtn?.addEventListener('click', () => {
+    if (keyInput) keyInput.type = keyInput.type === 'password' ? 'text' : 'password';
+  });
 }
 
-async function onSetupSubmit(e) {
+function onSetupSubmit(e) {
   e.preventDefault();
-  const key    = document.getElementById('setup-api-key').value.trim();
-  const nameEl = document.getElementById('setup-name');
-  const email  = document.getElementById('setup-email').value.trim();
+  const nameEl  = document.getElementById('setup-name');
+  const email   = document.getElementById('setup-email').value.trim();
+  const keyInput = document.getElementById('setup-api-key');
+  const keyVisible = !document.getElementById('setup-key-field')?.classList.contains('hidden');
 
-  if (!key || nameEl.value === '') {
-    toast('Preencha a chave API e seu nome', 'error');
+  if (nameEl.value === '') {
+    toast('Selecione seu nome para continuar', 'error');
     return;
   }
 
-  const btn = document.getElementById('setup-btn');
-  btn.disabled = true;
-  btn.querySelector('span').textContent = 'Verificando...';
-
-  try {
-    const ok = await verifyApiKey(key);
-    if (!ok) throw new Error('Chave inválida');
-
+  if (keyVisible) {
+    const key = keyInput?.value.trim();
+    if (!key) { toast('Informe a chave de API', 'error'); return; }
     store.set('cu_key', key);
-    store.set('user_idx', nameEl.value);
-    store.set('user_email', email);
-
-    document.getElementById('setup-screen').classList.add('hidden');
-    initApp();
-  } catch {
-    toast('Chave de API inválida. Verifique e tente novamente.', 'error');
-    btn.disabled = false;
-    btn.querySelector('span').textContent = 'Salvar e Entrar';
   }
+
+  store.set('user_idx', nameEl.value);
+  store.set('user_email', email);
+
+  document.getElementById('setup-screen').classList.add('hidden');
+  initApp();
 }
 
 // ============================================================
@@ -626,8 +624,7 @@ function openSettings() {
   });
   sel.value = store.get('user_idx') || '';
 
-  document.getElementById('settings-email').value       = store.get('user_email') || '';
-  document.getElementById('settings-key-display').value = store.get('cu_key') || '';
+  document.getElementById('settings-email').value = store.get('user_email') || '';
 
   document.getElementById('settings-modal').classList.remove('hidden');
 }
@@ -692,17 +689,6 @@ function setupPriorityInfo() {
   });
 }
 
-// ============================================================
-// EYE TOGGLE (setup api key)
-// ============================================================
-function setupEyeToggle() {
-  const btn   = document.getElementById('toggle-key');
-  const input = document.getElementById('setup-api-key');
-  if (!btn || !input) return;
-  btn.addEventListener('click', () => {
-    input.type = input.type === 'password' ? 'text' : 'password';
-  });
-}
 
 // ============================================================
 // INSTALL BANNER (PWA)
@@ -747,9 +733,17 @@ document.addEventListener('DOMContentLoaded', () => {
     navigator.serviceWorker.register('./sw.js').catch(console.warn);
   }
 
-  setupEyeToggle();
+  // Auto-configure via invite link: #setup=API_KEY
+  const hash = location.hash;
+  if (hash.startsWith('#setup=')) {
+    const key = decodeURIComponent(hash.slice(7));
+    if (key) {
+      store.set('cu_key', key);
+      history.replaceState(null, '', location.pathname); // remove key from URL
+    }
+  }
 
-  if (store.get('cu_key')) {
+  if (store.get('cu_key') && store.get('user_idx') !== null) {
     initApp();
   } else {
     showSetup();
