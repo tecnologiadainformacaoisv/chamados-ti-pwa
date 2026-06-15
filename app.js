@@ -230,16 +230,15 @@ function onSetupSubmit(e) {
   e.preventDefault();
   const nameEl  = document.getElementById('setup-name');
   const email   = document.getElementById('setup-email').value.trim();
-  const keyInput = document.getElementById('setup-api-key');
-  const keyVisible = !document.getElementById('setup-key-field')?.classList.contains('hidden');
-
   if (nameEl.value === '') {
     toast('Selecione seu nome para continuar', 'error');
     return;
   }
 
-  if (keyVisible) {
-    const key = keyInput?.value.trim();
+  // Key field only exists in DOM when not pre-configured via invite link
+  const keyField = document.getElementById('setup-key-field');
+  if (keyField) {
+    const key = document.getElementById('setup-api-key')?.value.trim();
     if (!key) { toast('Informe a chave de API', 'error'); return; }
     store.set('cu_key', key);
   }
