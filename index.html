@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1a3a6b">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="TI Chamados">
+  <title>Chamados de TI – ISV</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ===================== SETUP ===================== -->
+  <div id="setup-screen" class="hidden">
+    <div class="setup-bg"></div>
+    <div class="setup-card">
+      <div class="setup-logo">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+          <rect width="64" height="64" rx="12" fill="#1a3a6b"/>
+          <rect x="9" y="16" width="46" height="30" rx="4" fill="none" stroke="#fff" stroke-width="3"/>
+          <line x1="32" y1="46" x2="32" y2="54" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+          <line x1="20" y1="54" x2="44" y2="54" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+          <circle cx="32" cy="30" r="7" fill="none" stroke="#4a90d9" stroke-width="3"/>
+          <line x1="32" y1="26" x2="32" y2="32" stroke="#4a90d9" stroke-width="3" stroke-linecap="round"/>
+          <circle cx="32" cy="36" r="1.5" fill="#4a90d9"/>
+        </svg>
+        <h1>Chamados de TI</h1>
+        <p>ISV – Suporte Técnico</p>
+      </div>
+
+      <form id="setup-form" autocomplete="off" novalidate>
+        <div class="setup-field">
+          <label for="setup-api-key">Chave de API do ClickUp</label>
+          <div class="input-eye-wrap">
+            <input id="setup-api-key" type="password" placeholder="pk_xxxxxxxxxxxxxxx..." autocomplete="off" spellcheck="false">
+            <button type="button" id="toggle-key" class="eye-btn" title="Mostrar/ocultar">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M2 10s3-6 8-6 8 6 8 6-3 6-8 6-8-6-8-6z"/>
+                <circle cx="10" cy="10" r="2.5"/>
+              </svg>
+            </button>
+          </div>
+          <small>Solicite ao responsável de TI para obter a chave</small>
+        </div>
+
+        <div class="setup-field">
+          <label for="setup-name">Seu nome *</label>
+          <select id="setup-name" required>
+            <option value="">Selecione seu nome...</option>
+          </select>
+        </div>
+
+        <div class="setup-field">
+          <label for="setup-email">Seu e-mail <span class="optional">(opcional)</span></label>
+          <input id="setup-email" type="email" placeholder="voce@isv.com.br">
+        </div>
+
+        <button id="setup-btn" type="submit" class="btn-primary btn-full">
+          <span>Salvar e Entrar</span>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===================== APP ===================== -->
+  <div id="app" class="hidden">
+
+    <!-- HEADER -->
+    <header class="app-header">
+      <div class="header-brand">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="36" height="36">
+          <rect width="40" height="40" rx="8" fill="rgba(255,255,255,0.15)"/>
+          <rect x="6" y="10" width="28" height="18" rx="3" fill="none" stroke="#fff" stroke-width="2.2"/>
+          <line x1="20" y1="28" x2="20" y2="34" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+          <line x1="13" y1="34" x2="27" y2="34" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+          <circle cx="20" cy="18.5" r="4" fill="none" stroke="#90c4f9" stroke-width="2"/>
+          <line x1="20" y1="15.5" x2="20" y2="19" stroke="#90c4f9" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="20" cy="22" r="1" fill="#90c4f9"/>
+        </svg>
+        <div class="brand-text">
+          <span class="brand-title">Chamados de TI</span>
+          <span class="brand-sub">ISV</span>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <div class="alert-wrap">
+          <span id="alert-badge" class="alert-badge hidden">0</span>
+          <button id="btn-alerts" class="icon-btn" title="Alertas de atraso">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M10 2a6 6 0 0 1 6 6c0 3.5 1.5 5 1.5 5h-15S4 11.5 4 8a6 6 0 0 1 6-6z"/>
+              <path d="M8.5 16.5a1.5 1.5 0 0 0 3 0"/>
+            </svg>
+          </button>
+        </div>
+        <div class="user-chip">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+            <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8 9a6 6 0 0 0-6 6h12a6 6 0 0 0-6-6z"/>
+          </svg>
+          <span id="user-name-display">–</span>
+        </div>
+        <button id="btn-refresh" class="icon-btn" title="Atualizar chamados">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M4 10a6 6 0 1 0 .5-2.5" stroke-linecap="round"/>
+            <polyline points="4,4 4,8 8,8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <button id="btn-settings" class="icon-btn" title="Configurações">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6">
+            <circle cx="10" cy="10" r="2.5"/>
+            <path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.2 4.2l1.4 1.4M14.4 14.4l1.4 1.4M4.2 15.8l1.4-1.4M14.4 5.6l1.4-1.4"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- TABS -->
+    <nav class="tab-nav" role="tablist">
+      <button class="tab-btn" data-tab="novo-chamado" role="tab" aria-selected="true">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/>
+        </svg>
+        Novo Chamado
+      </button>
+      <button class="tab-btn" data-tab="meus-chamados" role="tab" aria-selected="false">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" stroke-linecap="round"/>
+          <path d="M2 14a6 6 0 0 1 12 0" stroke-linecap="round"/>
+        </svg>
+        Meus Chamados
+        <span id="count-meus" class="count-pill hidden">0</span>
+      </button>
+      <button class="tab-btn" data-tab="todos-chamados" role="tab" aria-selected="false">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <rect x="2" y="3" width="12" height="10" rx="2"/>
+          <line x1="5" y1="7" x2="11" y2="7"/><line x1="5" y1="10" x2="9" y2="10"/>
+        </svg>
+        Todos
+        <span id="count-todos" class="count-pill hidden">0</span>
+      </button>
+    </nav>
+
+    <!-- MAIN -->
+    <main class="app-main">
+
+      <!-- PANEL: NOVO CHAMADO -->
+      <section id="panel-novo-chamado" class="tab-panel" role="tabpanel">
+        <div class="form-wrapper">
+          <div class="form-card">
+            <div class="form-card-header">
+              <h2>Abrir Novo Chamado</h2>
+              <p>Preencha as informações abaixo para registrar sua solicitação</p>
+            </div>
+
+            <form id="chamado-form" novalidate>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="f-solicitante">Solicitante <span class="req">*</span></label>
+                  <select id="f-solicitante" required>
+                    <option value="">Selecione...</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="f-setor">Setor / Departamento <span class="req">*</span></label>
+                  <select id="f-setor" required>
+                    <option value="">Selecione...</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="f-email">E-mail para contato</label>
+                  <input id="f-email" type="email" placeholder="voce@isv.com.br">
+                </div>
+                <div class="form-group">
+                  <label for="f-tipo">Tipo de Solicitação <span class="req">*</span></label>
+                  <select id="f-tipo" required>
+                    <option value="">Selecione...</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>Prioridade <span class="req">*</span></label>
+                <div class="priority-group" id="priority-group">
+                  <label class="prio-option" data-value="4">
+                    <input type="radio" name="prioridade" value="4">
+                    <span class="prio-label" style="--pc:#9e9e9e">Baixa</span>
+                  </label>
+                  <label class="prio-option" data-value="3">
+                    <input type="radio" name="prioridade" value="3" checked>
+                    <span class="prio-label" style="--pc:#2196f3">Normal</span>
+                  </label>
+                  <label class="prio-option" data-value="2">
+                    <input type="radio" name="prioridade" value="2">
+                    <span class="prio-label" style="--pc:#ff9800">Alta</span>
+                  </label>
+                  <label class="prio-option" data-value="1">
+                    <input type="radio" name="prioridade" value="1">
+                    <span class="prio-label" style="--pc:#ef5350">Urgente</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="f-descricao">Descrição do Problema <span class="req">*</span></label>
+                <textarea id="f-descricao" rows="3" placeholder="Descreva o problema de forma breve e clara..." required maxlength="300"></textarea>
+                <span class="char-count"><span id="char-count">0</span>/300</span>
+              </div>
+
+              <div class="form-group">
+                <label for="f-detalhes">Detalhes Adicionais <span class="optional">(opcional)</span></label>
+                <textarea id="f-detalhes" rows="3" placeholder="Mensagens de erro, quando começou, outros detalhes relevantes..."></textarea>
+              </div>
+
+              <div class="form-submit-row">
+                <div id="form-sla-info" class="sla-info">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <circle cx="8" cy="8" r="6"/><line x1="8" y1="5" x2="8" y2="8" stroke-linecap="round"/><circle cx="8" cy="11" r="0.5" fill="currentColor"/>
+                  </svg>
+                  Prazo de atendimento: <strong id="sla-label">72 horas</strong>
+                </div>
+                <button id="form-submit-btn" type="submit" class="btn-primary">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                    <line x1="2" y1="8" x2="14" y2="8"/><polyline points="9,3 14,8 9,13"/>
+                  </svg>
+                  Abrir Chamado
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- PANEL: MEUS CHAMADOS -->
+      <section id="panel-meus-chamados" class="tab-panel hidden" role="tabpanel">
+        <div class="tickets-wrapper">
+          <div class="tickets-toolbar">
+            <h2>Meus Chamados</h2>
+            <div class="toolbar-right">
+              <select id="filter-status-meus" class="filter-select">
+                <option value="">Todos os status</option>
+                <option value="aberto">Aberto</option>
+                <option value="em atendimento">Em Atendimento</option>
+                <option value="pendente">Pendente</option>
+                <option value="encerrado">Encerrado</option>
+              </select>
+            </div>
+          </div>
+          <div id="loading-meus" class="loading-state hidden">
+            <div class="spinner"></div>
+            <span>Carregando chamados...</span>
+          </div>
+          <div id="list-meus" class="ticket-list"></div>
+        </div>
+      </section>
+
+      <!-- PANEL: TODOS OS CHAMADOS -->
+      <section id="panel-todos-chamados" class="tab-panel hidden" role="tabpanel">
+        <div class="tickets-wrapper">
+          <div class="tickets-toolbar">
+            <h2>Todos os Chamados Ativos</h2>
+            <div class="toolbar-right">
+              <select id="filter-status-todos" class="filter-select">
+                <option value="">Todos os status</option>
+                <option value="aberto">Aberto</option>
+                <option value="em atendimento">Em Atendimento</option>
+                <option value="pendente">Pendente</option>
+              </select>
+            </div>
+          </div>
+          <div id="loading-todos" class="loading-state hidden">
+            <div class="spinner"></div>
+            <span>Carregando chamados...</span>
+          </div>
+          <div id="list-todos" class="ticket-list"></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- ===================== SETTINGS MODAL ===================== -->
+  <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Configurações">
+    <div id="settings-overlay" class="modal-overlay"></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Configurações</h3>
+        <button id="settings-close" class="icon-btn-dark" aria-label="Fechar">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="settings-name">Seu nome</label>
+          <select id="settings-name">
+            <option value="">Selecione...</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="settings-email">Seu e-mail</label>
+          <input id="settings-email" type="email" placeholder="voce@isv.com.br">
+        </div>
+        <div class="form-group">
+          <label for="settings-key-display">Chave API atual</label>
+          <input id="settings-key-display" type="password" readonly class="input-readonly">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="settings-logout" class="btn-danger-outline">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M6 2H3a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>
+            <polyline points="10,11 13,8 10,5"/><line x1="13" y1="8" x2="6" y2="8"/>
+          </svg>
+          Desconectar
+        </button>
+        <div class="modal-footer-right">
+          <button id="settings-cancel" class="btn-secondary">Cancelar</button>
+          <button id="settings-save" class="btn-primary">Salvar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== ALERTS MODAL ===================== -->
+  <div id="alerts-modal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Alertas">
+    <div id="alerts-overlay" class="modal-overlay"></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>⚠ Chamados em Atraso</h3>
+        <button id="alerts-close" class="icon-btn-dark" aria-label="Fechar">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body" id="alerts-list"></div>
+    </div>
+  </div>
+
+  <!-- TOASTS -->
+  <div id="toast-container" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
