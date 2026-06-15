@@ -213,9 +213,10 @@ function showSetup() {
   document.getElementById('app').classList.add('hidden');
   populateSelect('setup-name', SOLICITANTES);
 
-  // Hide the key field if already configured via invite link
-  const keyField = document.getElementById('setup-key-field');
-  if (keyField) keyField.classList.toggle('hidden', !!store.get('cu_key'));
+  // Remove key field if already configured via invite link
+  if (store.get('cu_key')) {
+    document.getElementById('setup-key-field')?.remove();
+  }
 
   // Eye toggle
   const eyeBtn = document.getElementById('toggle-key');

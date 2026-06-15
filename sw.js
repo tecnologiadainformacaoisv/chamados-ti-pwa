@@ -1,4 +1,4 @@
-const CACHE = 'chamados-ti-v1.0.0';
+const CACHE = 'chamados-ti-v1.0.1';
 const ASSETS = [
   './index.html',
   './style.css',
