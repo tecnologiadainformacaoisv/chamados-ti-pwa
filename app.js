@@ -96,7 +96,7 @@ const STATUS_MAP = {
 // VAPID public key (65-byte uncompressed P-256, URL-safe base64)
 const VAPID_PUBLIC_KEY = 'BMgcsTAUEhUr-dau-LaPhTHktmCZ90q4GXFF6CX0p3IvmeB51v68JqZLeuKrO3swUcSXKiNhQ6Ur5I74fm6tp2Q';
 // Worker URL: fill in after deploying to Cloudflare
-const WORKER_URL = '';
+const WORKER_URL = 'https://chamados-ti-push.tecnologiadainformacao-isv.workers.dev';
 
 // ============================================================
 // STATE
