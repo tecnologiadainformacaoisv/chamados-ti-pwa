@@ -1034,3 +1034,15 @@ form { padding: 24px 28px; }
 @media (min-width: 768px) {
   .app-main { padding: 28px 24px 48px; }
 }
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+.app-footer {
+  text-align: center;
+  padding: 16px;
+  font-size: .75rem;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
