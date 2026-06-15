@@ -93,6 +93,11 @@ const STATUS_MAP = {
   'encerrado':       { label: 'Encerrado',        bg: '#e8f5e9', color: '#1b5e20', dot: '#008844' }
 };
 
+// VAPID public key (65-byte uncompressed P-256, URL-safe base64)
+const VAPID_PUBLIC_KEY = 'BMgcsTAUEhUr-dau-LaPhTHktmCZ90q4GXFF6CX0p3IvmeB51v68JqZLeuKrO3swUcSXKiNhQ6Ur5I74fm6tp2Q';
+// Worker URL: fill in after deploying to Cloudflare
+const WORKER_URL = '';
+
 // ============================================================
 // STATE
 // ============================================================
@@ -894,6 +899,13 @@ const NOTIFY_STATUSES = {
 
 function setupNotifications() {
   if (!('Notification' in window)) return;
+
+  // Already granted: ensure push subscription is registered with the worker
+  if (Notification.permission === 'granted') {
+    subscribeToPush().catch(console.warn);
+    return;
+  }
+
   if (Notification.permission !== 'default') return;
 
   // Re-show 24h after last dismissal
@@ -908,7 +920,8 @@ function setupNotifications() {
     banner.classList.add('hidden');
     const perm = await Notification.requestPermission();
     if (perm === 'granted') {
-      toast('Notificações ativadas! Você será avisado sobre seus chamados.', 'success');
+      await subscribeToPush().catch(console.warn);
+      toast('Notificações ativadas! Você será avisado em tempo real.', 'success');
     } else if (perm === 'denied') {
       toast('Permissão negada. Ative nas configurações do navegador se mudar de ideia.', 'error');
     }
@@ -918,6 +931,34 @@ function setupNotifications() {
     banner.classList.add('hidden');
     store.set('notif_dismissed_at', String(Date.now()));
   });
+}
+
+async function subscribeToPush() {
+  if (!WORKER_URL) return;
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+
+  const reg = await navigator.serviceWorker.ready;
+  let   sub = await reg.pushManager.getSubscription();
+
+  if (!sub) {
+    sub = await reg.pushManager.subscribe({
+      userVisibleOnly:      true,
+      applicationServerKey: urlB64ToUint8Array(VAPID_PUBLIC_KEY)
+    });
+  }
+
+  const userIdx = parseInt(store.get('user_idx'));
+  await fetch(`${WORKER_URL}/subscribe`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ user_idx: userIdx, subscription: sub.toJSON() })
+  });
+}
+
+function urlB64ToUint8Array(b64) {
+  const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, c => c.charCodeAt(0));
 }
 
 function checkStatusChanges(newTasks) {

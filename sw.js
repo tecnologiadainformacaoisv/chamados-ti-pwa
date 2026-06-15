@@ -1,4 +1,4 @@
-const APP_VERSION = '0.1.5';
+const APP_VERSION = '0.1.6';
 const CACHE_NAME = `chamados-ti-${APP_VERSION}`;
 const ASSETS = [
   './index.html',
@@ -21,6 +21,34 @@ self.addEventListener('activate', e => {
     )
   );
   self.clients.claim();
+});
+
+// Push notification received (app can be closed)
+self.addEventListener('push', e => {
+  const data = e.data?.json() ?? { title: 'Chamados de TI – ISV', body: 'Atualização recebida' };
+  e.waitUntil(
+    self.registration.showNotification(data.title, {
+      body:      data.body,
+      icon:      './icon.svg',
+      badge:     './icon.svg',
+      tag:       'chamado-update',
+      renotify:  true,
+      data:      { url: self.registration.scope }
+    })
+  );
+});
+
+// Click on OS notification → opens/focuses the PWA
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      for (const c of list) {
+        if (c.url.startsWith(self.registration.scope) && 'focus' in c) return c.focus();
+      }
+      return clients.openWindow(self.registration.scope);
+    })
+  );
 });
 
 self.addEventListener('fetch', e => {
