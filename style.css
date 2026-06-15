@@ -179,6 +179,16 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
 
 .input-readonly { background: var(--bg); color: var(--text-muted); cursor: default; }
 
+.input-display {
+  padding: 10px 13px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: .92rem;
+  color: var(--text);
+  background: var(--bg);
+  font-weight: 500;
+}
+
 /* ============================================================
    BUTTONS
    ============================================================ */

@@ -322,12 +322,14 @@ function populateSelect(id, list, labelKey = 'name') {
 }
 
 function populateForm() {
-  populateSelect('f-solicitante', SOLICITANTES);
+  // Solicitante: read-only display, value comes from logged-in user
+  const idx = parseInt(store.get('user_idx'));
+  const solName = optionName(SOLICITANTES, idx);
+  const display = document.getElementById('f-solicitante-display');
+  if (display) display.textContent = solName;
+
   populateSelect('f-setor', SETORES);
   populateSelect('f-tipo', TIPOS, 'full');
-
-  const idx = store.get('user_idx');
-  if (idx !== null) document.getElementById('f-solicitante').value = idx;
 
   const em = store.get('user_email');
   if (em) document.getElementById('f-email').value = em;
@@ -344,7 +346,7 @@ function updateSlaInfo() {
 async function onFormSubmit(e) {
   e.preventDefault();
 
-  const solicitante = document.getElementById('f-solicitante').value;
+  const solicitante = parseInt(store.get('user_idx'));
   const setor       = document.getElementById('f-setor').value;
   const tipo        = document.getElementById('f-tipo').value;
   const email       = document.getElementById('f-email').value.trim();
@@ -352,7 +354,7 @@ async function onFormSubmit(e) {
   const descricao   = document.getElementById('f-descricao').value.trim();
   const detalhes    = document.getElementById('f-detalhes').value.trim();
 
-  if (!solicitante || !setor || !tipo || !descricao) {
+  if (isNaN(solicitante) || !setor || !tipo || !descricao) {
     toast('Preencha todos os campos obrigatórios (*)', 'error');
     return;
   }
@@ -375,7 +377,7 @@ async function onFormSubmit(e) {
   if (detalhes) taskDesc = `Detalhes adicionais:\n${detalhes}`;
 
   const customFields = [
-    { id: FIELD_IDS.SOLICITANTE, value: parseInt(solicitante) },
+    { id: FIELD_IDS.SOLICITANTE, value: solicitante },
     { id: FIELD_IDS.SETOR,       value: parseInt(setor) },
     { id: FIELD_IDS.TIPO,        value: parseInt(tipo) }
   ];
