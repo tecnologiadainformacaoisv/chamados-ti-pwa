@@ -212,6 +212,35 @@ function escHtml(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+function fmtMs(ms) {
+  if (!ms || ms <= 0) return null;
+  const m = Math.round(ms / 60000);
+  if (m < 60) return `${m}min`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  if (h < 24) return rm > 0 ? `${h}h ${rm}min` : `${h}h`;
+  const d = Math.floor(h / 24);
+  const rh = h % 24;
+  return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
+}
+
+function fmtDate(ts) {
+  if (!ts) return null;
+  const d = new Date(Number(ts));
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' ' +
+         d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function timeUntil(ts) {
+  if (!ts) return null;
+  const diff = Number(ts) - Date.now();
+  if (diff <= 0) return null;
+  const h = Math.floor(diff / 3600000);
+  if (h < 1) return 'em breve';
+  if (h < 24) return `em ${h}h`;
+  return `em ${Math.floor(h / 24)}d`;
+}
+
 // ============================================================
 // TOAST
 // ============================================================
@@ -469,8 +498,8 @@ async function loadTickets() {
 function renderAll() {
   const activeTasks = allTasks.filter(t => t.status?.status !== 'encerrado');
 
-  renderList('list-meus',  applyStatusFilter(myTasks,     getFilterValue('filter-status-meus')));
-  renderList('list-todos', applyStatusFilter(activeTasks, getFilterValue('filter-status-todos')));
+  renderList('list-meus',  applyStatusFilter(myTasks,     getFilterValue('filter-status-meus')),  renderDetailCard);
+  renderList('list-todos', applyStatusFilter(activeTasks, getFilterValue('filter-status-todos')), renderCard);
 
   const myActive = myTasks.filter(t => t.status?.status !== 'encerrado');
   setCount('count-meus',  myActive.length);
@@ -497,7 +526,94 @@ function setCount(id, n) {
   el.classList.toggle('hidden', n === 0);
 }
 
-function renderList(containerId, tasks) {
+function renderDetailCard(task) {
+  const status  = task.status?.status || 'aberto';
+  const sInfo   = STATUS_MAP[status] || STATUS_MAP['aberto'];
+  const prioId  = task.priority?.id ? parseInt(task.priority.id) : 3;
+  const pInfo   = PRIORITY[prioId] || PRIORITY[3];
+  const overdue = isOverdue(task);
+  const oText   = overdueFor(task);
+
+  const tipoIdx  = getCustomField(task, FIELD_IDS.TIPO);
+  const setorIdx = getCustomField(task, FIELD_IDS.SETOR);
+  const email    = getCustomField(task, FIELD_IDS.EMAIL);
+
+  const tipoObj   = TIPOS.find(t => t.orderindex === Number(tipoIdx));
+  const tipoName  = tipoObj?.name || optionName(TIPOS, tipoIdx);
+  const setorName = optionName(SETORES, setorIdx);
+
+  const desc      = (task.text_content || task.description || '').trim();
+  const estimate  = fmtMs(task.time_estimate);
+  const spent     = (task.time_spent > 0) ? fmtMs(task.time_spent) : null;
+  const dueStr    = fmtDate(task.due_date);
+  const dueFuture = timeUntil(task.due_date);
+  const assignees = (task.assignees || []).map(a => a.username).join(', ');
+  const cuTags    = task.tags || [];
+
+  const hasMeta = dueStr || estimate || spent || assignees || email;
+
+  return `
+<div class="ticket-card detail-card${overdue ? ' is-overdue' : ''}">
+  ${overdue ? `<div class="overdue-banner">⚠ ${oText}</div>` : ''}
+
+  <div class="ticket-header">
+    <div class="ticket-badges">
+      <span class="status-badge" style="background:${sInfo.bg};color:${sInfo.color}">
+        <span class="status-dot" style="background:${sInfo.dot}"></span>${sInfo.label}
+      </span>
+      <span class="prio-dot" style="color:${pInfo.color}">${pInfo.label}</span>
+    </div>
+    <span class="ticket-time">${timeAgo(task.date_created)}</span>
+  </div>
+
+  <div class="detail-title">${escHtml(task.name)}</div>
+
+  ${desc ? `<div class="detail-desc">${escHtml(desc)}</div>` : ''}
+
+  ${(tipoObj || setorIdx !== null) ? `<div class="ticket-tags">
+    ${tipoObj ? `<span class="tipo-tag" style="background:${tipoObj.color}1a;color:${tipoObj.color}">${escHtml(tipoName)}</span>` : ''}
+    ${setorIdx !== null ? `<span class="setor-tag">${escHtml(setorName)}</span>` : ''}
+  </div>` : ''}
+
+  ${hasMeta ? `<div class="detail-meta-grid">
+    ${dueStr ? `<div class="detail-meta-item">
+      <span class="detail-meta-label">Prazo</span>
+      <span class="detail-meta-value${overdue ? ' text-danger' : ''}">
+        ${escHtml(dueStr)}${dueFuture ? ` <span class="due-remaining">(${dueFuture})</span>` : ''}
+      </span>
+    </div>` : ''}
+    ${estimate ? `<div class="detail-meta-item">
+      <span class="detail-meta-label">Estimado</span>
+      <span class="detail-meta-value">${estimate}</span>
+    </div>` : ''}
+    ${spent ? `<div class="detail-meta-item">
+      <span class="detail-meta-label">Tempo gasto</span>
+      <span class="detail-meta-value">${spent}</span>
+    </div>` : ''}
+    ${assignees ? `<div class="detail-meta-item">
+      <span class="detail-meta-label">Atendente</span>
+      <span class="detail-meta-value">${escHtml(assignees)}</span>
+    </div>` : ''}
+    ${email ? `<div class="detail-meta-item">
+      <span class="detail-meta-label">E-mail</span>
+      <span class="detail-meta-value">${escHtml(String(email))}</span>
+    </div>` : ''}
+  </div>` : ''}
+
+  ${cuTags.length > 0 ? `<div class="detail-cu-tags">
+    ${cuTags.map(t => `<span class="cu-tag" style="background:${t.tag_bg}18;color:${t.tag_bg};border-color:${t.tag_bg}30">${escHtml(t.name)}</span>`).join('')}
+  </div>` : ''}
+
+  <div class="detail-footer">
+    <span class="detail-update">Atualizado ${timeAgo(task.date_updated)}</span>
+    <a href="https://app.clickup.com/t/${escHtml(task.id)}" target="_blank" rel="noopener" class="ticket-cu-link">
+      Ver no ClickUp ↗
+    </a>
+  </div>
+</div>`;
+}
+
+function renderList(containerId, tasks, cardFn = renderCard) {
   const el = document.getElementById(containerId);
   if (!el) return;
 
@@ -510,7 +626,7 @@ function renderList(containerId, tasks) {
     return;
   }
 
-  el.innerHTML = tasks.map(renderCard).join('');
+  el.innerHTML = tasks.map(cardFn).join('');
 }
 
 function renderCard(task) {
@@ -615,7 +731,7 @@ function closeAlertsModal() {
 // ============================================================
 function setupFilters() {
   document.getElementById('filter-status-meus')?.addEventListener('change', () => {
-    renderList('list-meus', applyStatusFilter(myTasks, getFilterValue('filter-status-meus')));
+    renderList('list-meus', applyStatusFilter(myTasks, getFilterValue('filter-status-meus')), renderDetailCard);
   });
 
   document.getElementById('filter-status-todos')?.addEventListener('change', () => {
