@@ -320,6 +320,7 @@ function initApp() {
   setupRefresh();
   setupCharCounter();
   setupPriorityInfo();
+  setupNotifications();
 
   document.getElementById('chamado-form')?.addEventListener('submit', onFormSubmit);
 
@@ -481,11 +482,14 @@ async function loadTickets() {
     const userIdx = parseInt(store.get('user_idx'));
     const fetched = await fetchMyTasks(userIdx);
     if (fetched.length > 0) {
+      checkStatusChanges(fetched);
       myTasks = fetched;
     } else {
       // Fallback: fetch all tasks and filter client-side
       const all = await fetchTasks();
-      myTasks = all.filter(t => Number(getCustomField(t, FIELD_IDS.SOLICITANTE)) === userIdx);
+      const filtered = all.filter(t => Number(getCustomField(t, FIELD_IDS.SOLICITANTE)) === userIdx);
+      checkStatusChanges(filtered);
+      myTasks = filtered;
     }
     renderAll();
     updateAlertBadge();
@@ -850,6 +854,76 @@ function setupInstallBanner() {
     banner.remove();
     deferredInstallPrompt = null;
   });
+}
+
+// ============================================================
+// NOTIFICATIONS
+// ============================================================
+const NOTIFY_STATUSES = {
+  'em atendimento': 'Em Atendimento',
+  'pendente':       'Pendente',
+  'encerrado':      'Encerrado'
+};
+
+function setupNotifications() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission !== 'default') return;
+  if (store.get('notif_dismissed') === '1') return;
+
+  const banner = document.getElementById('notif-banner');
+  if (!banner) return;
+  banner.classList.remove('hidden');
+
+  document.getElementById('notif-enable')?.addEventListener('click', async () => {
+    banner.classList.add('hidden');
+    const perm = await Notification.requestPermission();
+    if (perm === 'granted') toast('Notificações ativadas! Você será avisado sobre atualizações dos seus chamados.', 'success');
+  });
+
+  document.getElementById('notif-dismiss')?.addEventListener('click', () => {
+    banner.classList.add('hidden');
+    store.set('notif_dismissed', '1');
+  });
+}
+
+function checkStatusChanges(newTasks) {
+  if (Notification.permission !== 'granted') return;
+
+  const stored      = JSON.parse(store.get('cu_task_statuses') || '{}');
+  const isFirstLoad = Object.keys(stored).length === 0;
+  const updated     = {};
+
+  newTasks.forEach(task => {
+    const newStatus  = task.status?.status || '';
+    const prevStatus = stored[task.id];
+    updated[task.id] = newStatus;
+
+    if (!isFirstLoad && prevStatus && prevStatus !== newStatus && NOTIFY_STATUSES[newStatus]) {
+      fireNotification(task, newStatus);
+    }
+  });
+
+  store.set('cu_task_statuses', JSON.stringify(updated));
+}
+
+function fireNotification(task, status) {
+  const label = NOTIFY_STATUSES[status];
+  try {
+    const n = new Notification('Chamados de TI – ISV', {
+      body: `"${task.name}" está agora: ${label}`,
+      icon: './icon.svg',
+      tag:  `task-${task.id}`,
+      renotify: true
+    });
+    n.onclick = () => {
+      window.focus();
+      switchTab('meus-chamados');
+      n.close();
+    };
+  } catch {
+    // Notification API unavailable in this context
+  }
+  toast(`Chamado atualizado: ${label}`, 'info');
 }
 
 // ============================================================

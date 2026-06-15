@@ -1145,6 +1145,44 @@ form { padding: 24px 28px; }
 }
 
 /* ============================================================
+   NOTIFICATION PERMISSION BANNER
+   ============================================================ */
+.notif-banner {
+  background: var(--primary-pale);
+  border-bottom: 2px solid #c8d8f0;
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: .85rem;
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.notif-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.notif-dismiss-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: .83rem;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  transition: color .15s;
+}
+.notif-dismiss-btn:hover { color: var(--text-mid); }
+
+.notif-enable-btn { padding: 6px 16px; font-size: .83rem; }
+
+/* ============================================================
    FOOTER
    ============================================================ */
 .app-footer {

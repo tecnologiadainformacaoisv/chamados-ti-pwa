@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="TI Chamados">
-  <meta name="app-version" content="0.1.3">
+  <meta name="app-version" content="0.1.4">
   <title>Chamados de TI – ISV</title>
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icon.svg">
@@ -118,6 +118,15 @@
         </button>
       </div>
     </header>
+
+    <!-- NOTIFICATION PERMISSION BANNER -->
+    <div id="notif-banner" class="notif-banner hidden">
+      <span>🔔 Ative as notificações para ser avisado quando seu chamado for atualizado</span>
+      <div class="notif-banner-actions">
+        <button id="notif-dismiss" class="notif-dismiss-btn">Agora não</button>
+        <button id="notif-enable" class="btn-primary notif-enable-btn">Ativar</button>
+      </div>
+    </div>
 
     <!-- TABS -->
     <nav class="tab-nav" role="tablist">
@@ -284,7 +293,7 @@
 
     </main>
 
-    <footer class="app-footer">Instituto São Vicente · Chamados de TI · v0.1.3</footer>
+    <footer class="app-footer">Instituto São Vicente · Chamados de TI · v0.1.4</footer>
   </div>
 
   <!-- ===================== SETTINGS MODAL ===================== -->
