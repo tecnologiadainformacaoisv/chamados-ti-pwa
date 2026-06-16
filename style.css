@@ -36,10 +36,10 @@ body {
   color: var(--text);
   height: 100%;
   overflow-x: hidden;
-  scrollbar-width: none;
 }
 
-body::-webkit-scrollbar { display: none; }
+html, body { scrollbar-width: none; }
+html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
 
 .hidden { display: none !important; }
 
