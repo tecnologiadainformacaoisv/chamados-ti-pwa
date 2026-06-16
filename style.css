@@ -299,25 +299,50 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
   align-items: center;
 }
 
+.isv-logo {
+  height: 44px;
+  width: auto;
+  display: block;
+  background: rgba(255,255,255,0.94);
+  border-radius: 7px;
+  padding: 5px 8px;
+}
+
 .header-center {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  text-align: center;
+  justify-content: center;
+}
+
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.brand-lockup svg { flex-shrink: 0; }
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
   line-height: 1.2;
 }
 
 .brand-title {
-  font-size: .95rem;
+  font-family: 'Raleway', sans-serif;
+  font-size: 1rem;
   font-weight: 700;
   color: #fff;
+  letter-spacing: .01em;
+  white-space: nowrap;
 }
 
 .brand-sub {
-  font-size: .7rem;
-  color: rgba(255,255,255,.55);
+  font-size: .67rem;
+  color: rgba(255,255,255,.6);
   text-transform: uppercase;
-  letter-spacing: .08em;
+  letter-spacing: .07em;
+  white-space: nowrap;
 }
 
 .header-actions {
@@ -1133,10 +1158,12 @@ form { padding: 24px 28px; }
   .form-card-header { padding: 18px 20px; }
   form { padding: 18px 20px; }
 
-  .app-header { padding: 0 12px; gap: 8px; }
+  .app-header { padding: 0 10px; gap: 6px; }
+  .isv-logo { height: 34px; padding: 3px 5px; }
   .brand-title { font-size: .85rem; }
   .brand-sub { display: none; }
-  .user-chip { max-width: 90px; font-size: .76rem; }
+  .brand-lockup { gap: 7px; }
+  .user-chip { max-width: 80px; font-size: .76rem; }
 
   .tab-btn { padding: 0 14px; font-size: .82rem; }
 

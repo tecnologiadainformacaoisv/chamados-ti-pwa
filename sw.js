@@ -1,4 +1,4 @@
-const APP_VERSION = '0.1.9';
+const APP_VERSION = '0.1.10';
 const CACHE_NAME = `chamados-ti-${APP_VERSION}`;
 const ASSETS = [
   './index.html',
@@ -6,7 +6,8 @@ const ASSETS = [
   './app.js',
   './manifest.json',
   './icon.svg',
-  './icon-maskable.svg'
+  './icon-maskable.svg',
+  './logo-isv.svg'
 ];
 
 self.addEventListener('install', e => {
