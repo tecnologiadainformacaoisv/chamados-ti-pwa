@@ -796,7 +796,7 @@ form { padding: 24px 28px; }
   top: 0;
   left: 0;
   right: 0;
-  height: 4px;
+  height: 7px;
   background: var(--border);
   border-radius: var(--radius) var(--radius) 0 0;
   overflow: hidden;

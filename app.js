@@ -594,8 +594,10 @@ function renderDetailCard(task) {
 
   const hasMeta = dueStr || estimate || spent || assignees || email;
 
+  const cardBg = !overdue ? `${sInfo.bg}33` : null;
+
   return `
-<div class="ticket-card detail-card${overdue ? ' is-overdue' : ''}" data-task-id="${task.id}">
+<div class="ticket-card detail-card${overdue ? ' is-overdue' : ''}" data-task-id="${task.id}"${cardBg ? ` style="background:${cardBg}"` : ''}>
   ${sla ? `<div class="sla-progress"><div class="sla-progress-fill" style="width:${sla.pct}%;background:${sla.color}"></div></div>` : ''}
   ${overdue ? `<div class="overdue-banner">⚠ ${oText}</div>` : ''}
 
