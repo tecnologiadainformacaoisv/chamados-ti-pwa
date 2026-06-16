@@ -329,6 +329,8 @@ function initApp() {
   setupNotifications();
 
   document.getElementById('chamado-form')?.addEventListener('submit', onFormSubmit);
+  document.getElementById('wa-modal-close')?.addEventListener('click', closeWaModal);
+  document.getElementById('wa-modal-overlay')?.addEventListener('click', closeWaModal);
 
   loadTickets();
   setupRefreshPolling();
@@ -461,6 +463,7 @@ async function onFormSubmit(e) {
     populateForm();
     await loadTickets();
     switchTab('meus-chamados');
+    openWaModal(task);
   } catch (err) {
     toast(`Erro ao abrir chamado: ${err.message}`, 'error');
   } finally {
@@ -748,6 +751,19 @@ function openAlertsModal() {
 
 function closeAlertsModal() {
   document.getElementById('alerts-modal').classList.add('hidden');
+}
+
+// ============================================================
+// WA SUCCESS MODAL
+// ============================================================
+function openWaModal(task) {
+  const msg = `Olá! Acabei de abrir um chamado de TI:\n*${task.name}*\nGostaria de acompanhar meu atendimento.`;
+  document.getElementById('wa-modal-link').href = `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(msg)}`;
+  document.getElementById('wa-modal').classList.remove('hidden');
+}
+
+function closeWaModal() {
+  document.getElementById('wa-modal').classList.add('hidden');
 }
 
 // ============================================================

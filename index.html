@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="TI Chamados">
-  <meta name="app-version" content="0.1.15">
+  <meta name="app-version" content="0.1.16">
   <title>Chamados de TI – ISV</title>
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icon.svg">
@@ -301,7 +301,7 @@
 
     </main>
 
-    <footer class="app-footer">Instituto São Vicente · Chamados de TI · v0.1.15</footer>
+    <footer class="app-footer">Instituto São Vicente · Chamados de TI · v0.1.16</footer>
   </div>
 
   <!-- ===================== SETTINGS MODAL ===================== -->
@@ -357,6 +357,30 @@
         </button>
       </div>
       <div class="modal-body" id="alerts-list"></div>
+    </div>
+  </div>
+
+  <!-- ===================== WA SUCCESS MODAL ===================== -->
+  <div id="wa-modal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Chamado aberto">
+    <div id="wa-modal-overlay" class="modal-overlay"></div>
+    <div class="modal-card wa-modal-card">
+      <div class="wa-success-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+      </div>
+      <h3 class="wa-modal-title">Chamado aberto com sucesso!</h3>
+      <p class="wa-modal-body">Deseja entrar em contato com a equipe de TI pelo WhatsApp para acompanhar seu atendimento?</p>
+      <div class="wa-modal-actions">
+        <a id="wa-modal-link" href="#" target="_blank" rel="noopener" class="btn-whatsapp wa-btn-full" onclick="closeWaModal()">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
+            <path d="M12 0C5.373 0 0 5.373 0 12c0 2.125.558 4.119 1.529 5.845L.057 23.571a.75.75 0 0 0 .921.921l5.726-1.472A11.945 11.945 0 0 0 12 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.75a9.694 9.694 0 0 1-4.945-1.352l-.355-.21-3.676.944.981-3.565-.23-.366A9.694 9.694 0 0 1 2.25 12C2.25 6.615 6.615 2.25 12 2.25S21.75 6.615 21.75 12 17.385 21.75 12 21.75z"/>
+          </svg>
+          Falar com TI no WhatsApp
+        </a>
+        <button id="wa-modal-close" class="btn-secondary wa-btn-full">Agora não</button>
+      </div>
     </div>
   </div>
 
