@@ -36,6 +36,7 @@ body {
   color: var(--text);
   height: 100%;
   overflow-x: hidden;
+  scrollbar-gutter: stable;
 }
 
 .hidden { display: none !important; }
