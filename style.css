@@ -665,6 +665,13 @@ form { padding: 24px 28px; }
   box-shadow: 0 4px 16px rgba(0,0,0,.1);
 }
 
+@keyframes highlight-pulse {
+  0%, 100% { border-color: var(--border); box-shadow: var(--shadow); }
+  40%       { border-color: var(--primary-light); box-shadow: 0 0 0 4px rgba(74,127,212,.18); }
+}
+
+.task-highlight { animation: highlight-pulse .75s ease 3; }
+
 .ticket-card.is-overdue {
   border-color: #fca5a5;
   background: #fff9f9;

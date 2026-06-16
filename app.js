@@ -101,8 +101,9 @@ const WORKER_URL = 'https://chamados-ti-push.tecnologiadainformacao-isv.workers.
 // ============================================================
 // STATE
 // ============================================================
-let myTasks  = [];
-let deferredInstallPrompt = null;
+let myTasks                = [];
+let deferredInstallPrompt  = null;
+let pendingHighlightTaskId = null;
 
 // ============================================================
 // STORAGE
@@ -332,8 +333,11 @@ function initApp() {
   loadTickets();
   setupRefreshPolling();
 
-  const hash = location.hash.replace('#', '') || 'novo-chamado';
-  switchTab(hash);
+  // Suporte a deep-link via hash: #tab:taskId (ex: #meus-chamados:abc123)
+  const hashFull             = location.hash.replace('#', '') || 'novo-chamado';
+  const [hashTab, hashTaskId] = hashFull.split(':');
+  if (hashTaskId) pendingHighlightTaskId = hashTaskId;
+  switchTab(hashTab);
 }
 
 // ============================================================
@@ -498,6 +502,10 @@ async function loadTickets() {
     }
     renderAll();
     updateAlertBadge();
+    if (pendingHighlightTaskId) {
+      highlightTask(pendingHighlightTaskId);
+      pendingHighlightTaskId = null;
+    }
   } catch (err) {
     toast(`Erro ao carregar chamados: ${err.message}`, 'error');
   } finally {
@@ -561,7 +569,7 @@ function renderDetailCard(task) {
   const hasMeta = dueStr || estimate || spent || assignees || email;
 
   return `
-<div class="ticket-card detail-card${overdue ? ' is-overdue' : ''}">
+<div class="ticket-card detail-card${overdue ? ' is-overdue' : ''}" data-task-id="${task.id}">
   ${overdue ? `<div class="overdue-banner">⚠ ${oText}</div>` : ''}
 
   <div class="ticket-header">
@@ -653,7 +661,7 @@ function renderCard(task) {
   const setorName = optionName(SETORES, setorIdx);
 
   return `
-<div class="ticket-card${overdue ? ' is-overdue' : ''}">
+<div class="ticket-card${overdue ? ' is-overdue' : ''}" data-task-id="${task.id}">
   ${overdue ? `<div class="overdue-banner">⚠ ${oText}</div>` : ''}
   <div class="ticket-header">
     <div class="ticket-badges">
@@ -1002,6 +1010,20 @@ function fireNotification(task, status) {
 }
 
 // ============================================================
+// DEEP LINK / TASK HIGHLIGHT
+// ============================================================
+function highlightTask(taskId) {
+  if (!taskId) return;
+  setTimeout(() => {
+    const card = document.querySelector(`[data-task-id="${taskId}"]`);
+    if (!card) return;
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.add('task-highlight');
+    setTimeout(() => card.classList.remove('task-highlight'), 2500);
+  }, 350);
+}
+
+// ============================================================
 // BOOT
 // ============================================================
 window.addEventListener('beforeinstallprompt', e => {
@@ -1023,6 +1045,14 @@ document.addEventListener('DOMContentLoaded', () => {
       history.replaceState(null, '', location.pathname); // remove key from URL
     }
   }
+
+  // Listener para mensagens do Service Worker (notificationclick com app aberto)
+  navigator.serviceWorker?.addEventListener('message', e => {
+    if (e.data?.type === 'OPEN_TASK') {
+      switchTab(e.data.tab);
+      highlightTask(e.data.task_id);
+    }
+  });
 
   if (store.get('cu_key') && store.get('user_idx') !== null) {
     initApp();

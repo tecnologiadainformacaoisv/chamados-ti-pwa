@@ -1,4 +1,4 @@
-const APP_VERSION = '0.1.6';
+const APP_VERSION = '0.1.7';
 const CACHE_NAME = `chamados-ti-${APP_VERSION}`;
 const ASSETS = [
   './index.html',
@@ -23,30 +23,38 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
-// Push notification received (app can be closed)
+// Push notification received
 self.addEventListener('push', e => {
-  const data = e.data?.json() ?? { title: 'Chamados de TI – ISV', body: 'Atualização recebida' };
+  const payload = e.data?.json() ?? { title: 'Chamados de TI – ISV', body: 'Atualização recebida' };
   e.waitUntil(
-    self.registration.showNotification(data.title, {
-      body:      data.body,
-      icon:      './icon.svg',
-      badge:     './icon.svg',
-      tag:       'chamado-update',
-      renotify:  true,
-      data:      { url: self.registration.scope }
+    self.registration.showNotification(payload.title, {
+      body:     payload.body,
+      icon:     './icon.svg',
+      badge:    './icon.svg',
+      tag:      `task-${payload.data?.task_id ?? 'update'}`,
+      renotify: true,
+      data:     payload.data ?? {}
     })
   );
 });
 
-// Click on OS notification → opens/focuses the PWA
+// Click on notification → abre o chamado específico
 self.addEventListener('notificationclick', e => {
   e.notification.close();
+  const { task_id, status } = e.notification.data ?? {};
+  const tab    = status === 'encerrado' ? 'todos-chamados' : 'meus-chamados';
+  const target = task_id ? `${tab}:${task_id}` : tab;
+
   e.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
-      for (const c of list) {
-        if (c.url.startsWith(self.registration.scope) && 'focus' in c) return c.focus();
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async list => {
+      const appClient = list.find(c => c.url.startsWith(self.registration.scope));
+      if (appClient) {
+        // App já aberto: manda mensagem para navegar ao chamado
+        appClient.postMessage({ type: 'OPEN_TASK', tab, task_id });
+        return appClient.focus();
       }
-      return clients.openWindow(self.registration.scope);
+      // App fechado: abre na tab/chamado correto via hash
+      return clients.openWindow(`${self.registration.scope}#${target}`);
     })
   );
 });

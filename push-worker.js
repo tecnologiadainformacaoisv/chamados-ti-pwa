@@ -101,7 +101,8 @@ async function handleWebhook(request, env) {
 
     await sendWebPush(JSON.parse(subJson), JSON.stringify({
       title: 'Chamados de TI – ISV',
-      body:  `"${task.name}" está agora: ${label}`
+      body:  `"${task.name}" está agora: ${label}`,
+      data:  { task_id: task.id, status: newStatus }
     }), env);
 
     return new Response('ok', { status: 200 });
