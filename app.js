@@ -517,13 +517,14 @@ async function loadTickets() {
 }
 
 function renderAll() {
-  const myActive = myTasks.filter(t => t.status?.status !== 'encerrado');
+  const myActive  = myTasks.filter(t => t.status?.status !== 'encerrado');
+  const myClosed  = myTasks.filter(t => t.status?.status === 'encerrado');
 
   renderList('list-meus',  applyStatusFilter(myActive,  getFilterValue('filter-status-meus')),  renderDetailCard);
-  renderList('list-todos', applyStatusFilter(myTasks,   getFilterValue('filter-status-todos')), renderDetailCard);
+  renderList('list-todos', applyStatusFilter(myClosed,  getFilterValue('filter-status-todos')), renderDetailCard);
 
   setCount('count-meus',  myActive.length);
-  setCount('count-todos', myTasks.length);
+  setCount('count-todos', myClosed.length);
 
   const meusTab = document.querySelector('[data-tab="meus-chamados"]');
   if (meusTab) meusTab.classList.toggle('has-overdue', myActive.filter(isOverdue).length > 0);
@@ -791,7 +792,8 @@ function setupFilters() {
   });
 
   document.getElementById('filter-status-todos')?.addEventListener('change', () => {
-    renderList('list-todos', applyStatusFilter(myTasks, getFilterValue('filter-status-todos')), renderDetailCard);
+    const myClosed = myTasks.filter(t => t.status?.status === 'encerrado');
+    renderList('list-todos', applyStatusFilter(myClosed, getFilterValue('filter-status-todos')), renderDetailCard);
   });
 }
 

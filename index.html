@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="TI Chamados">
-  <meta name="app-version" content="0.1.20">
+  <meta name="app-version" content="0.1.21">
   <title>Chamados de TI – ISV</title>
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icon.svg">
@@ -282,11 +282,8 @@
           <div class="tickets-toolbar">
             <h2>Meu Histórico</h2>
             <div class="toolbar-right">
-              <select id="filter-status-todos" class="filter-select">
+              <select id="filter-status-todos" class="filter-select hidden">
                 <option value="">Todos os status</option>
-                <option value="aberto">Aberto</option>
-                <option value="em atendimento">Em Atendimento</option>
-                <option value="pendente">Pendente</option>
                 <option value="encerrado">Encerrado</option>
               </select>
             </div>
@@ -301,7 +298,7 @@
 
     </main>
 
-    <footer class="app-footer">Instituto São Vicente · Chamados de TI · v0.1.20</footer>
+    <footer class="app-footer">Instituto São Vicente · Chamados de TI · v0.1.21</footer>
   </div>
 
   <!-- ===================== SETTINGS MODAL ===================== -->
