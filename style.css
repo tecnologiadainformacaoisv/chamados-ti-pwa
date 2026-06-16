@@ -286,23 +286,24 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
   z-index: 100;
   height: var(--header-h);
   background: linear-gradient(135deg, #0f2347 0%, var(--primary) 100%);
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
-  justify-content: space-between;
   padding: 0 20px;
   gap: 12px;
   box-shadow: 0 2px 12px rgba(0,0,0,.2);
 }
 
-.header-brand {
+.header-logo {
   display: flex;
   align-items: center;
-  gap: 10px;
 }
 
-.brand-text {
+.header-center {
   display: flex;
   flex-direction: column;
+  align-items: center;
+  text-align: center;
   line-height: 1.2;
 }
 
@@ -406,6 +407,7 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
   color: var(--primary);
   border-bottom-color: var(--primary);
   font-weight: 600;
+  background: var(--primary-pale);
 }
 
 .count-pill {
@@ -1131,9 +1133,10 @@ form { padding: 24px 28px; }
   .form-card-header { padding: 18px 20px; }
   form { padding: 18px 20px; }
 
-  .app-header { padding: 0 14px; }
-  .brand-title { font-size: .88rem; }
-  .user-chip { max-width: 100px; font-size: .76rem; }
+  .app-header { padding: 0 12px; gap: 8px; }
+  .brand-title { font-size: .85rem; }
+  .brand-sub { display: none; }
+  .user-chip { max-width: 90px; font-size: .76rem; }
 
   .tab-btn { padding: 0 14px; font-size: .82rem; }
 

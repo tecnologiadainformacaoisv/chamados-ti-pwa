@@ -723,7 +723,6 @@ function openAlertsModal() {
       <span class="status-dot" style="background:${sInfo.dot}"></span>${sInfo.label}
     </span>
     ${oText ? `<span class="overdue-time">${oText}</span>` : ''}
-    <a href="https://app.clickup.com/t/${escHtml(t.id)}" target="_blank" rel="noopener" class="ticket-cu-link">Ver ↗</a>
   </div>
 </div>`;
     }).join('');
