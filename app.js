@@ -991,20 +991,18 @@ function checkStatusChanges(newTasks) {
 
 function fireNotification(task, status) {
   const label = NOTIFY_STATUSES[status];
-  try {
-    const n = new Notification('Chamados de TI – ISV', {
-      body: `"${task.name}" está agora: ${label}`,
-      icon: './icon.svg',
-      tag:  `task-${task.id}`,
-      renotify: true
-    });
-    n.onclick = () => {
-      window.focus();
-      switchTab('meus-chamados');
-      n.close();
-    };
-  } catch {
-    // Notification API unavailable in this context
+  // Quando Web Push está ativo, o Worker já mostra a notificação do SO —
+  // evitar duplicata disparando apenas o toast local
+  if (!WORKER_URL) {
+    try {
+      const n = new Notification('Chamados de TI – ISV', {
+        body: `"${task.name}" está agora: ${label}`,
+        icon: './icon.svg',
+        tag:  `task-${task.id}`,
+        renotify: true
+      });
+      n.onclick = () => { window.focus(); switchTab('meus-chamados'); n.close(); };
+    } catch {}
   }
   toast(`Chamado atualizado: ${label}`, 'info');
 }
