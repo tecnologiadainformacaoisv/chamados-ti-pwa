@@ -600,7 +600,6 @@ function renderDetailCard(task) {
   ${overdue ? `<div class="overdue-banner">⚠ ${oText}</div>` : ''}
 
   <div class="ticket-top-meta">
-    <span class="prio-dot" style="color:${pInfo.color}">${pInfo.label}</span>
     <span class="ticket-time">${timeAgo(task.date_created)}</span>
   </div>
 
@@ -614,10 +613,11 @@ function renderDetailCard(task) {
 
   ${desc ? `<div class="detail-desc">${escHtml(desc)}</div>` : ''}
 
-  ${(tipoObj || setorIdx !== null) ? `<div class="ticket-tags">
+  <div class="ticket-tags">
     ${tipoObj ? `<span class="tipo-tag" style="background:${tipoObj.color}1a;color:${tipoObj.color}">${escHtml(tipoName)}</span>` : ''}
     ${setorIdx !== null ? `<span class="setor-tag">${escHtml(setorName)}</span>` : ''}
-  </div>` : ''}
+    <span class="prio-tag" style="background:${pInfo.color}1a;color:${pInfo.color}">${pInfo.label}</span>
+  </div>
 
   ${hasMeta ? `<div class="detail-meta-grid">
     ${dueStr ? `<div class="detail-meta-item">

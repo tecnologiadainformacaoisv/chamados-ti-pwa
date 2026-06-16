@@ -762,7 +762,7 @@ form { padding: 24px 28px; }
 .ticket-top-meta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
   margin-bottom: 10px;
 }
@@ -841,9 +841,30 @@ form { padding: 24px 28px; }
 
 .ticket-tags {
   display: flex;
+  justify-content: center;
   gap: 6px;
   flex-wrap: wrap;
   margin-bottom: 10px;
+}
+
+.prio-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 6px;
+  font-size: .73rem;
+  font-weight: 600;
+}
+
+.prio-tag::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: .7;
+  flex-shrink: 0;
 }
 
 .tipo-tag {
@@ -924,6 +945,7 @@ form { padding: 24px 28px; }
   color: var(--text);
   margin: 10px 0 8px;
   line-height: 1.4;
+  text-align: center;
 }
 
 .detail-desc {
