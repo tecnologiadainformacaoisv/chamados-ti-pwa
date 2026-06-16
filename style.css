@@ -22,7 +22,7 @@
   --radius-sm: 8px;
   --shadow: 0 1px 3px rgba(0,0,0,.08), 0 4px 12px rgba(0,0,0,.06);
   --shadow-lg: 0 8px 24px rgba(0,0,0,.12);
-  --header-h: 60px;
+  --header-h: 70px;
   --tabs-h: 50px;
 }
 
@@ -286,29 +286,30 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
   z-index: 100;
   height: var(--header-h);
   background: linear-gradient(135deg, #0f2347 0%, var(--primary) 100%);
-  display: grid;
-  grid-template-columns: auto 1fr auto;
+  display: flex;
   align-items: center;
   padding: 0 20px;
-  gap: 12px;
+  gap: 0;
   box-shadow: 0 2px 12px rgba(0,0,0,.2);
 }
 
+/* Logo ISV — ocupa flex:1 à esquerda para empurrar o centro ao meio exato */
 .header-logo {
+  flex: 1;
   display: flex;
   align-items: center;
 }
 
 .isv-logo {
-  height: 44px;
+  height: 46px;
   width: auto;
   display: block;
-  background: rgba(255,255,255,0.94);
-  border-radius: 7px;
-  padding: 5px 8px;
+  filter: brightness(0) invert(1);
 }
 
+/* Centro — tamanho natural, centrado por conta dos flex:1 dos lados */
 .header-center {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -330,7 +331,7 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
 
 .brand-title {
   font-family: 'Raleway', sans-serif;
-  font-size: 1rem;
+  font-size: 1.15rem;
   font-weight: 700;
   color: #fff;
   letter-spacing: .01em;
@@ -345,9 +346,12 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
   white-space: nowrap;
 }
 
+/* Ações — flex:1 à direita alinhado ao fim */
 .header-actions {
+  flex: 1;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
 }
 
@@ -1158,9 +1162,9 @@ form { padding: 24px 28px; }
   .form-card-header { padding: 18px 20px; }
   form { padding: 18px 20px; }
 
-  .app-header { padding: 0 10px; gap: 6px; }
-  .isv-logo { height: 34px; padding: 3px 5px; }
-  .brand-title { font-size: .85rem; }
+  .app-header { padding: 0 10px; }
+  .isv-logo { height: 32px; }
+  .brand-title { font-size: .88rem; }
   .brand-sub { display: none; }
   .brand-lockup { gap: 7px; }
   .user-chip { max-width: 80px; font-size: .76rem; }
