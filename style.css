@@ -759,6 +759,54 @@ form { padding: 24px 28px; }
   flex-shrink: 0;
 }
 
+.ticket-top-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.status-center {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.status-badge-lg {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 20px;
+  border-radius: 24px;
+  font-size: .92rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.status-dot-lg {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.sla-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: var(--border);
+  border-radius: var(--radius) var(--radius) 0 0;
+  overflow: hidden;
+}
+
+.sla-progress-fill {
+  height: 100%;
+  transition: width .3s;
+}
+
 .prio-dot {
   display: inline-flex;
   align-items: center;
@@ -871,7 +919,7 @@ form { padding: 24px 28px; }
 .detail-card { padding: 18px 20px; }
 
 .detail-title {
-  font-size: 1rem;
+  font-size: 1.18rem;
   font-weight: 700;
   color: var(--text);
   margin: 10px 0 8px;
@@ -928,23 +976,6 @@ form { padding: 24px 28px; }
   font-size: .78rem;
   color: #16a34a;
   font-weight: 600;
-}
-
-.detail-cu-tags {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-
-.cu-tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 10px;
-  border-radius: 6px;
-  font-size: .73rem;
-  font-weight: 600;
-  border: 1px solid;
 }
 
 .detail-footer {

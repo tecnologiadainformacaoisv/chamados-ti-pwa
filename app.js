@@ -553,6 +553,21 @@ function waLink(task) {
   return `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(msg)}`;
 }
 
+function slaProgressInfo(task) {
+  const status = task.status?.status || 'aberto';
+  if (status === 'encerrado') return null;
+  const start = Number(task.date_created);
+  const end   = Number(task.due_date);
+  if (!start || !end || end <= start) return null;
+
+  const pct = ((Date.now() - start) / (end - start)) * 100;
+  let color = '#22c55e';
+  if (pct >= 100) color = '#ef4444';
+  else if (pct >= 70) color = '#f59e0b';
+
+  return { pct: Math.max(0, Math.min(pct, 100)), color };
+}
+
 function renderDetailCard(task) {
   const status  = task.status?.status || 'aberto';
   const sInfo   = STATUS_MAP[status] || STATUS_MAP['aberto'];
@@ -560,6 +575,7 @@ function renderDetailCard(task) {
   const pInfo   = PRIORITY[prioId] || PRIORITY[3];
   const overdue = isOverdue(task);
   const oText   = overdueFor(task);
+  const sla     = slaProgressInfo(task);
 
   const tipoIdx  = getCustomField(task, FIELD_IDS.TIPO);
   const setorIdx = getCustomField(task, FIELD_IDS.SETOR);
@@ -575,22 +591,23 @@ function renderDetailCard(task) {
   const dueStr    = fmtDate(task.due_date);
   const dueFuture = timeUntil(task.due_date);
   const assignees = (task.assignees || []).map(a => a.username).join(', ');
-  const cuTags    = task.tags || [];
 
   const hasMeta = dueStr || estimate || spent || assignees || email;
 
   return `
 <div class="ticket-card detail-card${overdue ? ' is-overdue' : ''}" data-task-id="${task.id}">
+  ${sla ? `<div class="sla-progress"><div class="sla-progress-fill" style="width:${sla.pct}%;background:${sla.color}"></div></div>` : ''}
   ${overdue ? `<div class="overdue-banner">⚠ ${oText}</div>` : ''}
 
-  <div class="ticket-header">
-    <div class="ticket-badges">
-      <span class="status-badge" style="background:${sInfo.bg};color:${sInfo.color}">
-        <span class="status-dot" style="background:${sInfo.dot}"></span>${sInfo.label}
-      </span>
-      <span class="prio-dot" style="color:${pInfo.color}">${pInfo.label}</span>
-    </div>
+  <div class="ticket-top-meta">
+    <span class="prio-dot" style="color:${pInfo.color}">${pInfo.label}</span>
     <span class="ticket-time">${timeAgo(task.date_created)}</span>
+  </div>
+
+  <div class="status-center">
+    <span class="status-badge-lg" style="background:${sInfo.bg};color:${sInfo.color}">
+      <span class="status-dot-lg" style="background:${sInfo.dot}"></span>${sInfo.label}
+    </span>
   </div>
 
   <div class="detail-title">${escHtml(task.name)}</div>
@@ -625,10 +642,6 @@ function renderDetailCard(task) {
       <span class="detail-meta-label">E-mail</span>
       <span class="detail-meta-value">${escHtml(String(email))}</span>
     </div>` : ''}
-  </div>` : ''}
-
-  ${cuTags.length > 0 ? `<div class="detail-cu-tags">
-    ${cuTags.map(t => `<span class="cu-tag" style="background:${t.tag_bg}18;color:${t.tag_bg};border-color:${t.tag_bg}30">${escHtml(t.name)}</span>`).join('')}
   </div>` : ''}
 
   <div class="detail-footer">
