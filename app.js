@@ -87,15 +87,15 @@ const PRIORITY = {
 };
 
 // Mapeamento categoria (orderindex de TIPOS) -> prioridade (id de PRIORITY)
-// PROVISÓRIO: confirmar com a automação real do ClickUp e ajustar.
+// Confirmado com a automação real do ClickUp (Alterações de campo personalizado -> Alterar prioridade)
 const CATEGORIA_PRIORIDADE = {
-  0: 2, // Notebooks       -> Alta
-  1: 3, // Multifuncionais -> Normal
+  0: 1, // Notebooks       -> Urgente
+  1: 1, // Multifuncionais -> Urgente
   2: 1, // Redes           -> Urgente
-  3: 3, // Programas       -> Normal
-  4: 4, // Design          -> Baixa
+  3: 2, // Programas       -> Alta
+  4: 3, // Design          -> Normal
   5: 2, // E-mails         -> Alta
-  6: 4, // Periféricos     -> Baixa
+  6: 3, // Periféricos     -> Normal
   7: 2  // Plataformas     -> Alta
 };
 
