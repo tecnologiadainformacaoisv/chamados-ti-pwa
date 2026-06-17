@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="TI Chamados">
-  <meta name="app-version" content="0.1.21">
+  <meta name="app-version" content="0.1.22">
   <title>Chamados de TI – ISV</title>
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icon.svg">
@@ -188,37 +188,29 @@
                 </div>
               </div>
 
-              <div class="form-row">
-                <div class="form-group">
-                  <label for="f-email">E-mail para contato</label>
-                  <input id="f-email" type="email" placeholder="voce@isv.com.br">
-                </div>
-                <div class="form-group">
-                  <label for="f-tipo">Tipo de Solicitação <span class="req">*</span></label>
-                  <select id="f-tipo" required>
-                    <option value="">Selecione...</option>
-                  </select>
-                </div>
+              <div class="form-group">
+                <label for="f-tipo">Tipo de Solicitação <span class="req">*</span></label>
+                <select id="f-tipo" required>
+                  <option value="">Selecione...</option>
+                </select>
               </div>
 
               <div class="form-group">
-                <label>Prioridade <span class="req">*</span></label>
-                <div class="priority-group" id="priority-group">
-                  <label class="prio-option" data-value="4">
-                    <input type="radio" name="prioridade" value="4">
-                    <span class="prio-label" style="--pc:#9e9e9e">Baixa</span>
+                <label>Atendente preferido <span class="req">*</span></label>
+                <div class="operador-group" id="operador-group">
+                  <label class="operador-option" data-value="170628721">
+                    <input type="radio" name="operador" value="170628721">
+                    <span class="operador-card" style="--oc:#3e63dd">
+                      <span class="operador-avatar">EC</span>
+                      <span class="operador-name">Everson</span>
+                    </span>
                   </label>
-                  <label class="prio-option" data-value="3">
-                    <input type="radio" name="prioridade" value="3" checked>
-                    <span class="prio-label" style="--pc:#2196f3">Normal</span>
-                  </label>
-                  <label class="prio-option" data-value="2">
-                    <input type="radio" name="prioridade" value="2">
-                    <span class="prio-label" style="--pc:#ff9800">Alta</span>
-                  </label>
-                  <label class="prio-option" data-value="1">
-                    <input type="radio" name="prioridade" value="1">
-                    <span class="prio-label" style="--pc:#ef5350">Urgente</span>
+                  <label class="operador-option" data-value="200498355">
+                    <input type="radio" name="operador" value="200498355">
+                    <span class="operador-card" style="--oc:#30a46c">
+                      <span class="operador-avatar">HC</span>
+                      <span class="operador-name">Henrique</span>
+                    </span>
                   </label>
                 </div>
               </div>
@@ -234,13 +226,12 @@
                 <textarea id="f-detalhes" rows="3" placeholder="Mensagens de erro, quando começou, outros detalhes relevantes..."></textarea>
               </div>
 
+              <div class="form-group">
+                <label for="f-anexo">Anexo <span class="optional">(opcional)</span></label>
+                <input id="f-anexo" type="file" class="file-input" multiple accept="image/*,.pdf,.doc,.docx">
+              </div>
+
               <div class="form-submit-row">
-                <div id="form-sla-info" class="sla-info">
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <circle cx="8" cy="8" r="6"/><line x1="8" y1="5" x2="8" y2="8" stroke-linecap="round"/><circle cx="8" cy="11" r="0.5" fill="currentColor"/>
-                  </svg>
-                  Prazo de atendimento: <strong id="sla-label">72 horas</strong>
-                </div>
                 <button id="form-submit-btn" type="submit" class="btn-primary">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
                     <line x1="2" y1="8" x2="14" y2="8"/><polyline points="9,3 14,8 9,13"/>
@@ -298,7 +289,7 @@
 
     </main>
 
-    <footer class="app-footer">Instituto São Vicente · Chamados de TI · v0.1.21</footer>
+    <footer class="app-footer">Instituto São Vicente · Chamados de TI · v0.1.22</footer>
   </div>
 
   <!-- ===================== SETTINGS MODAL ===================== -->
@@ -367,6 +358,7 @@
         </svg>
       </div>
       <h3 class="wa-modal-title">Chamado aberto com sucesso!</h3>
+      <div id="wa-modal-sla" class="wa-modal-sla"></div>
       <p class="wa-modal-body">Deseja entrar em contato com a equipe de TI pelo WhatsApp para acompanhar seu atendimento?</p>
       <div class="wa-modal-actions">
         <a id="wa-modal-link" href="#" target="_blank" rel="noopener" class="btn-whatsapp wa-btn-full" onclick="closeWaModal()">

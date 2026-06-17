@@ -86,9 +86,27 @@ const PRIORITY = {
   4: { label: 'Baixa',   color: '#9e9e9e', slaMs: 168 * 3600000, slaLabel: '7 dias'   }
 };
 
+// Mapeamento categoria (orderindex de TIPOS) -> prioridade (id de PRIORITY)
+// PROVISÓRIO: confirmar com a automação real do ClickUp e ajustar.
+const CATEGORIA_PRIORIDADE = {
+  0: 2, // Notebooks       -> Alta
+  1: 3, // Multifuncionais -> Normal
+  2: 1, // Redes           -> Urgente
+  3: 3, // Programas       -> Normal
+  4: 4, // Design          -> Baixa
+  5: 2, // E-mails         -> Alta
+  6: 4, // Periféricos     -> Baixa
+  7: 2  // Plataformas     -> Alta
+};
+
+const OPERADORES = {
+  '170628721': 'Everson',
+  '200498355': 'Henrique'
+};
+
 const STATUS_MAP = {
   'aberto':          { label: 'Aberto',          bg: '#e3f2fd', color: '#1565c0', dot: '#1976d2' },
-  'em atendimento':  { label: 'Em Atendimento',  bg: '#ede7f6', color: '#4527a0', dot: '#5f55ee' },
+  'em atendimento':  { label: 'Em Atendimento',  bg: '#e3e0fb', color: '#4527a0', dot: '#5f55ee' },
   'pendente':        { label: 'Pendente',         bg: '#fce4ec', color: '#880e4f', dot: '#b660e0' },
   'encerrado':       { label: 'Encerrado',        bg: '#e8f5e9', color: '#1b5e20', dot: '#008844' }
 };
@@ -325,7 +343,6 @@ function initApp() {
   setupInstallBanner();
   setupRefresh();
   setupCharCounter();
-  setupPriorityInfo();
   setupNotifications();
 
   document.getElementById('chamado-form')?.addEventListener('submit', onFormSubmit);
@@ -394,17 +411,6 @@ function populateForm() {
 
   populateSelect('f-setor', SETORES);
   populateSelect('f-tipo', TIPOS, 'full');
-
-  const em = store.get('user_email');
-  if (em) document.getElementById('f-email').value = em;
-
-  updateSlaInfo();
-}
-
-function updateSlaInfo() {
-  const prio = parseInt(document.querySelector('input[name="prioridade"]:checked')?.value || 3);
-  const info = PRIORITY[prio] || PRIORITY[3];
-  document.getElementById('sla-label').textContent = info.slaLabel;
 }
 
 async function onFormSubmit(e) {
@@ -413,12 +419,11 @@ async function onFormSubmit(e) {
   const solicitante = parseInt(store.get('user_idx'));
   const setor       = document.getElementById('f-setor').value;
   const tipo        = document.getElementById('f-tipo').value;
-  const email       = document.getElementById('f-email').value.trim();
-  const prio        = parseInt(document.querySelector('input[name="prioridade"]:checked')?.value || 3);
+  const operador    = document.querySelector('input[name="operador"]:checked')?.value;
   const descricao   = document.getElementById('f-descricao').value.trim();
   const detalhes    = document.getElementById('f-detalhes').value.trim();
 
-  if (isNaN(solicitante) || !setor || !tipo || !descricao) {
+  if (isNaN(solicitante) || !setor || !tipo || !operador || !descricao) {
     toast('Preencha todos os campos obrigatórios (*)', 'error');
     return;
   }
@@ -433,6 +438,7 @@ async function onFormSubmit(e) {
 
   const solName  = optionName(SOLICITANTES, parseInt(solicitante));
   const tipoName = TIPOS.find(t => t.orderindex === parseInt(tipo))?.name || '';
+  const prio     = CATEGORIA_PRIORIDADE[parseInt(tipo)] || 3;
   const pInfo    = PRIORITY[prio] || PRIORITY[3];
   const dueDate  = Date.now() + pInfo.slaMs;
 
@@ -445,7 +451,6 @@ async function onFormSubmit(e) {
     { id: FIELD_IDS.SETOR,       value: parseInt(setor) },
     { id: FIELD_IDS.TIPO,        value: parseInt(tipo) }
   ];
-  if (email) customFields.push({ id: FIELD_IDS.EMAIL, value: email });
 
   try {
     const task = await createTask({
@@ -455,15 +460,16 @@ async function onFormSubmit(e) {
       priority: prio,
       due_date: dueDate,
       due_date_time: true,
+      assignees: [parseInt(operador)],
       custom_fields: customFields
     });
 
-    toast(`Chamado aberto! ${solName} – ${tipoName}`, 'success');
+    toast(`Chamado aberto! ${solName} – ${tipoName} (atendente: ${OPERADORES[operador] || ''})`, 'success');
     e.target.reset();
     populateForm();
     await loadTickets();
     switchTab('meus-chamados');
-    openWaModal(task);
+    openWaModal(task, pInfo.slaLabel);
   } catch (err) {
     toast(`Erro ao abrir chamado: ${err.message}`, 'error');
   } finally {
@@ -595,7 +601,7 @@ function renderDetailCard(task) {
 
   const hasMeta = dueStr || estimate || spent || assignees || email;
 
-  const cardBg = !overdue ? sInfo.bg : null;
+  const cardBg = sInfo.bg;
 
   return `
 <div class="ticket-card detail-card${overdue ? ' is-overdue' : ''}" data-task-id="${task.id}"${cardBg ? ` style="background:${cardBg}"` : ''}>
@@ -772,9 +778,10 @@ function closeAlertsModal() {
 // ============================================================
 // WA SUCCESS MODAL
 // ============================================================
-function openWaModal(task) {
+function openWaModal(task, slaLabel) {
   const msg = `Olá! Acabei de abrir um chamado de TI:\n*${task.name}*\nGostaria de acompanhar meu atendimento.`;
   document.getElementById('wa-modal-link').href = `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(msg)}`;
+  document.getElementById('wa-modal-sla').textContent = `Prazo de atendimento: ${slaLabel}`;
   document.getElementById('wa-modal').classList.remove('hidden');
 }
 
@@ -902,16 +909,6 @@ function setupCharCounter() {
   if (!ta || !cnt) return;
   ta.addEventListener('input', () => { cnt.textContent = ta.value.length; });
 }
-
-// ============================================================
-// PRIORITY SLA INFO
-// ============================================================
-function setupPriorityInfo() {
-  document.querySelectorAll('input[name="prioridade"]').forEach(r => {
-    r.addEventListener('change', updateSlaInfo);
-  });
-}
-
 
 // ============================================================
 // INSTALL BANNER (PWA)
