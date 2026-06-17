@@ -78,19 +78,22 @@ async function handleWebhook(request, env) {
       return new Response('ignored', { status: 200 });
     }
 
+    const taskId    = body.task_id;
     const newStatus = (body.history_items?.[0]?.after?.status ?? '').toLowerCase();
-    const label     = NOTIFY_STATUSES[newStatus];
 
-    if (!label) return new Response(`status "${newStatus}" ignorado`, { status: 200 });
-
-    // Busca detalhes da tarefa para identificar o solicitante
+    // Busca detalhes da tarefa uma única vez (usada pela automação e pela notificação)
     const taskResp = await fetch(
-      `https://api.clickup.com/api/v2/task/${body.task_id}`,
+      `https://api.clickup.com/api/v2/task/${taskId}`,
       { headers: { Authorization: env.CLICKUP_API_KEY } }
     );
     if (!taskResp.ok) return new Response('task fetch error', { status: 200 });
+    const task = await taskResp.json();
 
-    const task    = await taskResp.json();
+    await runStatusAutomation(taskId, newStatus, task, env);
+
+    const label = NOTIFY_STATUSES[newStatus];
+    if (!label) return new Response(`status "${newStatus}" sem notificação`, { status: 200 });
+
     const cf      = task.custom_fields?.find(f => f.id === SOLICITANTE_FIELD_ID);
     const userIdx = cf?.value?.orderindex ?? cf?.value;
 
@@ -109,6 +112,74 @@ async function handleWebhook(request, env) {
   } catch (err) {
     console.error('Webhook error:', err);
     return new Response('error: ' + err.message, { status: 500 });
+  }
+}
+
+// =====================================================================
+// AUTOMAÇÃO DE STATUS (migrado do Apps Script)
+// "em atendimento" -> define start_date/due_date com base no time_estimate
+// "encerrado"      -> calcula tempo decorrido e registra como time tracked
+// =====================================================================
+async function runStatusAutomation(taskId, status, task, env) {
+  if (status !== 'em atendimento' && status !== 'encerrado') return;
+
+  // Dedup: evita reprocessar o mesmo taskId+status (webhooks podem duplicar entrega)
+  const dedupKey = `processed_${taskId}_${status}`;
+  if (await env.SUBSCRIPTIONS.get(dedupKey)) {
+    console.log(`Automação ignorada (duplicada): ${taskId} -> ${status}`);
+    return;
+  }
+  await env.SUBSCRIPTIONS.put(dedupKey, '1', { expirationTtl: 60 });
+
+  const headers = { Authorization: env.CLICKUP_API_KEY, 'Content-Type': 'application/json' };
+
+  try {
+    if (status === 'em atendimento') {
+      const timeEstimate = task.time_estimate;
+      if (!timeEstimate) {
+        console.log(`Automação: sem time_estimate em ${taskId}, ignorando`);
+        return;
+      }
+
+      const now = Date.now();
+      await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          start_date:      now,
+          start_date_time: true,
+          due_date:        now + timeEstimate,
+          due_date_time:   true
+        })
+      });
+      console.log(`Automação: start_date/due_date definidos para ${taskId}`);
+      return;
+    }
+
+    if (status === 'encerrado') {
+      const startDate = task.start_date;
+      if (!startDate) {
+        console.log(`Automação: sem start_date em ${taskId}, ignorando`);
+        return;
+      }
+
+      const now        = Date.now();
+      const tempoGasto = now - parseInt(startDate);
+
+      const timeResp = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/time`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ start: parseInt(startDate), end: now, time: tempoGasto })
+      });
+
+      if (timeResp.ok) {
+        console.log(`Automação: tempo registrado para ${taskId} (${Math.round(tempoGasto / 60000)} min)`);
+      } else {
+        console.error(`Automação: erro ao registrar tempo em ${taskId}: ${await timeResp.text()}`);
+      }
+    }
+  } catch (err) {
+    console.error(`Automação: erro geral em ${taskId}: ${err.message}`);
   }
 }
 
