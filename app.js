@@ -580,6 +580,12 @@ function slaProgressInfo(task) {
 // essa "solução" do texto original do problema (só quando o chamado já foi encerrado).
 function splitDescription(task) {
   const raw = task.description || task.text_content || '';
+  if (task.status?.status === 'encerrado') {
+    console.log('DEBUG splitDescription', task.name, {
+      description: task.description,
+      text_content: task.text_content
+    });
+  }
   if (!raw) return { problema: '', solucao: null };
 
   const bulletRe  = /^\s*[*\-•]\s+/;
