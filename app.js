@@ -609,7 +609,7 @@ function setCount(id, n) {
 
 // Número de WhatsApp por operador (mesmos IDs de OPERADORES)
 const OPERADOR_WHATSAPP = {
-  '170628721': '558589304648',  // Everson
+  '170628721': '5585989304648', // Everson
   '200498355': '5585999419866'  // Henrique
 };
 const WA_NUMBER_PADRAO = '5585999419866';
