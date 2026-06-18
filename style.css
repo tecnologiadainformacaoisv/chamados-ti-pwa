@@ -614,6 +614,51 @@ form { padding: 24px 28px; }
   color: var(--text-mid);
 }
 
+.anexo-hint {
+  display: block;
+  font-size: .75rem;
+  color: var(--text-muted);
+  margin-top: 5px;
+}
+
+.anexo-list {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.anexo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  border-radius: 6px;
+  font-size: .78rem;
+  font-weight: 500;
+  background: var(--bg);
+  color: var(--text-mid);
+  border: 1px solid var(--border);
+}
+
+.anexo-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.anexo-remove:hover { background: var(--danger-pale); color: var(--danger); }
+
 /* ============================================================
    TICKETS PANEL
    ============================================================ */

@@ -364,6 +364,7 @@ function initApp() {
   setupInstallBanner();
   setupRefresh();
   setupCharCounter();
+  setupAnexo();
   setupNotifications();
 
   document.getElementById('chamado-form')?.addEventListener('submit', onFormSubmit);
@@ -495,6 +496,7 @@ async function onFormSubmit(e) {
 
     toast(`Chamado aberto! ${solName} – ${tipoName} (atendente: ${OPERADORES[operador] || ''})`, 'success');
     e.target.reset();
+    renderAnexoList();
     populateForm();
     await loadTickets();
     switchTab('meus-chamados');
@@ -955,6 +957,68 @@ function setupCharCounter() {
   const cnt = document.getElementById('char-count');
   if (!ta || !cnt) return;
   ta.addEventListener('input', () => { cnt.textContent = ta.value.length; });
+}
+
+// ============================================================
+// ANEXOS (seleção de arquivo + colar print da área de transferência)
+// ============================================================
+function renderAnexoList() {
+  const input = document.getElementById('f-anexo');
+  const list  = document.getElementById('anexo-list');
+  if (!input || !list) return;
+
+  const files = Array.from(input.files || []);
+  list.innerHTML = files.map((f, i) => `
+    <span class="anexo-chip" data-idx="${i}">
+      📎 ${escHtml(f.name)}
+      <button type="button" class="anexo-remove" data-idx="${i}" aria-label="Remover anexo">×</button>
+    </span>
+  `).join('');
+
+  list.querySelectorAll('.anexo-remove').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx);
+      const dt  = new DataTransfer();
+      files.filter((_, i) => i !== idx).forEach(f => dt.items.add(f));
+      input.files = dt.files;
+      renderAnexoList();
+    });
+  });
+}
+
+function setupAnexo() {
+  const input = document.getElementById('f-anexo');
+  const form  = document.getElementById('chamado-form');
+  if (!input || !form) return;
+
+  input.addEventListener('change', renderAnexoList);
+
+  form.addEventListener('paste', e => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    const pastedImages = [];
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          const ext = item.type.split('/')[1] || 'png';
+          pastedImages.push(new File([file], `print-${Date.now()}.${ext}`, { type: item.type }));
+        }
+      }
+    }
+    if (pastedImages.length === 0) return;
+
+    e.preventDefault();
+
+    const dt = new DataTransfer();
+    Array.from(input.files || []).forEach(f => dt.items.add(f));
+    pastedImages.forEach(f => dt.items.add(f));
+    input.files = dt.files;
+
+    renderAnexoList();
+    toast(`Print colado: ${pastedImages.length} imagem(ns) anexada(s)`, 'success');
+  });
 }
 
 // ============================================================
