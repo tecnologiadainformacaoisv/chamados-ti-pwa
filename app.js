@@ -6,6 +6,7 @@
 const LIST_ID = '901324490220';
 const API_BASE = 'https://api.clickup.com/api/v2';
 
+// ⚠️ SOLICITANTE deve ficar sincronizado com SOLICITANTE_FIELD_ID em push-worker.js
 const FIELD_IDS = {
   EMAIL: '2d8d4780-1d48-44dc-b605-0b5dd76c9d0f',
   TIPO: '47e475fe-e911-40cd-b4a2-23625fbf57f1',
@@ -105,6 +106,7 @@ const OPERADORES = {
   '200498355': 'Henrique'
 };
 
+// ⚠️ As chaves de status devem ficar sincronizadas com NOTIFY_STATUSES em push-worker.js
 const STATUS_MAP = {
   'aberto':          { label: 'Aberto',          bg: '#e3f2fd', color: '#1565c0', dot: '#1976d2' },
   'em atendimento':  { label: 'Em Atendimento',  bg: '#e3e0fb', color: '#4527a0', dot: '#5f55ee' },
@@ -536,6 +538,8 @@ async function loadTickets() {
       checkStatusChanges(filtered);
       myTasks = filtered;
     }
+    // Garante mais recentes no topo, independente da ordenação da API
+    myTasks.sort((a, b) => Number(b.date_created) - Number(a.date_created));
     renderAll();
     updateAlertBadge();
     if (pendingHighlightTaskId) {
@@ -614,7 +618,7 @@ function renderDetailCard(task) {
   const tipoIdx  = getCustomField(task, FIELD_IDS.TIPO);
   const setorIdx = getCustomField(task, FIELD_IDS.SETOR);
   const email    = getCustomField(task, FIELD_IDS.EMAIL);
-  const solucao  = getCustomField(task, FIELD_IDS.SOLUCAO) || null;
+  const solucao  = status === 'encerrado' ? (getCustomField(task, FIELD_IDS.SOLUCAO) || null) : null;
 
   const tipoObj   = TIPOS.find(t => t.orderindex === Number(tipoIdx));
   const tipoName  = tipoObj?.name || optionName(TIPOS, tipoIdx);

@@ -12,9 +12,11 @@
 //   Nome da variável: SUBSCRIPTIONS
 // =====================================================================
 
+// ⚠️ Mantenha sincronizado com FIELD_IDS.SOLICITANTE em app.js
 const SOLICITANTE_FIELD_ID = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
 const VAPID_SUBJECT        = 'mailto:henrique.krvalho@gmail.com';
 
+// ⚠️ As chaves de status devem ficar sincronizadas com STATUS_MAP em app.js
 const NOTIFY_STATUSES = {
   'em atendimento': 'Em Atendimento',
   'pendente':       'Pendente',
