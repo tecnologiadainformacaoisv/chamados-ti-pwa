@@ -116,6 +116,8 @@ const STATUS_MAP = {
 const VAPID_PUBLIC_KEY = 'BMgcsTAUEhUr-dau-LaPhTHktmCZ90q4GXFF6CX0p3IvmeB51v68JqZLeuKrO3swUcSXKiNhQ6Ur5I74fm6tp2Q';
 // Worker URL: fill in after deploying to Cloudflare
 const WORKER_URL = 'https://chamados-ti-push.tecnologiadainformacao-isv.workers.dev';
+// Segredo compartilhado com o Worker (env SUBSCRIBE_SECRET) — impede que terceiros chamem /subscribe
+const APP_SHARED_SECRET = 'isv-chamados-2k26-9fQ3vM7xZp';
 
 // ============================================================
 // STATE
@@ -156,6 +158,20 @@ async function apiRequest(method, path, body = null) {
 
 async function createTask(payload) {
   return apiRequest('POST', `/list/${LIST_ID}/task`, payload);
+}
+
+async function uploadAttachment(taskId, file) {
+  const key = store.get('cu_key');
+  const formData = new FormData();
+  formData.append('attachment', file, file.name);
+
+  const res = await fetch(`${API_BASE}/task/${taskId}/attachment`, {
+    method: 'POST',
+    headers: { Authorization: key },
+    body: formData
+  });
+  if (!res.ok) throw new Error(`Erro HTTP ${res.status}`);
+  return res.json();
 }
 
 async function fetchTasks() {
@@ -208,12 +224,14 @@ function optionName(list, orderindex) {
 }
 
 function isOverdue(task) {
-  if (task.status?.status === 'encerrado') return false;
+  const status = task.status?.status;
+  if (status === 'encerrado' || status === 'pendente') return false;
   if (!task.due_date) return false;
   return Date.now() > Number(task.due_date);
 }
 
 function overdueFor(task) {
+  if (task.status?.status === 'pendente') return '';
   if (!task.due_date) return '';
   const diff = Date.now() - Number(task.due_date);
   if (diff <= 0) return '';
@@ -423,6 +441,7 @@ async function onFormSubmit(e) {
   const operador    = document.querySelector('input[name="operador"]:checked')?.value;
   const descricao   = document.getElementById('f-descricao').value.trim();
   const detalhes    = document.getElementById('f-detalhes').value.trim();
+  const anexos      = Array.from(document.getElementById('f-anexo')?.files || []);
 
   if (isNaN(solicitante) || !setor || !tipo || !operador || !descricao) {
     toast('Preencha todos os campos obrigatórios (*)', 'error');
@@ -463,6 +482,14 @@ async function onFormSubmit(e) {
       assignees: [parseInt(operador)],
       custom_fields: customFields
     });
+
+    if (anexos.length > 0) {
+      try {
+        await Promise.all(anexos.map(file => uploadAttachment(task.id, file)));
+      } catch (err) {
+        toast(`Chamado aberto, mas houve erro ao enviar anexo: ${err.message}`, 'error');
+      }
+    }
 
     toast(`Chamado aberto! ${solName} – ${tipoName} (atendente: ${OPERADORES[operador] || ''})`, 'success');
     e.target.reset();
@@ -562,7 +589,7 @@ function waLink(task) {
 
 function slaProgressInfo(task) {
   const status = task.status?.status || 'aberto';
-  if (status === 'encerrado') return null;
+  if (status === 'encerrado' || status === 'pendente') return null;
   const start = Number(task.date_created);
   const end   = Number(task.due_date);
   if (!start || !end || end <= start) return null;
@@ -593,14 +620,16 @@ function renderDetailCard(task) {
   const tipoName  = tipoObj?.name || optionName(TIPOS, tipoIdx);
   const setorName = optionName(SETORES, setorIdx);
 
-  const desc      = (task.text_content || task.description || '').trim();
+  const desc        = (task.text_content || task.description || '').trim();
+  const attachments = task.attachments || [];
+  const abertoEm  = fmtDate(task.date_created);
   const estimate  = fmtMs(task.time_estimate);
   const spent     = (task.time_spent > 0) ? fmtMs(task.time_spent) : null;
   const dueStr    = fmtDate(task.due_date);
-  const dueFuture = timeUntil(task.due_date);
+  const dueFuture = (status === 'encerrado' || status === 'pendente') ? null : timeUntil(task.due_date);
   const assignees = (task.assignees || []).map(a => a.username).join(', ');
 
-  const hasMeta = dueStr || estimate || spent || assignees || email;
+  const hasMeta = abertoEm || dueStr || estimate || spent || assignees || email;
 
   const cardBg = sInfo.bg;
 
@@ -628,6 +657,10 @@ function renderDetailCard(task) {
     <div class="detail-solucao-text">${escHtml(solucao)}</div>
   </div>` : ''}
 
+  ${attachments.length > 0 ? `<div class="detail-attachments">
+    ${attachments.map(a => `<a href="${escHtml(a.url)}" target="_blank" rel="noopener" class="attachment-chip">📎 ${escHtml(a.title || a.name || 'arquivo')}</a>`).join('')}
+  </div>` : ''}
+
   <div class="ticket-tags">
     ${tipoObj ? `<span class="tipo-tag" style="background:${tipoObj.color}1a;color:${tipoObj.color}">${escHtml(tipoName)}</span>` : ''}
     ${setorIdx !== null ? `<span class="setor-tag">${escHtml(setorName)}</span>` : ''}
@@ -635,10 +668,14 @@ function renderDetailCard(task) {
   </div>
 
   ${hasMeta ? `<div class="detail-meta-grid">
+    ${abertoEm ? `<div class="detail-meta-item">
+      <span class="detail-meta-label">Aberto em</span>
+      <span class="detail-meta-value">${escHtml(abertoEm)}</span>
+    </div>` : ''}
     ${dueStr ? `<div class="detail-meta-item">
       <span class="detail-meta-label">Prazo</span>
       <span class="detail-meta-value${overdue ? ' text-danger' : ''}">
-        ${escHtml(dueStr)}${dueFuture ? ` <span class="due-remaining">(${dueFuture})</span>` : ''}
+        ${escHtml(dueStr)}${dueFuture ? ` <span class="due-remaining">(${dueFuture})</span>` : ''}${status === 'pendente' ? ` <span class="due-paused">(pausado)</span>` : ''}
       </span>
     </div>` : ''}
     ${estimate ? `<div class="detail-meta-item">
@@ -1009,7 +1046,7 @@ async function subscribeToPush() {
   await fetch(`${WORKER_URL}/subscribe`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ user_idx: userIdx, subscription: sub.toJSON() })
+    body:    JSON.stringify({ user_idx: userIdx, subscription: sub.toJSON(), secret: APP_SHARED_SECRET })
   });
 }
 

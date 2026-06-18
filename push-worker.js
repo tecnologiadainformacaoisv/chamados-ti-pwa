@@ -6,6 +6,7 @@
 //   VAPID_PUBLIC_KEY  → chave pública gerada (PUBLIC_KEY)
 //   VAPID_PRIVATE_JWK → chave privada em JSON (PRIVATE_JWK)
 //   CLICKUP_API_KEY   → chave da API do ClickUp (marcar como secret)
+//   SUBSCRIBE_SECRET  → mesmo valor de APP_SHARED_SECRET no app.js (marcar como secret)
 //
 // KV Namespace (Settings → KV Namespace Bindings → Add):
 //   Nome da variável: SUBSCRIPTIONS
@@ -50,11 +51,15 @@ export default {
 
 // =====================================================================
 // /subscribe — salva subscription do usuário no KV
-// Body: { user_idx: number, subscription: PushSubscription }
+// Body: { user_idx: number, subscription: PushSubscription, secret: string }
 // =====================================================================
 async function handleSubscribe(request, env) {
   try {
-    const { user_idx, subscription } = await request.json();
+    const { user_idx, subscription, secret } = await request.json();
+
+    if (env.SUBSCRIBE_SECRET && secret !== env.SUBSCRIBE_SECRET) {
+      return jsonRes({ error: 'não autorizado' }, 403);
+    }
 
     if (user_idx == null || !subscription?.endpoint) {
       return jsonRes({ error: 'user_idx ou subscription ausente' }, 400);
@@ -78,8 +83,9 @@ async function handleWebhook(request, env) {
       return new Response('ignored', { status: 200 });
     }
 
-    const taskId    = body.task_id;
-    const newStatus = (body.history_items?.[0]?.after?.status ?? '').toLowerCase();
+    const taskId     = body.task_id;
+    const newStatus  = (body.history_items?.[0]?.after?.status  ?? '').toLowerCase();
+    const prevStatus = (body.history_items?.[0]?.before?.status ?? '').toLowerCase();
 
     // Busca detalhes da tarefa uma única vez (usada pela automação e pela notificação)
     const taskResp = await fetch(
@@ -89,7 +95,7 @@ async function handleWebhook(request, env) {
     if (!taskResp.ok) return new Response('task fetch error', { status: 200 });
     const task = await taskResp.json();
 
-    await runStatusAutomation(taskId, newStatus, task, env);
+    await runStatusAutomation(taskId, newStatus, prevStatus, task, env);
 
     const label = NOTIFY_STATUSES[newStatus];
     if (!label) return new Response(`status "${newStatus}" sem notificação`, { status: 200 });
@@ -117,11 +123,15 @@ async function handleWebhook(request, env) {
 
 // =====================================================================
 // AUTOMAÇÃO DE STATUS (migrado do Apps Script)
+// "pendente"       -> marca início da pausa de SLA
+// saiu de pendente -> empurra o due_date pelo tempo que ficou pausado
 // "em atendimento" -> define start_date/due_date com base no time_estimate
 // "encerrado"      -> calcula tempo decorrido e registra como time tracked
 // =====================================================================
-async function runStatusAutomation(taskId, status, task, env) {
-  if (status !== 'em atendimento' && status !== 'encerrado') return;
+async function runStatusAutomation(taskId, status, prevStatus, task, env) {
+  const saiuDePendente = prevStatus === 'pendente' && status !== 'pendente';
+  const relevante = status === 'em atendimento' || status === 'encerrado' || status === 'pendente' || saiuDePendente;
+  if (!relevante) return;
 
   // Dedup: evita reprocessar o mesmo taskId+status (webhooks podem duplicar entrega)
   const dedupKey = `processed_${taskId}_${status}`;
@@ -129,11 +139,32 @@ async function runStatusAutomation(taskId, status, task, env) {
     console.log(`Automação ignorada (duplicada): ${taskId} -> ${status}`);
     return;
   }
-  await env.SUBSCRIPTIONS.put(dedupKey, '1', { expirationTtl: 60 });
+  await env.SUBSCRIPTIONS.put(dedupKey, '1', { expirationTtl: 600 });
 
   const headers = { Authorization: env.CLICKUP_API_KEY, 'Content-Type': 'application/json' };
 
   try {
+    if (status === 'pendente') {
+      await env.SUBSCRIPTIONS.put(`pending_start_${taskId}`, String(Date.now()), { expirationTtl: 2592000 });
+      console.log(`Automação: pausa de SLA iniciada (pendente) em ${taskId}`);
+      return;
+    }
+
+    if (saiuDePendente) {
+      const pendingStartStr = await env.SUBSCRIPTIONS.get(`pending_start_${taskId}`);
+      if (pendingStartStr && task.due_date) {
+        const pendingMs   = Date.now() - parseInt(pendingStartStr);
+        const newDueDate  = Number(task.due_date) + pendingMs;
+        await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify({ due_date: newDueDate, due_date_time: true })
+        });
+        console.log(`Automação: due_date adiado ${Math.round(pendingMs / 60000)}min (pausa em ${taskId})`);
+      }
+      await env.SUBSCRIPTIONS.delete(`pending_start_${taskId}`);
+    }
+
     if (status === 'em atendimento') {
       const timeEstimate = task.time_estimate;
       if (!timeEstimate) {

@@ -971,7 +971,7 @@ form { padding: 24px 28px; }
 }
 
 .detail-solucao {
-  background: #e8f5e9;
+  background: #fff;
   border: 1px solid #a5d6a7;
   border-radius: var(--radius-sm);
   padding: 10px 12px;
@@ -985,6 +985,7 @@ form { padding: 24px 28px; }
   letter-spacing: .04em;
   color: #1b5e20;
   margin-bottom: 4px;
+  text-align: center;
 }
 
 .detail-solucao-text {
@@ -993,6 +994,30 @@ form { padding: 24px 28px; }
   line-height: 1.55;
   white-space: pre-line;
 }
+
+.detail-attachments {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: .78rem;
+  font-weight: 500;
+  background: var(--bg);
+  color: var(--text-mid);
+  border: 1px solid var(--border);
+  text-decoration: none;
+  transition: border-color .15s;
+}
+
+.attachment-chip:hover { border-color: var(--primary-light); color: var(--primary); }
 
 .detail-meta-grid {
   display: grid;
@@ -1032,6 +1057,12 @@ form { padding: 24px 28px; }
 .due-remaining {
   font-size: .78rem;
   color: #16a34a;
+  font-weight: 600;
+}
+
+.due-paused {
+  font-size: .78rem;
+  color: var(--text-muted);
   font-weight: 600;
 }
 
