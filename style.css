@@ -970,6 +970,30 @@ form { padding: 24px 28px; }
   padding: 10px 12px;
 }
 
+.detail-solucao {
+  background: #e8f5e9;
+  border: 1px solid #a5d6a7;
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.detail-solucao-label {
+  font-size: .72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: #1b5e20;
+  margin-bottom: 4px;
+}
+
+.detail-solucao-text {
+  font-size: .87rem;
+  color: #1b5e20;
+  line-height: 1.55;
+  white-space: pre-line;
+}
+
 .detail-meta-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
