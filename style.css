@@ -614,6 +614,18 @@ form { padding: 24px 28px; }
   color: var(--text-mid);
 }
 
+.form-group-anexo {
+  text-align: center;
+}
+
+.form-group-anexo .file-input {
+  display: inline-block;
+}
+
+.form-group-anexo .anexo-list {
+  justify-content: center;
+}
+
 .anexo-hint {
   display: block;
   font-size: .75rem;
@@ -1045,6 +1057,11 @@ form { padding: 24px 28px; }
   gap: 6px;
   flex-wrap: wrap;
   margin-bottom: 12px;
+}
+
+.detail-attachments:empty {
+  display: none;
+  margin-bottom: 0;
 }
 
 .attachment-chip {

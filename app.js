@@ -567,6 +567,27 @@ function renderAll() {
 
   const meusTab = document.querySelector('[data-tab="meus-chamados"]');
   if (meusTab) meusTab.classList.toggle('has-overdue', myActive.filter(isOverdue).length > 0);
+
+  loadAttachments(myTasks);
+}
+
+// A API de listagem de tarefas não devolve anexos, então buscamos por tarefa,
+// individualmente, depois de renderizar a lista (não bloqueia a renderização).
+async function loadAttachments(tasks) {
+  await Promise.all(tasks.map(async task => {
+    const container = document.getElementById(`anexos-${task.id}`);
+    if (!container) return;
+    try {
+      const full = await apiRequest('GET', `/task/${task.id}`);
+      const attachments = full.attachments || [];
+      if (attachments.length === 0) return;
+      container.innerHTML = attachments
+        .map(a => `<a href="${escHtml(a.url)}" target="_blank" rel="noopener" class="attachment-chip">📎 ${escHtml(a.title || a.name || 'arquivo')}</a>`)
+        .join('');
+    } catch {
+      // ignora silenciosamente — anexos são um extra, não pode quebrar a lista
+    }
+  }));
 }
 
 function applyStatusFilter(tasks, filterVal) {
@@ -627,7 +648,6 @@ function renderDetailCard(task) {
   const setorName = optionName(SETORES, setorIdx);
 
   const desc        = (task.text_content || task.description || '').trim();
-  const attachments = task.attachments || [];
   const abertoEm  = fmtDate(task.date_created);
   const estimate  = fmtMs(task.time_estimate);
   const spent     = (task.time_spent > 0) ? fmtMs(task.time_spent) : null;
@@ -663,9 +683,7 @@ function renderDetailCard(task) {
     <div class="detail-solucao-text">${escHtml(solucao)}</div>
   </div>` : ''}
 
-  ${attachments.length > 0 ? `<div class="detail-attachments">
-    ${attachments.map(a => `<a href="${escHtml(a.url)}" target="_blank" rel="noopener" class="attachment-chip">📎 ${escHtml(a.title || a.name || 'arquivo')}</a>`).join('')}
-  </div>` : ''}
+  <div class="detail-attachments" id="anexos-${task.id}"></div>
 
   <div class="ticket-tags">
     ${tipoObj ? `<span class="tipo-tag" style="background:${tipoObj.color}1a;color:${tipoObj.color}">${escHtml(tipoName)}</span>` : ''}
