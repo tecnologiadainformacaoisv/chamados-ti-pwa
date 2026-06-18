@@ -10,7 +10,8 @@ const FIELD_IDS = {
   EMAIL: '2d8d4780-1d48-44dc-b605-0b5dd76c9d0f',
   TIPO: '47e475fe-e911-40cd-b4a2-23625fbf57f1',
   SOLICITANTE: '9f111ee8-923a-4080-bf8f-1c03eee2f7cb',
-  SETOR: 'c1ca88de-4b01-4933-93ff-24494bed59e2'
+  SETOR: 'c1ca88de-4b01-4933-93ff-24494bed59e2',
+  SOLUCAO: '16144175-845e-4e3c-baaa-a2517325cd43'
 };
 
 const TIPOS = [
@@ -443,8 +444,7 @@ async function onFormSubmit(e) {
   const dueDate  = Date.now() + pInfo.slaMs;
 
   const taskName = descricao;
-  let taskDesc   = '';
-  if (detalhes) taskDesc = `Detalhes adicionais:\n${detalhes}`;
+  const taskDesc = detalhes || '';
 
   const customFields = [
     { id: FIELD_IDS.SOLICITANTE, value: solicitante },
@@ -587,13 +587,13 @@ function renderDetailCard(task) {
   const tipoIdx  = getCustomField(task, FIELD_IDS.TIPO);
   const setorIdx = getCustomField(task, FIELD_IDS.SETOR);
   const email    = getCustomField(task, FIELD_IDS.EMAIL);
+  const solucao  = getCustomField(task, FIELD_IDS.SOLUCAO) || null;
 
   const tipoObj   = TIPOS.find(t => t.orderindex === Number(tipoIdx));
   const tipoName  = tipoObj?.name || optionName(TIPOS, tipoIdx);
   const setorName = optionName(SETORES, setorIdx);
 
   const desc      = (task.text_content || task.description || '').trim();
-  const solucao   = null; // TODO: ler de FIELD_IDS.SOLUCAO assim que o campo for criado no ClickUp
   const estimate  = fmtMs(task.time_estimate);
   const spent     = (task.time_spent > 0) ? fmtMs(task.time_spent) : null;
   const dueStr    = fmtDate(task.due_date);
