@@ -607,12 +607,22 @@ function setCount(id, n) {
   el.classList.toggle('hidden', n === 0);
 }
 
-const WA_NUMBER = '5585999419866';
+// Número de WhatsApp por operador (mesmos IDs de OPERADORES)
+const OPERADOR_WHATSAPP = {
+  '170628721': '558589304648',  // Everson
+  '200498355': '5585999419866'  // Henrique
+};
+const WA_NUMBER_PADRAO = '5585999419866';
+
+function waNumberForTask(task) {
+  const assigneeId = task.assignees?.[0]?.id != null ? String(task.assignees[0].id) : null;
+  return OPERADOR_WHATSAPP[assigneeId] || WA_NUMBER_PADRAO;
+}
 
 function waLink(task) {
   const status = STATUS_MAP[task.status?.status]?.label || 'Aberto';
   const msg = `Olá! Gostaria de informações sobre meu chamado de TI:\n*${task.name}*\nStatus: ${status}`;
-  return `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(msg)}`;
+  return `https://wa.me/${waNumberForTask(task)}?text=${encodeURIComponent(msg)}`;
 }
 
 function slaProgressInfo(task) {
@@ -848,7 +858,7 @@ function closeAlertsModal() {
 // ============================================================
 function openWaModal(task, slaLabel) {
   const msg = `Olá! Acabei de abrir um chamado de TI:\n*${task.name}*\nGostaria de acompanhar meu atendimento.`;
-  document.getElementById('wa-modal-link').href = `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(msg)}`;
+  document.getElementById('wa-modal-link').href = `https://wa.me/${waNumberForTask(task)}?text=${encodeURIComponent(msg)}`;
   document.getElementById('wa-modal-sla').textContent = `Prazo de atendimento: ${slaLabel}`;
   document.getElementById('wa-modal').classList.remove('hidden');
 }
