@@ -129,6 +129,16 @@ async function handleWebhook(request, env) {
 // saiu de pendente -> empurra o due_date pelo tempo que ficou pausado
 // "em atendimento" -> define start_date/due_date com base no time_estimate
 // "encerrado"      -> calcula tempo decorrido e registra como time tracked
+//
+// LIMITAÇÃO CONHECIDA (pausa de SLA + dedup): o dedup abaixo é por
+// taskId+status, com janela de 10min. Se uma tarefa for pra "pendente",
+// saltar pra outro status e voltar pra "pendente" de novo dentro dessa
+// janela de 10min, a segunda entrada em "pendente" é ignorada como
+// duplicata — e o início dessa segunda pausa não é gravado. Resultado:
+// o tempo da segunda pausa não é somado ao due_date depois. Cenário raro
+// no uso real (exigiria trocas de status muito rápidas), então foi aceito
+// como trade-off; se isso passar a importar, o dedup precisaria considerar
+// a transição (prevStatus+status), não só o status final.
 // =====================================================================
 async function runStatusAutomation(taskId, status, prevStatus, task, env) {
   const saiuDePendente = prevStatus === 'pendente' && status !== 'pendente';

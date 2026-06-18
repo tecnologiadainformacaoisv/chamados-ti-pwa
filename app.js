@@ -81,11 +81,11 @@ const SETORES = [
   { orderindex: 8, name: 'Outro',               color: '#8d8d8d' }
 ];
 
+// Não usamos prioridade "Baixa" aqui — nenhuma categoria mapeia pra ela (ver CATEGORIA_PRIORIDADE)
 const PRIORITY = {
   1: { label: 'Urgente', color: '#ef5350', slaMs: 1  * 3600000, slaLabel: '1 hora'   },
   2: { label: 'Alta',    color: '#ff9800', slaMs: 4  * 3600000, slaLabel: '4 horas'  },
-  3: { label: 'Normal',  color: '#2196f3', slaMs: 24 * 3600000, slaLabel: '24 horas' },
-  4: { label: 'Baixa',   color: '#9e9e9e', slaMs: 168 * 3600000, slaLabel: '7 dias'  }
+  3: { label: 'Normal',  color: '#2196f3', slaMs: 24 * 3600000, slaLabel: '24 horas' }
 };
 
 // Mapeamento categoria (orderindex de TIPOS) -> prioridade (id de PRIORITY)
@@ -445,7 +445,7 @@ async function onFormSubmit(e) {
   const operador    = document.querySelector('input[name="operador"]:checked')?.value;
   const descricao   = document.getElementById('f-descricao').value.trim();
   const detalhes    = document.getElementById('f-detalhes').value.trim();
-  const anexos      = Array.from(document.getElementById('f-anexo')?.files || []);
+  const anexos      = filtrarAnexosValidos(Array.from(document.getElementById('f-anexo')?.files || [])).validos;
 
   if (isNaN(solicitante) || !setor || !tipo || !operador || !descricao) {
     toast('Preencha todos os campos obrigatórios (*)', 'error');
@@ -574,17 +574,29 @@ function renderAll() {
 
 // A API de listagem de tarefas não devolve anexos, então buscamos por tarefa,
 // individualmente, depois de renderizar a lista (não bloqueia a renderização).
+// Cache em memória por task.id: só refaz a busca se date_updated mudou desde a
+// última vez, evitando refetch de anexos a cada poll (60s) pra tarefas inalteradas.
+const attachmentsCache = new Map(); // task.id -> { dateUpdated, html }
+
 async function loadAttachments(tasks) {
   await Promise.all(tasks.map(async task => {
     const container = document.getElementById(`anexos-${task.id}`);
     if (!container) return;
+
+    const cached = attachmentsCache.get(task.id);
+    if (cached && cached.dateUpdated === task.date_updated) {
+      container.innerHTML = cached.html;
+      return;
+    }
+
     try {
       const full = await apiRequest('GET', `/task/${task.id}`);
       const attachments = full.attachments || [];
-      if (attachments.length === 0) return;
-      container.innerHTML = attachments
+      const html = attachments
         .map(a => `<button type="button" class="attachment-chip" data-url="${escHtml(a.url)}" data-title="${escHtml(a.title || a.name || 'arquivo')}" data-ext="${escHtml(a.extension || '')}">📎 ${escHtml(a.title || a.name || 'arquivo')}</button>`)
         .join('');
+      attachmentsCache.set(task.id, { dateUpdated: task.date_updated, html });
+      container.innerHTML = html;
     } catch {
       // ignora silenciosamente — anexos são um extra, não pode quebrar a lista
     }
@@ -609,7 +621,7 @@ function setCount(id, n) {
 
 // Número de WhatsApp por operador (mesmos IDs de OPERADORES)
 const OPERADOR_WHATSAPP = {
-  '170628721': '5585989304648', // Everson
+  '170628721': '558589304648',  // Everson
   '200498355': '5585999419866'  // Henrique
 };
 const WA_NUMBER_PADRAO = '5585999419866';
@@ -661,7 +673,7 @@ function renderDetailCard(task) {
   const desc        = (task.text_content || task.description || '').trim();
   const abertoEm  = fmtDate(task.date_created);
   const estimate  = fmtMs(task.time_estimate);
-  const spent     = (task.time_spent > 0) ? fmtMs(task.time_spent) : null;
+  const spent     = (status === 'em atendimento' || status === 'encerrado') ? (fmtMs(task.time_spent) || '0min') : null;
   const dueStr    = fmtDate(task.due_date);
   const dueFuture = (status === 'encerrado' || status === 'pendente') ? null : timeUntil(task.due_date);
   const assignees = (task.assignees || []).map(a => a.username).join(', ');
@@ -1030,6 +1042,16 @@ function setupCharCounter() {
 // ============================================================
 // ANEXOS (seleção de arquivo + colar print da área de transferência)
 // ============================================================
+const MAX_ANEXO_MB    = 10;
+const MAX_ANEXO_BYTES = MAX_ANEXO_MB * 1024 * 1024;
+
+function filtrarAnexosValidos(files) {
+  const validos    = [];
+  const rejeitados = [];
+  files.forEach(f => (f.size > MAX_ANEXO_BYTES ? rejeitados.push(f) : validos.push(f)));
+  return { validos, rejeitados };
+}
+
 function renderAnexoList() {
   const input = document.getElementById('f-anexo');
   const list  = document.getElementById('anexo-list');
@@ -1059,7 +1081,16 @@ function setupAnexo() {
   const form  = document.getElementById('chamado-form');
   if (!input || !form) return;
 
-  input.addEventListener('change', renderAnexoList);
+  input.addEventListener('change', () => {
+    const { validos, rejeitados } = filtrarAnexosValidos(Array.from(input.files || []));
+    if (rejeitados.length > 0) {
+      const dt = new DataTransfer();
+      validos.forEach(f => dt.items.add(f));
+      input.files = dt.files;
+      toast(`Arquivo(s) acima de ${MAX_ANEXO_MB}MB removido(s): ${rejeitados.map(f => f.name).join(', ')}`, 'error');
+    }
+    renderAnexoList();
+  });
 
   form.addEventListener('paste', e => {
     const items = e.clipboardData?.items;
@@ -1079,13 +1110,19 @@ function setupAnexo() {
 
     e.preventDefault();
 
+    const { validos, rejeitados } = filtrarAnexosValidos(pastedImages);
+    if (rejeitados.length > 0) {
+      toast(`Print acima de ${MAX_ANEXO_MB}MB não foi anexado`, 'error');
+    }
+    if (validos.length === 0) return;
+
     const dt = new DataTransfer();
     Array.from(input.files || []).forEach(f => dt.items.add(f));
-    pastedImages.forEach(f => dt.items.add(f));
+    validos.forEach(f => dt.items.add(f));
     input.files = dt.files;
 
     renderAnexoList();
-    toast(`Print colado: ${pastedImages.length} imagem(ns) anexada(s)`, 'success');
+    toast(`Print colado: ${validos.length} imagem(ns) anexada(s)`, 'success');
   });
 }
 
