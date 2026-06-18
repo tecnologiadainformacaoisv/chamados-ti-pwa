@@ -575,37 +575,6 @@ function slaProgressInfo(task) {
   return { pct: Math.max(0, Math.min(pct, 100)), color };
 }
 
-// Convenção: ao encerrar o chamado, o atendente acrescenta uma linha em
-// formato de marcador (bullet) com o procedimento feito. Essa função separa
-// essa "solução" do texto original do problema (só quando o chamado já foi encerrado).
-function splitDescription(task) {
-  const raw = task.description || task.text_content || '';
-  if (task.status?.status === 'encerrado') {
-    console.log('DEBUG splitDescription', task.name, {
-      description: task.description,
-      text_content: task.text_content
-    });
-  }
-  if (!raw) return { problema: '', solucao: null };
-
-  const bulletRe  = /^\s*[*\-•]\s+/;
-  const lines     = raw.split('\n');
-  const bulletIdx = lines.findIndex(l => bulletRe.test(l));
-
-  if (task.status?.status !== 'encerrado' || bulletIdx === -1) {
-    return { problema: (task.text_content || raw).trim(), solucao: null };
-  }
-
-  const problema = lines.slice(0, bulletIdx).join('\n').trim();
-  const solucao  = lines.slice(bulletIdx)
-    .filter(l => bulletRe.test(l))
-    .map(l => l.replace(bulletRe, '').trim())
-    .filter(Boolean)
-    .join('\n');
-
-  return { problema, solucao: solucao || null };
-}
-
 function renderDetailCard(task) {
   const status  = task.status?.status || 'aberto';
   const sInfo   = STATUS_MAP[status] || STATUS_MAP['aberto'];
@@ -623,7 +592,8 @@ function renderDetailCard(task) {
   const tipoName  = tipoObj?.name || optionName(TIPOS, tipoIdx);
   const setorName = optionName(SETORES, setorIdx);
 
-  const { problema: desc, solucao } = splitDescription(task);
+  const desc      = (task.text_content || task.description || '').trim();
+  const solucao   = null; // TODO: ler de FIELD_IDS.SOLUCAO assim que o campo for criado no ClickUp
   const estimate  = fmtMs(task.time_estimate);
   const spent     = (task.time_spent > 0) ? fmtMs(task.time_spent) : null;
   const dueStr    = fmtDate(task.due_date);
