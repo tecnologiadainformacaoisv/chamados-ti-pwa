@@ -365,6 +365,7 @@ function initApp() {
   setupRefresh();
   setupCharCounter();
   setupAnexo();
+  setupAnexoModal();
   setupNotifications();
 
   document.getElementById('chamado-form')?.addEventListener('submit', onFormSubmit);
@@ -582,7 +583,7 @@ async function loadAttachments(tasks) {
       const attachments = full.attachments || [];
       if (attachments.length === 0) return;
       container.innerHTML = attachments
-        .map(a => `<a href="${escHtml(a.url)}" target="_blank" rel="noopener" class="attachment-chip">📎 ${escHtml(a.title || a.name || 'arquivo')}</a>`)
+        .map(a => `<button type="button" class="attachment-chip" data-url="${escHtml(a.url)}" data-title="${escHtml(a.title || a.name || 'arquivo')}" data-ext="${escHtml(a.extension || '')}">📎 ${escHtml(a.title || a.name || 'arquivo')}</button>`)
         .join('');
     } catch {
       // ignora silenciosamente — anexos são um extra, não pode quebrar a lista
@@ -854,6 +855,45 @@ function openWaModal(task, slaLabel) {
 
 function closeWaModal() {
   document.getElementById('wa-modal').classList.add('hidden');
+}
+
+// ============================================================
+// ANEXO MODAL (visualizar print/arquivo em vez de baixar)
+// ============================================================
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
+
+function openAnexoModal(url, title, ext) {
+  const body = document.getElementById('anexo-modal-body');
+  const isImage = IMAGE_EXTENSIONS.includes((ext || '').toLowerCase()) || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(url);
+
+  document.getElementById('anexo-modal-title').textContent = title || 'Anexo';
+
+  if (isImage) {
+    body.innerHTML = `<img src="${escHtml(url)}" alt="${escHtml(title || 'anexo')}" class="anexo-modal-img">`;
+  } else {
+    body.innerHTML = `
+      <p class="anexo-modal-fallback">Pré-visualização não disponível para este tipo de arquivo.</p>
+      <a href="${escHtml(url)}" target="_blank" rel="noopener" class="btn-primary">Abrir arquivo</a>
+    `;
+  }
+
+  document.getElementById('anexo-modal').classList.remove('hidden');
+}
+
+function closeAnexoModal() {
+  document.getElementById('anexo-modal').classList.add('hidden');
+  document.getElementById('anexo-modal-body').innerHTML = '';
+}
+
+function setupAnexoModal() {
+  document.getElementById('anexo-modal-close')?.addEventListener('click', closeAnexoModal);
+  document.getElementById('anexo-modal-overlay')?.addEventListener('click', closeAnexoModal);
+
+  document.addEventListener('click', e => {
+    const chip = e.target.closest('.attachment-chip');
+    if (!chip) return;
+    openAnexoModal(chip.dataset.url, chip.dataset.title, chip.dataset.ext);
+  });
 }
 
 // ============================================================

@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="TI Chamados">
-  <meta name="app-version" content="0.1.32">
+  <meta name="app-version" content="0.1.33">
   <title>Chamados de TI – ISV</title>
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icon.svg">
@@ -291,7 +291,7 @@
 
     </main>
 
-    <footer class="app-footer">Instituto São Vicente · Chamados de TI · v0.1.32</footer>
+    <footer class="app-footer">Instituto São Vicente · Chamados de TI · v0.1.33</footer>
   </div>
 
   <!-- ===================== SETTINGS MODAL ===================== -->
@@ -372,6 +372,22 @@
         </a>
         <button id="wa-modal-close" class="btn-secondary wa-btn-full">Agora não</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ===================== ANEXO MODAL ===================== -->
+  <div id="anexo-modal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Visualizar anexo">
+    <div id="anexo-modal-overlay" class="modal-overlay"></div>
+    <div class="modal-card anexo-modal-card">
+      <div class="modal-header">
+        <h3 id="anexo-modal-title">Anexo</h3>
+        <button id="anexo-modal-close" class="icon-btn-dark" aria-label="Fechar">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/>
+          </svg>
+        </button>
+      </div>
+      <div id="anexo-modal-body" class="anexo-modal-body"></div>
     </div>
   </div>
 
