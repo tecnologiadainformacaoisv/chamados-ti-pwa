@@ -80,10 +80,10 @@ const SETORES = [
 ];
 
 const PRIORITY = {
-  1: { label: 'Urgente', color: '#ef5350', slaMs: 4  * 3600000, slaLabel: '4 horas'   },
-  2: { label: 'Alta',    color: '#ff9800', slaMs: 24 * 3600000, slaLabel: '24 horas'  },
-  3: { label: 'Normal',  color: '#2196f3', slaMs: 72 * 3600000, slaLabel: '72 horas'  },
-  4: { label: 'Baixa',   color: '#9e9e9e', slaMs: 168 * 3600000, slaLabel: '7 dias'   }
+  1: { label: 'Urgente', color: '#ef5350', slaMs: 1  * 3600000, slaLabel: '1 hora'   },
+  2: { label: 'Alta',    color: '#ff9800', slaMs: 4  * 3600000, slaLabel: '4 horas'  },
+  3: { label: 'Normal',  color: '#2196f3', slaMs: 24 * 3600000, slaLabel: '24 horas' },
+  4: { label: 'Baixa',   color: '#9e9e9e', slaMs: 168 * 3600000, slaLabel: '7 dias'  }
 };
 
 // Mapeamento categoria (orderindex de TIPOS) -> prioridade (id de PRIORITY)
