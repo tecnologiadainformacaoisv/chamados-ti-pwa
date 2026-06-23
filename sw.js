@@ -1,4 +1,4 @@
-const APP_VERSION = '0.2.0';
+const APP_VERSION = '0.2.1';
 const CACHE_NAME = `chamados-ti-${APP_VERSION}`;
 const ASSETS = [
   './index.html',
