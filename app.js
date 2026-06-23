@@ -140,6 +140,28 @@ const store = {
 // ============================================================
 // API
 // ============================================================
+// Traduz erros técnicos (HTTP, rede) em mensagens que fazem sentido pra quem não é de TI.
+// O erro original sempre vai pro console, pra investigação.
+function userFriendlyError(err) {
+  console.error(err);
+  if (!navigator.onLine) return 'Sem conexão com a internet. Verifique sua rede e tente novamente.';
+
+  const msg = err?.message || '';
+  if (/API key não configurada/i.test(msg)) {
+    return 'O app não está configurado corretamente. Avise o setor de TI.';
+  }
+  if (/Failed to fetch|NetworkError|network/i.test(msg)) {
+    return 'Não foi possível conectar. Verifique sua internet e tente novamente.';
+  }
+  if (/\b401\b|\b403\b/.test(msg)) {
+    return 'Sessão expirada ou sem permissão. Avise o setor de TI.';
+  }
+  if (/Erro HTTP 5\d\d/.test(msg)) {
+    return 'O sistema está indisponível agora. Tente novamente em alguns minutos.';
+  }
+  return 'Algo deu errado. Tente novamente ou avise o setor de TI.';
+}
+
 async function apiRequest(method, path, body = null) {
   const key = store.get('cu_key');
   if (!key) throw new Error('API key não configurada');
@@ -366,6 +388,7 @@ function initApp() {
   setupCharCounter();
   setupAnexo();
   setupAnexoModal();
+  setupOfflineBanner();
   setupNotifications();
 
   document.getElementById('chamado-form')?.addEventListener('submit', onFormSubmit);
@@ -491,7 +514,7 @@ async function onFormSubmit(e) {
       try {
         await Promise.all(anexos.map(file => uploadAttachment(task.id, file)));
       } catch (err) {
-        toast(`Chamado aberto, mas houve erro ao enviar anexo: ${err.message}`, 'error');
+        toast(`Chamado aberto, mas houve erro ao enviar o anexo. ${userFriendlyError(err)}`, 'error');
       }
     }
 
@@ -503,7 +526,7 @@ async function onFormSubmit(e) {
     switchTab('meus-chamados');
     openWaModal(task, pInfo.slaLabel);
   } catch (err) {
-    toast(`Erro ao abrir chamado: ${err.message}`, 'error');
+    toast(`Não foi possível abrir o chamado. ${userFriendlyError(err)}`, 'error');
   } finally {
     btn.disabled = false;
     btn.innerHTML = `
@@ -674,6 +697,8 @@ function renderDetailCard(task) {
   const abertoEm  = fmtDate(task.date_created);
   const estimate  = fmtMs(task.time_estimate);
   const spent     = (status === 'em atendimento' || status === 'encerrado') ? (fmtMs(task.time_spent) || '0min') : null;
+  const spentOver = spent && task.time_estimate > 0 && task.time_spent > task.time_estimate;
+  const spentOk   = spent && status === 'encerrado' && task.time_estimate > 0 && task.time_spent <= task.time_estimate;
   const dueStr    = fmtDate(task.due_date);
   const dueFuture = (status === 'encerrado' || status === 'pendente') ? null : timeUntil(task.due_date);
   const assignees = (task.assignees || []).map(a => a.username).join(', ');
@@ -688,6 +713,7 @@ function renderDetailCard(task) {
   ${overdue ? `<div class="overdue-banner">⚠ ${oText}</div>` : ''}
 
   <div class="ticket-top-meta">
+    <span class="detail-update">Atualizado ${timeAgo(task.date_updated)}</span>
     <span class="ticket-time">${timeAgo(task.date_created)}</span>
   </div>
 
@@ -731,7 +757,7 @@ function renderDetailCard(task) {
     </div>` : ''}
     ${spent ? `<div class="detail-meta-item">
       <span class="detail-meta-label">Tempo gasto</span>
-      <span class="detail-meta-value">${spent}</span>
+      <span class="detail-meta-value${spentOver ? ' text-danger' : spentOk ? ' text-success' : ''}">${spent}</span>
     </div>` : ''}
     ${assignees ? `<div class="detail-meta-item">
       <span class="detail-meta-label">Atendente</span>
@@ -744,7 +770,6 @@ function renderDetailCard(task) {
   </div>` : ''}
 
   <div class="detail-footer">
-    <span class="detail-update">Atualizado ${timeAgo(task.date_updated)}</span>
     <a href="${waLink(task)}" target="_blank" rel="noopener" class="btn-whatsapp">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
         <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
@@ -765,6 +790,7 @@ function renderList(containerId, tasks, cardFn = renderCard) {
       <div class="empty-state">
         <div class="empty-icon">📋</div>
         <p>Nenhum chamado encontrado</p>
+        <button type="button" class="btn-secondary" onclick="loadTickets()">Atualizar</button>
       </div>`;
     return;
   }
@@ -1027,6 +1053,19 @@ function setupRefresh() {
     btn.style.pointerEvents = '';
     toast('Chamados atualizados', 'info');
   });
+}
+
+// ============================================================
+// OFFLINE BANNER
+// ============================================================
+function setupOfflineBanner() {
+  const banner = document.getElementById('offline-banner');
+  if (!banner) return;
+
+  const update = () => banner.classList.toggle('hidden', navigator.onLine);
+  window.addEventListener('online', update);
+  window.addEventListener('offline', update);
+  update();
 }
 
 // ============================================================

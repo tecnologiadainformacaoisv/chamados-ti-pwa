@@ -281,6 +281,21 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
 .icon-btn-dark:hover { background: #e8ecf0; }
 
 /* ============================================================
+   OFFLINE BANNER
+   ============================================================ */
+.offline-banner {
+  position: sticky;
+  top: 0;
+  z-index: 400;
+  text-align: center;
+  background: var(--danger);
+  color: #fff;
+  font-size: .82rem;
+  font-weight: 600;
+  padding: 8px 12px;
+}
+
+/* ============================================================
    APP HEADER
    ============================================================ */
 .app-header {
@@ -726,7 +741,7 @@ form { padding: 24px 28px; }
 /* Ticket list */
 .ticket-list {
   display: grid;
-  gap: 10px;
+  gap: 18px;
 }
 
 /* Empty state */
@@ -746,13 +761,17 @@ form { padding: 24px 28px; }
   font-size: .9rem;
 }
 
+.empty-state .btn-secondary {
+  margin-top: 14px;
+}
+
 /* ============================================================
    TICKET CARD
    ============================================================ */
 .ticket-card {
   background: var(--card);
   border-radius: var(--radius);
-  border: 1.5px solid var(--border);
+  border: 1.5px solid rgba(15, 35, 71, .14);
   padding: 16px 18px;
   box-shadow: var(--shadow);
   transition: border-color .15s, box-shadow .15s;
@@ -826,7 +845,7 @@ form { padding: 24px 28px; }
 .ticket-top-meta {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 8px;
   margin-bottom: 10px;
 }
@@ -915,9 +934,9 @@ form { padding: 24px 28px; }
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 9px;
-  border-radius: 6px;
-  font-size: .73rem;
+  padding: 5px 13px;
+  border-radius: 7px;
+  font-size: .88rem;
   font-weight: 700;
 }
 
@@ -935,9 +954,9 @@ form { padding: 24px 28px; }
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 9px;
-  border-radius: 6px;
-  font-size: .73rem;
+  padding: 5px 13px;
+  border-radius: 7px;
+  font-size: .88rem;
   font-weight: 700;
 }
 
@@ -954,9 +973,9 @@ form { padding: 24px 28px; }
 .setor-tag {
   display: inline-flex;
   align-items: center;
-  padding: 2px 9px;
-  border-radius: 6px;
-  font-size: .73rem;
+  padding: 5px 13px;
+  border-radius: 7px;
+  font-size: .88rem;
   font-weight: 700;
   background: var(--bg);
   color: var(--text-mid);
@@ -1119,6 +1138,7 @@ form { padding: 24px 28px; }
 }
 
 .detail-meta-value.text-danger { color: var(--danger); font-weight: 600; }
+.detail-meta-value.text-success { color: #16a34a; font-weight: 600; }
 
 .due-remaining {
   font-size: .78rem;
@@ -1135,7 +1155,7 @@ form { padding: 24px 28px; }
 .detail-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 12px;
   border-top: 1px solid var(--border);
   padding-top: 10px;
@@ -1150,12 +1170,13 @@ form { padding: 24px 28px; }
 .btn-whatsapp {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   background: #25D366;
   color: #fff;
   border-radius: 20px;
-  padding: 5px 14px;
-  font-size: .78rem;
+  padding: 9px 40px;
+  font-size: .82rem;
   font-weight: 600;
   text-decoration: none;
   transition: opacity .15s;
