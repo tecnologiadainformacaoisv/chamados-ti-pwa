@@ -1,13 +1,13 @@
-const APP_VERSION = '0.2.1';
+const APP_VERSION = '0.2.2';
 const CACHE_NAME = `chamados-ti-${APP_VERSION}`;
 const ASSETS = [
   './index.html',
-  './style.css',
-  './app.js',
+  './css/style.css',
+  './js/app.js',
   './manifest.json',
-  './icon.svg',
-  './icon-maskable.svg',
-  './logo-isv.svg'
+  './assets/icon.svg',
+  './assets/icon-maskable.svg',
+  './assets/logo-isv.svg'
 ];
 
 self.addEventListener('install', e => {
@@ -30,8 +30,8 @@ self.addEventListener('push', e => {
   e.waitUntil(
     self.registration.showNotification(payload.title, {
       body:     payload.body,
-      icon:     './icon.svg',
-      badge:    './icon.svg',
+      icon:     './assets/icon.svg',
+      badge:    './assets/icon.svg',
       tag:      `task-${payload.data?.task_id ?? 'update'}`,
       renotify: true,
       data:     payload.data ?? {}
