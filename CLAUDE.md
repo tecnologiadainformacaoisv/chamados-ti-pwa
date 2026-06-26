@@ -114,3 +114,38 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 - **Responsável de TI:** Henrique (TI — ISV)
 - **Operadores de TI no ClickUp:** Everson (`170628721`) e Henrique (`200498355`)
 - **Público-alvo:** colaboradores administrativos, assistenciais e de suporte da ISV
+
+---
+
+## Estado atual do desenvolvimento
+
+> Última atualização: 2026-06-26
+
+- **Versão:** v0.2.1. Branch `main`. Pré-teste de usabilidade (UX já tratada para essa etapa).
+- **PWA funcional** integrado ao ClickUp como backend (lista `901324490220`), sem banco próprio.
+- **O que funciona hoje:**
+  - Abertura de chamado com tipo/setor/descrição e **anexo opcional** (limite 10 MB; suporta colar print via Ctrl+V).
+  - **Prioridade automática** pelo tipo do chamado (`CATEGORIA_PRIORIDADE`); prioridade "Baixa" não existe.
+  - Acompanhamento "Meus Chamados"/"Meu Histórico" filtrando tasks pelo campo `SOLICITANTE`, com SLA informativo e indicação de atraso.
+  - **SLA pausa em "Pendente"**; solução aplicada lida de campo customizado dedicado e destacada em chamados encerrados.
+  - Visualização de anexo em modal central; WhatsApp roteado pelo operador atribuído.
+  - **Notificações push** via Cloudflare Worker (`chamados-ti-push.tecnologiadainformacao-isv.workers.dev`), acionadas por automação do ClickUp na mudança de status.
+- **Tratamento de erros amigável** e suporte offline básico implementados (v0.2.0).
+
+## Decisões técnicas tomadas
+
+- **ClickUp como backend** — cada chamado é uma task; sem banco de dados próprio. API key em `localStorage` (`cu_key`) ou via query string `?key=...`.
+- **Zero dependências** — HTML/CSS/JS puro, sem framework/bundler (decisão explícita).
+- **Push desacoplado** num Cloudflare Worker (`push-worker.js`, deploy separado em workers.dev); `VAPID_PUBLIC_KEY`/`APP_SHARED_SECRET` hardcoded por serem identificadores públicos.
+- **Contratos de sincronização** que devem permanecer idênticos entre `app.js` e `push-worker.js`: chaves de `STATUS_MAP` ↔ `NOTIFY_STATUSES`, e o field_id de `SOLICITANTE` em `FIELD_IDS`.
+- **Prioridade nunca é manual** — sempre derivada do tipo; não expor seletor de prioridade ao usuário.
+- **Lista de solicitantes fechada** (40 nomes + "Outros") — alterar exige mexer em `SOLICITANTES` no `app.js` **e** no campo customizado do ClickUp.
+- **Versão declarada em dois lugares** a manter sincronizados: `<meta name="app-version">` no `index.html` e tags/commits git.
+
+## Próximos passos
+
+1. **Concluir o teste de usabilidade** e incorporar o feedback antes de promover a versão.
+2. Avaliar caminho para **v1.0** (primeiro deploy "oficial") quando a usabilidade estiver validada.
+3. Possíveis melhorias futuras: histórico de notificações, métricas de SLA por operador, refinamento do fluxo offline.
+
+> ⚠️ **Regra de commit/versão deste projeto:** nenhuma mudança (visual OU lógica) versiona/commita/pusha sozinha. Agrupar em lote e só quando o usuário sinalizar.
