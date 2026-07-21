@@ -127,6 +127,7 @@ const APP_SHARED_SECRET = 'isv-chamados-2k26-9fQ3vM7xZp';
 let myTasks                = [];
 let deferredInstallPrompt  = null;
 let pendingHighlightTaskId = null;
+let cuSolicitanteMap       = null; // name → ClickUp orderindex (carregado em runtime)
 
 // ============================================================
 // STORAGE
@@ -228,6 +229,31 @@ async function fetchMyTasks(userIdx) {
   } catch {
     return [];
   }
+}
+
+// Busca os orderindices reais do campo SOLICITANTE no ClickUp.
+// Os valores hardcoded em SOLICITANTES podem divergir dos que o ClickUp usa internamente.
+async function loadCuFieldOptions() {
+  try {
+    const data = await apiRequest('GET', `/list/${LIST_ID}/field`);
+    const field = data.fields?.find(f => f.id === FIELD_IDS.SOLICITANTE);
+    if (field?.type_config?.options) {
+      cuSolicitanteMap = {};
+      for (const opt of field.type_config.options) {
+        cuSolicitanteMap[opt.name] = opt.orderindex;
+      }
+    }
+  } catch {
+    // fallback silencioso: continua usando os orderindices do array local
+  }
+}
+
+// Traduz o orderindex local (app.js) para o orderindex real do ClickUp.
+function cuSolIdx(appIdx) {
+  if (!cuSolicitanteMap) return appIdx;
+  const s = SOLICITANTES.find(s => s.orderindex === appIdx);
+  if (!s) return appIdx;
+  return cuSolicitanteMap[s.name] ?? appIdx;
 }
 
 // ============================================================
@@ -372,7 +398,7 @@ function onSetupSubmit(e) {
 // ============================================================
 // APP INIT
 // ============================================================
-function initApp() {
+async function initApp() {
   document.getElementById('app').classList.remove('hidden');
 
   const idx = parseInt(store.get('user_idx'));
@@ -389,12 +415,13 @@ function initApp() {
   setupAnexo();
   setupAnexoModal();
   setupOfflineBanner();
-  setupNotifications();
 
   document.getElementById('chamado-form')?.addEventListener('submit', onFormSubmit);
   document.getElementById('wa-modal-close')?.addEventListener('click', closeWaModal);
   document.getElementById('wa-modal-overlay')?.addEventListener('click', closeWaModal);
 
+  await loadCuFieldOptions();
+  setupNotifications();
   loadTickets();
   setupRefreshPolling();
 
@@ -493,7 +520,7 @@ async function onFormSubmit(e) {
   const taskDesc = detalhes || '';
 
   const customFields = [
-    { id: FIELD_IDS.SOLICITANTE, value: solicitante },
+    { id: FIELD_IDS.SOLICITANTE, value: cuSolIdx(solicitante) },
     { id: FIELD_IDS.SETOR,       value: parseInt(setor) },
     { id: FIELD_IDS.TIPO,        value: parseInt(tipo) }
   ];
@@ -553,14 +580,29 @@ async function loadTickets() {
   setLoadingState('all', true);
   try {
     const userIdx = parseInt(store.get('user_idx'));
-    const fetched = await fetchMyTasks(userIdx);
+    const cuIdx   = cuSolIdx(userIdx);
+
+    // Busca com o índice correto do ClickUp
+    let fetched = await fetchMyTasks(cuIdx);
+
+    // Compatibilidade retroativa: tickets antigos foram salvos com o índice local (userIdx)
+    // que pode ser diferente do cuIdx. Busca ambos e deduplica.
+    if (cuIdx !== userIdx) {
+      const old = await fetchMyTasks(userIdx);
+      const seen = new Set(fetched.map(t => t.id));
+      for (const t of old) { if (!seen.has(t.id)) fetched.push(t); }
+    }
+
     if (fetched.length > 0) {
       checkStatusChanges(fetched);
       myTasks = fetched;
     } else {
-      // Fallback: fetch all tasks and filter client-side
+      // Fallback: fetch all tasks and filter client-side (cobre ambos os índices)
       const all = await fetchTasks();
-      const filtered = all.filter(t => Number(getCustomField(t, FIELD_IDS.SOLICITANTE)) === userIdx);
+      const filtered = all.filter(t => {
+        const v = Number(getCustomField(t, FIELD_IDS.SOLICITANTE));
+        return v === cuIdx || v === userIdx;
+      });
       checkStatusChanges(filtered);
       myTasks = filtered;
     }
@@ -1258,7 +1300,7 @@ async function subscribeToPush() {
   await fetch(`${WORKER_URL}/subscribe`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ user_idx: userIdx, subscription: sub.toJSON(), secret: APP_SHARED_SECRET })
+    body:    JSON.stringify({ user_idx: cuSolIdx(userIdx), subscription: sub.toJSON(), secret: APP_SHARED_SECRET })
   });
 }
 
@@ -1339,7 +1381,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const key = decodeURIComponent(hash.slice(7));
     if (key) {
       store.set('cu_key', key);
-      history.replaceState(null, '', location.pathname); // remove key from URL
+      history.replaceState(null, '', location.pathname);
     }
   }
 
