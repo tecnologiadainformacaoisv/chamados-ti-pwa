@@ -26,6 +26,13 @@ const TIPOS = [
   { orderindex: 7, name: 'Plataformas', full: 'Plataformas (Google Drive, OMIE, Domínio e ZAPPY)', color: '#b6b6ff' }
 ];
 
+// ⚠️ orderindex aqui é um ID LOCAL PERMANENTE — nunca reaproveitar nem renumerar.
+// Ao adicionar alguém novo, sempre acrescente no FINAL da lista com o próximo índice livre;
+// nunca insira no meio nem reordene os já existentes (isso já causou bug de nome trocado,
+// porque a ClickUp reordena/renumera o orderindex dela quando alguém novo é inserido no meio
+// alfabeticamente). A tradução entre este índice local e o orderindex real da ClickUp é feita
+// em runtime por NOME via cuSolIdx()/loadCuFieldOptions() — a ordem exibida no <select> é
+// alfabetizada separadamente, sem tocar nesses valores (ver populateSolicitanteSelect).
 const SOLICITANTES = [
   { orderindex: 0,  name: 'Ariele Santo' },
   { orderindex: 1,  name: 'Brena Larissa' },
@@ -66,8 +73,16 @@ const SOLICITANTES = [
   { orderindex: 36, name: 'Vitor Cruz' },
   { orderindex: 37, name: 'Wendel Cardoso' },
   { orderindex: 38, name: 'Yasly Silva' },
-  { orderindex: 39, name: 'Yasmin Rocha' }
+  { orderindex: 39, name: 'Yasmin Rocha' },
+  // Adicionados depois — apareceram na ClickUp sem estar aqui (causa do bug de nome trocado
+  // reportado em 2026-07-23). A partir de agora, sempre adicionar novos nomes só aqui no final.
+  { orderindex: 40, name: 'Ana Clara' },
+  { orderindex: 41, name: 'Natália Leandro' }
 ];
+
+// Cópia ordenada só pra exibição nos <select> (setup/configurações) — o orderindex de cada
+// item continua o mesmo do array acima; isso não reordena nem renumera ninguém.
+const SOLICITANTES_ALPHA = [...SOLICITANTES].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
 
 const SETORES = [
   { orderindex: 0, name: 'Administrativo',     color: '#3e63dd' },
@@ -130,6 +145,7 @@ let myTasks                = [];
 let deferredInstallPrompt  = null;
 let pendingHighlightTaskId = null;
 let cuSolicitanteMap       = null; // name → ClickUp orderindex (carregado em runtime)
+let cuIdxToNameMap         = null; // ClickUp orderindex → name (reverso, pra exibição)
 
 // ============================================================
 // STORAGE
@@ -240,8 +256,10 @@ async function loadCuFieldOptions() {
     const field = data.fields?.find(f => f.id === FIELD_IDS.SOLICITANTE);
     if (field?.type_config?.options) {
       cuSolicitanteMap = {};
+      cuIdxToNameMap   = {};
       for (const opt of field.type_config.options) {
-        cuSolicitanteMap[opt.name] = opt.orderindex;
+        cuSolicitanteMap[opt.name]        = opt.orderindex;
+        cuIdxToNameMap[opt.orderindex]    = opt.name;
       }
     }
   } catch {
@@ -249,12 +267,22 @@ async function loadCuFieldOptions() {
   }
 }
 
-// Traduz o orderindex local (app.js) para o orderindex real do ClickUp.
+// Traduz o orderindex local (app.js) para o orderindex real do ClickUp (usado ao criar/filtrar/notificar).
 function cuSolIdx(appIdx) {
   if (!cuSolicitanteMap) return appIdx;
   const s = SOLICITANTES.find(s => s.orderindex === appIdx);
   if (!s) return appIdx;
   return cuSolicitanteMap[s.name] ?? appIdx;
+}
+
+// Traduz o valor do campo SOLICITANTE vindo da ClickUp (orderindex real dela, que pode
+// divergir/mudar quando alguém novo é adicionado por lá) para o nome a exibir. Independe da
+// posição no array local — por isso não quebra quando a ClickUp reordena o dela.
+function solicitanteDisplayName(cuValue) {
+  if (cuValue === null || cuValue === undefined) return '—';
+  if (cuIdxToNameMap && cuIdxToNameMap[cuValue] !== undefined) return cuIdxToNameMap[cuValue];
+  // fallback: mapa não carregado ainda ou tarefa antiga salva com índice local — melhor esforço
+  return optionName(SOLICITANTES, cuValue);
 }
 
 // ============================================================
@@ -357,7 +385,7 @@ function toast(msg, type = 'success') {
 function showSetup() {
   document.getElementById('setup-screen').classList.remove('hidden');
   document.getElementById('app').classList.add('hidden');
-  populateSelect('setup-name', SOLICITANTES);
+  populateSelect('setup-name', SOLICITANTES_ALPHA);
 
   // Chave já hardcoded em CU_API_KEY — nunca pede o código de acesso
   document.getElementById('setup-key-field')?.remove();
@@ -852,7 +880,7 @@ function renderCard(task) {
   const setorIdx = getCustomField(task, FIELD_IDS.SETOR);
   const email    = getCustomField(task, FIELD_IDS.EMAIL);
 
-  const solName  = optionName(SOLICITANTES, solIdx);
+  const solName  = solicitanteDisplayName(solIdx);
   const tipoObj  = TIPOS.find(t => t.orderindex === Number(tipoIdx));
   const tipoName = tipoObj?.name || optionName(TIPOS, tipoIdx);
   const setorName = optionName(SETORES, setorIdx);
@@ -907,7 +935,7 @@ function openAlertsModal() {
   } else {
     list.innerHTML = overdue.map(t => {
       const solIdx  = getCustomField(t, FIELD_IDS.SOLICITANTE);
-      const solName = optionName(SOLICITANTES, solIdx);
+      const solName = solicitanteDisplayName(solIdx);
       const oText   = overdueFor(t);
       const status  = t.status?.status || 'aberto';
       const sInfo   = STATUS_MAP[status] || STATUS_MAP['aberto'];
@@ -1015,7 +1043,7 @@ function setupSettings() {
 function openSettings() {
   const sel = document.getElementById('settings-name');
   sel.innerHTML = '<option value="">Selecione...</option>';
-  SOLICITANTES.forEach(s => {
+  SOLICITANTES_ALPHA.forEach(s => {
     const o = document.createElement('option');
     o.value = s.orderindex;
     o.textContent = s.name;

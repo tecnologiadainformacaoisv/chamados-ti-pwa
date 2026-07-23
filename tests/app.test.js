@@ -26,9 +26,9 @@ vm.createContext(sandbox);
 const exportLine = `
 ;globalThis.__exports = {
   escHtml, fmtMs, fmtDate, timeAgo, timeUntil, isOverdue, overdueFor,
-  optionName, cuSolIdx, filtrarAnexosValidos, waNumberForTask,
+  optionName, cuSolIdx, solicitanteDisplayName, filtrarAnexosValidos, waNumberForTask,
   getCustomField, slaProgressInfo,
-  CATEGORIA_PRIORIDADE, PRIORITY, SOLICITANTES, TIPOS, SETORES,
+  CATEGORIA_PRIORIDADE, PRIORITY, SOLICITANTES, SOLICITANTES_ALPHA, TIPOS, SETORES,
   OPERADOR_WHATSAPP, OPERADORES, STATUS_MAP,
 };`;
 vm.runInContext(src + exportLine, sandbox, { filename: 'app.js' });
@@ -184,13 +184,44 @@ test('pct fica sempre entre 0 e 100', () => {
 });
 
 console.log('SOLICITANTES / STATUS_MAP (integridade de dados)');
-test('40 solicitantes com orderindex sequencial sem lacunas/duplicatas', () => {
-  const idxs = A.SOLICITANTES.map(s => s.orderindex).sort((a, b) => a - b);
-  assert.strictEqual(idxs.length, 40);
-  idxs.forEach((v, i) => assert.strictEqual(v, i, `orderindex ${i} ausente/duplicado`));
+test('42 solicitantes, nenhum orderindex duplicado', () => {
+  const idxs = A.SOLICITANTES.map(s => s.orderindex);
+  assert.strictEqual(idxs.length, 42);
+  assert.strictEqual(new Set(idxs).size, 42, 'há orderindex duplicado em SOLICITANTES');
+});
+test('orderindex de cada pessoa é permanente — regressão do bug de nome trocado (2026-07-23)', () => {
+  // Michael Vasconcelos apareceu como "Késsia" pro usuário porque a ClickUp tinha 2 pessoas
+  // (Ana Clara, Natália Leandro) que não existiam aqui, deslocando o índice de todo mundo depois.
+  // Trava os índices atuais: qualquer novo nome deve ser ACRESCENTADO no fim, nunca inserido no meio.
+  assert.strictEqual(A.optionName(A.SOLICITANTES, 18), 'Késsia Rodrigues');
+  assert.strictEqual(A.optionName(A.SOLICITANTES, 25), 'Michael Vasconcelos');
+  assert.strictEqual(A.optionName(A.SOLICITANTES, 40), 'Ana Clara');
+  assert.strictEqual(A.optionName(A.SOLICITANTES, 41), 'Natália Leandro');
 });
 test('STATUS_MAP tem exatamente os 4 status esperados', () => {
   assert.deepStrictEqual(Object.keys(A.STATUS_MAP).sort(), ['aberto', 'em atendimento', 'encerrado', 'pendente']);
+});
+
+console.log('SOLICITANTES_ALPHA (ordem de exibição não deve afetar o orderindex real)');
+test('mesmo conjunto de pessoas que SOLICITANTES, só reordenado', () => {
+  const setOriginal = new Set(A.SOLICITANTES.map(s => `${s.orderindex}:${s.name}`));
+  const setAlpha     = new Set(A.SOLICITANTES_ALPHA.map(s => `${s.orderindex}:${s.name}`));
+  assert.strictEqual(A.SOLICITANTES_ALPHA.length, A.SOLICITANTES.length);
+  assert.deepStrictEqual(setAlpha, setOriginal);
+});
+test('está de fato em ordem alfabética', () => {
+  const names = A.SOLICITANTES_ALPHA.map(s => s.name).join(' ');
+  const sorted = A.SOLICITANTES_ALPHA.map(s => s.name).sort((a, b) => a.localeCompare(b, 'pt-BR')).join(' ');
+  assert.strictEqual(names, sorted);
+});
+
+console.log('solicitanteDisplayName (tradução de exibição ClickUp -> nome)');
+test('sem mapa carregado, cai no fallback local por orderindex', () => {
+  assert.strictEqual(A.solicitanteDisplayName(25), 'Michael Vasconcelos');
+});
+test('null/undefined retorna placeholder', () => {
+  assert.strictEqual(A.solicitanteDisplayName(null), '—');
+  assert.strictEqual(A.solicitanteDisplayName(undefined), '—');
 });
 
 console.log(`\n${passed} passaram, ${failed} falharam`);
