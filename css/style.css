@@ -44,6 +44,39 @@ html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
 .hidden { display: none !important; }
 
 /* ============================================================
+   BOOT SCREEN (carregando lista de solicitantes da ClickUp)
+   ============================================================ */
+#boot-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  position: relative;
+}
+
+.boot-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+}
+
+#boot-loading, #boot-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+#boot-loading .spinner {
+  width: 28px;
+  height: 28px;
+  border-width: 3px;
+}
+
+/* ============================================================
    SETUP SCREEN
    ============================================================ */
 #setup-screen {

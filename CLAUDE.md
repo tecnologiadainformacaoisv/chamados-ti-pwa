@@ -67,7 +67,6 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 | Constante | O que é |
 |---|---|
 | `TIPOS` | 8 categorias de chamado com prioridade automática |
-| `SOLICITANTES` | Lista fechada de 40 colaboradores + "Outros" |
 | `SETORES` | 9 setores da organização |
 | `PRIORITY` | 3 níveis: Urgente (1h SLA), Alta (4h), Normal (24h) |
 | `CATEGORIA_PRIORIDADE` | Mapeamento categoria → prioridade automática |
@@ -78,7 +77,7 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 
 ## Fluxo do usuário
 
-1. **Setup** — usuário seleciona seu nome e o app persiste em localStorage. API key vem por query string ou input manual.
+1. **Setup** — usuário seleciona seu nome (lista buscada em runtime do campo customizado SOLICITANTE na ClickUp — ver seção "Lista de solicitantes" abaixo) e o app persiste em localStorage. API key hardcoded em `app.js` (não pede mais código de acesso).
 2. **Tela principal** — exibe "Abrir Chamado" e "Meus Chamados" / "Meu Histórico".
 3. **Abertura de chamado** — formulário com tipo, setor, descrição, anexo opcional (limite 10 MB). Ao submeter, cria task no ClickUp com prioridade automática baseada no tipo.
 4. **Acompanhamento** — filtra as tasks do ClickUp pelo campo SOLICITANTE. Exibe status com SLA e indicação de atraso.
@@ -91,7 +90,7 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 - **Prioridade é automática** — definida pelo tipo do chamado via `CATEGORIA_PRIORIDADE`. Não expor seleção manual de prioridade ao usuário.
 - **Prioridade "Baixa" não existe** — nenhuma categoria mapeia para ela; o ClickUp a ignora neste contexto.
 - **SLA exibido** é informativo (calculado no cliente com `task.due_date`); quem define o `due_date` real é o ClickUp via automação.
-- **Lista de solicitantes** é fechada — adicionar ou remover nomes exige atualizar `SOLICITANTES` em `app.js` **e** o campo customizado correspondente no ClickUp.
+- **Lista de solicitantes é buscada em runtime direto do campo customizado SOLICITANTE na ClickUp** (`loadSolicitantes()` em `app.js`) — não existe mais array fixo no código. Adicionar/renomear alguém só na ClickUp já é suficiente; não precisa mais editar nem publicar o app. `localStorage.user_name` guarda o nome (string), não mais um índice numérico. Existe uma tabela de migração (`LEGACY_USER_IDX_TO_NAME`) só pra traduzir o índice antigo de quem configurou o app antes da v0.2.5 — essa tabela é histórica e não deve ser editada.
 - **Sincronização de status:** as chaves de `STATUS_MAP` em `app.js` devem ficar idênticas a `NOTIFY_STATUSES` em `push-worker.js`.
 - **Sincronização de campo:** o field_id de `SOLICITANTE` deve ser idêntico em `FIELD_IDS` (app.js) e em `push-worker.js`.
 - **Limite de anexo:** 10 MB por arquivo — validado no cliente antes do upload.
@@ -119,9 +118,9 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 
 ## Estado atual do desenvolvimento
 
-> Última atualização: 2026-06-26
+> Última atualização: 2026-07-23
 
-- **Versão:** v0.2.1. Branch `main`. Pré-teste de usabilidade (UX já tratada para essa etapa).
+- **Versão:** v0.2.5. Branch `main`. Pré-teste de usabilidade (UX já tratada para essa etapa).
 - **PWA funcional** integrado ao ClickUp como backend (lista `901324490220`), sem banco próprio.
 - **O que funciona hoje:**
   - Abertura de chamado com tipo/setor/descrição e **anexo opcional** (limite 10 MB; suporta colar print via Ctrl+V).
@@ -130,17 +129,20 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
   - **SLA pausa em "Pendente"**; solução aplicada lida de campo customizado dedicado e destacada em chamados encerrados.
   - Visualização de anexo em modal central; WhatsApp roteado pelo operador atribuído.
   - **Notificações push** via Cloudflare Worker (`chamados-ti-push.tecnologiadainformacao-isv.workers.dev`), acionadas por automação do ClickUp na mudança de status.
+  - **Login sem código de acesso** — chave de API do ClickUp hardcoded em `app.js` (`CU_API_KEY`), tela de "código de acesso" removida do fluxo.
+  - **Lista de solicitantes buscada em runtime da ClickUp** (`loadSolicitantes()`), com tela de boot/loading antes do setup; sem mais array fixo pra manter sincronizado a cada colaborador novo.
 - **Tratamento de erros amigável** e suporte offline básico implementados (v0.2.0).
+- **Testes unitários** em `tests/app.test.js` (sem dependências — `node vm`+`assert`; rodar com `node tests/app.test.js`).
 
 ## Decisões técnicas tomadas
 
-- **ClickUp como backend** — cada chamado é uma task; sem banco de dados próprio. API key em `localStorage` (`cu_key`) ou via query string `?key=...`.
-- **Zero dependências** — HTML/CSS/JS puro, sem framework/bundler (decisão explícita).
+- **ClickUp como backend** — cada chamado é uma task; sem banco de dados próprio. API key hardcoded em `app.js` (`CU_API_KEY`) — não é mais pedida ao usuário; `localStorage.cu_key`/`?key=...` continuam funcionando como override se precisar trocar a chave sem publicar código.
+- **Zero dependências** — HTML/CSS/JS puro, sem framework/bundler (decisão explícita). `tests/app.test.js` usa só `node vm`+`assert`, nada instalado.
 - **Push desacoplado** num Cloudflare Worker (`push-worker.js`, deploy separado em workers.dev); `VAPID_PUBLIC_KEY`/`APP_SHARED_SECRET` hardcoded por serem identificadores públicos.
 - **Contratos de sincronização** que devem permanecer idênticos entre `app.js` e `push-worker.js`: chaves de `STATUS_MAP` ↔ `NOTIFY_STATUSES`, e o field_id de `SOLICITANTE` em `FIELD_IDS`.
 - **Prioridade nunca é manual** — sempre derivada do tipo; não expor seletor de prioridade ao usuário.
-- **Lista de solicitantes fechada** (40 nomes + "Outros") — alterar exige mexer em `SOLICITANTES` no `app.js` **e** no campo customizado do ClickUp.
-- **Versão declarada em dois lugares** a manter sincronizados: `<meta name="app-version">` no `index.html` e tags/commits git.
+- **Lista de solicitantes buscada em runtime da ClickUp** — decisão tomada em 2026-07-23 após bug de nome trocado causado pela lista fixa desincronizar (ver `LEGACY_USER_IDX_TO_NAME` pra contexto da migração). Adicionar colaborador agora é só no ClickUp, sem tocar no código.
+- **Versão declarada em três lugares** a manter sincronizados: `<meta name="app-version">` e o `<footer>` no `index.html`, e `APP_VERSION` no `sw.js` (esse último precisa mudar mesmo em fixes só de `app.js`, pra forçar a invalidação do cache do Service Worker).
 
 ## Próximos passos
 

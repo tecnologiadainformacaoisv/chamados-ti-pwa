@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="TI Chamados">
-  <meta name="app-version" content="0.2.4">
+  <meta name="app-version" content="0.2.5">
   <title>Chamados de TI – ISV</title>
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="assets/icon.svg">
@@ -19,6 +19,21 @@
 <body>
 
   <div id="offline-banner" class="offline-banner hidden">Sem conexão com a internet</div>
+
+  <!-- ===================== BOOT (carregando lista de solicitantes da ClickUp) ===================== -->
+  <div id="boot-screen">
+    <div class="setup-bg"></div>
+    <div class="setup-card boot-card">
+      <div id="boot-loading">
+        <div class="spinner"></div>
+        <p>Carregando...</p>
+      </div>
+      <div id="boot-error" class="hidden">
+        <p id="boot-error-msg">Não foi possível carregar.</p>
+        <button id="boot-retry-btn" type="button" class="btn-primary btn-full">Tentar novamente</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ===================== SETUP ===================== -->
   <div id="setup-screen" class="hidden">
@@ -293,7 +308,7 @@
 
     </main>
 
-    <footer class="app-footer">Instituto São Vicente · Chamados de TI · v0.2.4</footer>
+    <footer class="app-footer">Instituto São Vicente · Chamados de TI · v0.2.5</footer>
   </div>
 
   <!-- ===================== SETTINGS MODAL ===================== -->

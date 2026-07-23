@@ -26,63 +26,26 @@ const TIPOS = [
   { orderindex: 7, name: 'Plataformas', full: 'Plataformas (Google Drive, OMIE, Domínio e ZAPPY)', color: '#b6b6ff' }
 ];
 
-// ⚠️ orderindex aqui é um ID LOCAL PERMANENTE — nunca reaproveitar nem renumerar.
-// Ao adicionar alguém novo, sempre acrescente no FINAL da lista com o próximo índice livre;
-// nunca insira no meio nem reordene os já existentes (isso já causou bug de nome trocado,
-// porque a ClickUp reordena/renumera o orderindex dela quando alguém novo é inserido no meio
-// alfabeticamente). A tradução entre este índice local e o orderindex real da ClickUp é feita
-// em runtime por NOME via cuSolIdx()/loadCuFieldOptions() — a ordem exibida no <select> é
-// alfabetizada separadamente, sem tocar nesses valores (ver populateSolicitanteSelect).
-const SOLICITANTES = [
-  { orderindex: 0,  name: 'Ariele Santo' },
-  { orderindex: 1,  name: 'Brena Larissa' },
-  { orderindex: 2,  name: 'Brenda Ruivo' },
-  { orderindex: 3,  name: 'Bruno Guilherme' },
-  { orderindex: 4,  name: 'Eduarda Ribeiro' },
-  { orderindex: 5,  name: 'Emanuel Dylan' },
-  { orderindex: 6,  name: 'Felipe Carvalho' },
-  { orderindex: 7,  name: 'Gabriela Silva' },
-  { orderindex: 8,  name: 'Gean Silva' },
-  { orderindex: 9,  name: 'Glória Feitosa' },
-  { orderindex: 10, name: 'Ítalo Costa' },
-  { orderindex: 11, name: 'Jhuliany Mendes' },
-  { orderindex: 12, name: 'João Mário' },
-  { orderindex: 13, name: 'Joel Abner' },
-  { orderindex: 14, name: 'Josy de Athaide' },
-  { orderindex: 15, name: 'Júlia Emily' },
-  { orderindex: 16, name: 'Juliano Ragnini' },
-  { orderindex: 17, name: 'Karolyni Tibúrcio' },
-  { orderindex: 18, name: 'Késsia Rodrigues' },
-  { orderindex: 19, name: 'Levy Perdigão' },
-  { orderindex: 20, name: 'Lourdes Arráis' },
-  { orderindex: 21, name: 'Marcelino Agostinho' },
-  { orderindex: 22, name: 'Márcio Delukken' },
-  { orderindex: 23, name: 'Maria Clara' },
-  { orderindex: 24, name: 'Mariana Maia' },
-  { orderindex: 25, name: 'Michael Vasconcelos' },
-  { orderindex: 26, name: 'Mikaelly Lima' },
-  { orderindex: 27, name: 'Outros' },
-  { orderindex: 28, name: 'Rayane Bernardo' },
-  { orderindex: 29, name: 'Riccardo Mandrini' },
-  { orderindex: 30, name: 'Rosa Júlia' },
-  { orderindex: 31, name: 'Ruci Teles' },
-  { orderindex: 32, name: 'Saulo Victor' },
-  { orderindex: 33, name: 'Taina Martins' },
-  { orderindex: 34, name: 'Tatiana Bernardino' },
-  { orderindex: 35, name: "Tereza D'avila" },
-  { orderindex: 36, name: 'Vitor Cruz' },
-  { orderindex: 37, name: 'Wendel Cardoso' },
-  { orderindex: 38, name: 'Yasly Silva' },
-  { orderindex: 39, name: 'Yasmin Rocha' },
-  // Adicionados depois — apareceram na ClickUp sem estar aqui (causa do bug de nome trocado
-  // reportado em 2026-07-23). A partir de agora, sempre adicionar novos nomes só aqui no final.
-  { orderindex: 40, name: 'Ana Clara' },
-  { orderindex: 41, name: 'Natália Leandro' }
-];
-
-// Cópia ordenada só pra exibição nos <select> (setup/configurações) — o orderindex de cada
-// item continua o mesmo do array acima; isso não reordena nem renumera ninguém.
-const SOLICITANTES_ALPHA = [...SOLICITANTES].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+// Não existe mais lista fixa de solicitantes aqui — ela é buscada em runtime direto do campo
+// customizado SOLICITANTE na ClickUp (ver loadSolicitantes()). Adicionar/renomear alguém lá já
+// é suficiente; não precisa mais editar nem publicar o app pra isso.
+//
+// Tabela de migração ÚNICA — não precisa mais ser atualizada. Serve só pra traduzir o antigo
+// índice numérico local (usado até a v0.2.4, salvo em `user_idx`) pro nome, na primeira vez que
+// alguém que já tinha configurado o app antes abre essa versão nova (ver migrateLegacyUserIdx()).
+const LEGACY_USER_IDX_TO_NAME = {
+  0: 'Ariele Santo', 1: 'Brena Larissa', 2: 'Brenda Ruivo', 3: 'Bruno Guilherme',
+  4: 'Eduarda Ribeiro', 5: 'Emanuel Dylan', 6: 'Felipe Carvalho', 7: 'Gabriela Silva',
+  8: 'Gean Silva', 9: 'Glória Feitosa', 10: 'Ítalo Costa', 11: 'Jhuliany Mendes',
+  12: 'João Mário', 13: 'Joel Abner', 14: 'Josy de Athaide', 15: 'Júlia Emily',
+  16: 'Juliano Ragnini', 17: 'Karolyni Tibúrcio', 18: 'Késsia Rodrigues', 19: 'Levy Perdigão',
+  20: 'Lourdes Arráis', 21: 'Marcelino Agostinho', 22: 'Márcio Delukken', 23: 'Maria Clara',
+  24: 'Mariana Maia', 25: 'Michael Vasconcelos', 26: 'Mikaelly Lima', 27: 'Outros',
+  28: 'Rayane Bernardo', 29: 'Riccardo Mandrini', 30: 'Rosa Júlia', 31: 'Ruci Teles',
+  32: 'Saulo Victor', 33: 'Taina Martins', 34: 'Tatiana Bernardino', 35: "Tereza D'avila",
+  36: 'Vitor Cruz', 37: 'Wendel Cardoso', 38: 'Yasly Silva', 39: 'Yasmin Rocha',
+  40: 'Ana Clara', 41: 'Natália Leandro'
+};
 
 const SETORES = [
   { orderindex: 0, name: 'Administrativo',     color: '#3e63dd' },
@@ -144,8 +107,9 @@ const CU_API_KEY = 'pk_200498355_NA4UG3MU0YH7KJMGWHOIW86EB8VEP2SM';
 let myTasks                = [];
 let deferredInstallPrompt  = null;
 let pendingHighlightTaskId = null;
-let cuSolicitanteMap       = null; // name → ClickUp orderindex (carregado em runtime)
-let cuIdxToNameMap         = null; // ClickUp orderindex → name (reverso, pra exibição)
+let cuSolicitanteMap       = null; // name → orderindex real da ClickUp (carregado em runtime)
+let cuIdxToNameMap         = null; // orderindex real da ClickUp → name (reverso, pra exibição)
+let solicitanteOptions     = [];   // [{name, orderindex}] pra popular os <select>, já alfabetizado
 
 // ============================================================
 // STORAGE
@@ -248,41 +212,58 @@ async function fetchMyTasks(userIdx) {
   }
 }
 
-// Busca os orderindices reais do campo SOLICITANTE no ClickUp.
-// Os valores hardcoded em SOLICITANTES podem divergir dos que o ClickUp usa internamente.
-async function loadCuFieldOptions() {
-  try {
-    const data = await apiRequest('GET', `/list/${LIST_ID}/field`);
-    const field = data.fields?.find(f => f.id === FIELD_IDS.SOLICITANTE);
-    if (field?.type_config?.options) {
-      cuSolicitanteMap = {};
-      cuIdxToNameMap   = {};
-      for (const opt of field.type_config.options) {
-        cuSolicitanteMap[opt.name]        = opt.orderindex;
-        cuIdxToNameMap[opt.orderindex]    = opt.name;
-      }
-    }
-  } catch {
-    // fallback silencioso: continua usando os orderindices do array local
+// Busca a lista de solicitantes direto do campo customizado SOLICITANTE na ClickUp.
+// Não existe mais lista fixa no código: quem quer que adicione um nome lá já basta, sem precisar
+// tocar/publicar o app. Lança erro se falhar — quem chama decide a UI (ver boot em DOMContentLoaded).
+// Parte pura (sem rede) — separada só pra dar pra testar sem precisar mockar a API.
+function buildSolicitanteMaps(options) {
+  const nameToIdx = {};
+  const idxToName = {};
+  for (const opt of options) {
+    nameToIdx[opt.name]     = opt.orderindex;
+    idxToName[opt.orderindex] = opt.name;
   }
+  const sortedOptions = options
+    .map(o => ({ name: o.name, orderindex: o.orderindex }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  return { nameToIdx, idxToName, sortedOptions };
 }
 
-// Traduz o orderindex local (app.js) para o orderindex real do ClickUp (usado ao criar/filtrar/notificar).
-function cuSolIdx(appIdx) {
-  if (!cuSolicitanteMap) return appIdx;
-  const s = SOLICITANTES.find(s => s.orderindex === appIdx);
-  if (!s) return appIdx;
-  return cuSolicitanteMap[s.name] ?? appIdx;
+async function loadSolicitantes() {
+  const data = await apiRequest('GET', `/list/${LIST_ID}/field`);
+  const field = data.fields?.find(f => f.id === FIELD_IDS.SOLICITANTE);
+  const options = field?.type_config?.options || [];
+  if (options.length === 0) throw new Error('Campo SOLICITANTE não encontrado ou sem opções na ClickUp');
+
+  const { nameToIdx, idxToName, sortedOptions } = buildSolicitanteMaps(options);
+  cuSolicitanteMap    = nameToIdx;
+  cuIdxToNameMap      = idxToName;
+  solicitanteOptions  = sortedOptions;
 }
 
-// Traduz o valor do campo SOLICITANTE vindo da ClickUp (orderindex real dela, que pode
-// divergir/mudar quando alguém novo é adicionado por lá) para o nome a exibir. Independe da
-// posição no array local — por isso não quebra quando a ClickUp reordena o dela.
+// Traduz o nome do usuário logado (localStorage.user_name) pro orderindex real da ClickUp,
+// buscado fresco a cada carregamento — por isso não quebra quando a ClickUp reordena o campo.
+function myCuIdx() {
+  const name = store.get('user_name');
+  if (!name) return undefined;
+  return cuSolicitanteMap?.[name];
+}
+
+// Traduz o valor do campo SOLICITANTE vindo da ClickUp (orderindex real dela) pro nome a exibir.
 function solicitanteDisplayName(cuValue) {
   if (cuValue === null || cuValue === undefined) return '—';
-  if (cuIdxToNameMap && cuIdxToNameMap[cuValue] !== undefined) return cuIdxToNameMap[cuValue];
-  // fallback: mapa não carregado ainda ou tarefa antiga salva com índice local — melhor esforço
-  return optionName(SOLICITANTES, cuValue);
+  return cuIdxToNameMap?.[cuValue] ?? '—';
+}
+
+// Migração única: quem já tinha configurado o app antes da v0.2.5 tem um índice numérico antigo
+// salvo em `user_idx`. Traduz pro nome (via LEGACY_USER_IDX_TO_NAME) e passa a usar `user_name`.
+function migrateLegacyUserIdx() {
+  if (store.get('user_name')) return;
+  const legacyIdx = store.get('user_idx');
+  if (legacyIdx === null) return;
+  const name = LEGACY_USER_IDX_TO_NAME[parseInt(legacyIdx)];
+  if (name) store.set('user_name', name);
+  store.remove('user_idx');
 }
 
 // ============================================================
@@ -382,10 +363,25 @@ function toast(msg, type = 'success') {
 // ============================================================
 // SETUP SCREEN
 // ============================================================
+function populateSolicitanteSelect(id) {
+  const sel = document.getElementById(id);
+  if (!sel) return;
+  const cur = sel.value;
+  const placeholder = sel.querySelector('option[value=""]')?.textContent || 'Selecione...';
+  sel.innerHTML = `<option value="">${placeholder}</option>`;
+  solicitanteOptions.forEach(item => {
+    const opt = document.createElement('option');
+    opt.value = item.name; // o valor agora é o nome, não mais um índice numérico
+    opt.textContent = item.name;
+    sel.appendChild(opt);
+  });
+  if (cur !== '') sel.value = cur;
+}
+
 function showSetup() {
   document.getElementById('setup-screen').classList.remove('hidden');
   document.getElementById('app').classList.add('hidden');
-  populateSelect('setup-name', SOLICITANTES_ALPHA);
+  populateSolicitanteSelect('setup-name');
 
   // Chave já hardcoded em CU_API_KEY — nunca pede o código de acesso
   document.getElementById('setup-key-field')?.remove();
@@ -415,7 +411,7 @@ function onSetupSubmit(e) {
     store.set('cu_key', key);
   }
 
-  store.set('user_idx', nameEl.value);
+  store.set('user_name', nameEl.value);
   store.set('user_email', email);
 
   document.getElementById('setup-screen').classList.add('hidden');
@@ -427,9 +423,7 @@ function onSetupSubmit(e) {
 // ============================================================
 async function initApp() {
   document.getElementById('app').classList.remove('hidden');
-
-  const idx = parseInt(store.get('user_idx'));
-  document.getElementById('user-name-display').textContent = optionName(SOLICITANTES, idx);
+  document.getElementById('user-name-display').textContent = store.get('user_name') || '—';
 
   populateForm();
   setupTabs();
@@ -447,7 +441,8 @@ async function initApp() {
   document.getElementById('wa-modal-close')?.addEventListener('click', closeWaModal);
   document.getElementById('wa-modal-overlay')?.addEventListener('click', closeWaModal);
 
-  await loadCuFieldOptions();
+  // solicitanteOptions/cuSolicitanteMap já foram carregados no boot (DOMContentLoaded),
+  // antes da decisão entre showSetup()/initApp() — não precisa buscar de novo aqui.
   setupNotifications();
   loadTickets();
   setupRefreshPolling();
@@ -504,10 +499,8 @@ function populateSelect(id, list, labelKey = 'name') {
 
 function populateForm() {
   // Solicitante: read-only display, value comes from logged-in user
-  const idx = parseInt(store.get('user_idx'));
-  const solName = optionName(SOLICITANTES, idx);
   const display = document.getElementById('f-solicitante-display');
-  if (display) display.textContent = solName;
+  if (display) display.textContent = store.get('user_name') || '—';
 
   populateSelect('f-setor', SETORES);
   populateSelect('f-tipo', TIPOS, 'full');
@@ -516,7 +509,8 @@ function populateForm() {
 async function onFormSubmit(e) {
   e.preventDefault();
 
-  const solicitante = parseInt(store.get('user_idx'));
+  const solName  = store.get('user_name');
+  const cuIdx    = myCuIdx();
   const setor       = document.getElementById('f-setor').value;
   const tipo        = document.getElementById('f-tipo').value;
   const operador    = document.querySelector('input[name="operador"]:checked')?.value;
@@ -524,7 +518,11 @@ async function onFormSubmit(e) {
   const detalhes    = document.getElementById('f-detalhes').value.trim();
   const anexos      = filtrarAnexosValidos(Array.from(document.getElementById('f-anexo')?.files || [])).validos;
 
-  if (isNaN(solicitante) || !setor || !tipo || !operador || !descricao) {
+  if (!solName || cuIdx === undefined) {
+    toast('Não foi possível confirmar seu cadastro. Recarregue a página e tente de novo.', 'error');
+    return;
+  }
+  if (!setor || !tipo || !operador || !descricao) {
     toast('Preencha todos os campos obrigatórios (*)', 'error');
     return;
   }
@@ -537,7 +535,6 @@ async function onFormSubmit(e) {
     </svg>
     Enviando...`;
 
-  const solName  = optionName(SOLICITANTES, parseInt(solicitante));
   const tipoName = TIPOS.find(t => t.orderindex === parseInt(tipo))?.name || '';
   const prio     = CATEGORIA_PRIORIDADE[parseInt(tipo)] || 3;
   const pInfo    = PRIORITY[prio] || PRIORITY[3];
@@ -547,7 +544,7 @@ async function onFormSubmit(e) {
   const taskDesc = detalhes || '';
 
   const customFields = [
-    { id: FIELD_IDS.SOLICITANTE, value: cuSolIdx(solicitante) },
+    { id: FIELD_IDS.SOLICITANTE, value: cuIdx },
     { id: FIELD_IDS.SETOR,       value: parseInt(setor) },
     { id: FIELD_IDS.TIPO,        value: parseInt(tipo) }
   ];
@@ -606,33 +603,20 @@ function setLoadingState(which, loading) {
 async function loadTickets() {
   setLoadingState('all', true);
   try {
-    const userIdx = parseInt(store.get('user_idx'));
-    const cuIdx   = cuSolIdx(userIdx);
+    const myName = store.get('user_name');
+    const cuIdx  = myCuIdx();
+    if (cuIdx === undefined) throw new Error('Não foi possível identificar seu usuário. Recarregue a página.');
 
-    // Busca com o índice correto do ClickUp
     let fetched = await fetchMyTasks(cuIdx);
 
-    // Compatibilidade retroativa: tickets antigos foram salvos com o índice local (userIdx)
-    // que pode ser diferente do cuIdx. Busca ambos e deduplica.
-    if (cuIdx !== userIdx) {
-      const old = await fetchMyTasks(userIdx);
-      const seen = new Set(fetched.map(t => t.id));
-      for (const t of old) { if (!seen.has(t.id)) fetched.push(t); }
-    }
-
-    if (fetched.length > 0) {
-      checkStatusChanges(fetched);
-      myTasks = fetched;
-    } else {
-      // Fallback: fetch all tasks and filter client-side (cobre ambos os índices)
+    if (fetched.length === 0) {
+      // Fallback: busca tudo e filtra no cliente pelo nome (cobre tarefas antigas que possam
+      // ter sido salvas com um índice diferente do orderindex atual da ClickUp)
       const all = await fetchTasks();
-      const filtered = all.filter(t => {
-        const v = Number(getCustomField(t, FIELD_IDS.SOLICITANTE));
-        return v === cuIdx || v === userIdx;
-      });
-      checkStatusChanges(filtered);
-      myTasks = filtered;
+      fetched = all.filter(t => solicitanteDisplayName(getCustomField(t, FIELD_IDS.SOLICITANTE)) === myName);
     }
+    checkStatusChanges(fetched);
+    myTasks = fetched;
     // Garante mais recentes no topo, independente da ordenação da API
     myTasks.sort((a, b) => Number(b.date_created) - Number(a.date_created));
     renderAll();
@@ -1041,15 +1025,8 @@ function setupSettings() {
 }
 
 function openSettings() {
-  const sel = document.getElementById('settings-name');
-  sel.innerHTML = '<option value="">Selecione...</option>';
-  SOLICITANTES_ALPHA.forEach(s => {
-    const o = document.createElement('option');
-    o.value = s.orderindex;
-    o.textContent = s.name;
-    sel.appendChild(o);
-  });
-  sel.value = store.get('user_idx') || '';
+  populateSolicitanteSelect('settings-name');
+  document.getElementById('settings-name').value = store.get('user_name') || '';
 
   document.getElementById('settings-email').value = store.get('user_email') || '';
 
@@ -1066,10 +1043,10 @@ function saveSettings() {
 
   if (nameVal === '') { toast('Selecione seu nome', 'error'); return; }
 
-  store.set('user_idx',    nameVal);
+  store.set('user_name',   nameVal);
   store.set('user_email',  emailVal);
 
-  document.getElementById('user-name-display').textContent = optionName(SOLICITANTES, parseInt(nameVal));
+  document.getElementById('user-name-display').textContent = nameVal;
   populateForm();
   renderAll();
   closeSettings();
@@ -1323,11 +1300,12 @@ async function subscribeToPush() {
     });
   }
 
-  const userIdx = parseInt(store.get('user_idx'));
+  const cuIdx = myCuIdx();
+  if (cuIdx === undefined) return;
   await fetch(`${WORKER_URL}/subscribe`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ user_idx: cuSolIdx(userIdx), subscription: sub.toJSON(), secret: APP_SHARED_SECRET })
+    body:    JSON.stringify({ user_idx: cuIdx, subscription: sub.toJSON(), secret: APP_SHARED_SECRET })
   });
 }
 
@@ -1397,6 +1375,31 @@ window.addEventListener('beforeinstallprompt', e => {
   deferredInstallPrompt = e;
 });
 
+async function boot() {
+  document.getElementById('boot-loading').classList.remove('hidden');
+  document.getElementById('boot-error').classList.add('hidden');
+  try {
+    await loadSolicitantes();
+  } catch (err) {
+    document.getElementById('boot-loading').classList.add('hidden');
+    document.getElementById('boot-error-msg').textContent =
+      `Não foi possível carregar a lista de solicitantes. ${userFriendlyError(err)}`;
+    document.getElementById('boot-error').classList.remove('hidden');
+    return;
+  }
+
+  document.getElementById('boot-screen').classList.add('hidden');
+  migrateLegacyUserIdx();
+
+  const myName = store.get('user_name');
+  if (myName && cuSolicitanteMap[myName] !== undefined) {
+    initApp();
+  } else {
+    showSetup();
+    document.getElementById('setup-form')?.addEventListener('submit', onSetupSubmit);
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').catch(console.warn);
@@ -1420,10 +1423,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  if (store.get('user_idx') !== null) {
-    initApp();
-  } else {
-    showSetup();
-    document.getElementById('setup-form')?.addEventListener('submit', onSetupSubmit);
-  }
+  document.getElementById('boot-retry-btn')?.addEventListener('click', boot);
+  boot();
 });

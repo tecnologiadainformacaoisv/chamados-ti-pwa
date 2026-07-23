@@ -9,13 +9,24 @@ const assert = require('assert');
 const APP_PATH = path.join(__dirname, '..', 'js', 'app.js');
 const src = fs.readFileSync(APP_PATH, 'utf8');
 
+// localStorage em memória (de verdade, não só stub) — permite testar store.get/set/remove.
+const fakeLocalStorage = (() => {
+  let data = {};
+  return {
+    getItem:    k => (k in data ? data[k] : null),
+    setItem:    (k, v) => { data[k] = String(v); },
+    removeItem: k => { delete data[k]; },
+    __reset:    () => { data = {}; },
+  };
+})();
+
 // Stubs mínimos de globals de browser para o script carregar fora do navegador.
 const noop = () => {};
 const sandbox = {
   window:   { addEventListener: noop },
   document: { addEventListener: noop, getElementById: () => null, querySelectorAll: () => [] },
   navigator: { onLine: true },
-  localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+  localStorage: fakeLocalStorage,
   location: { hash: '', href: 'http://localhost/', pathname: '/' },
   console,
   Notification: undefined,
@@ -26,10 +37,10 @@ vm.createContext(sandbox);
 const exportLine = `
 ;globalThis.__exports = {
   escHtml, fmtMs, fmtDate, timeAgo, timeUntil, isOverdue, overdueFor,
-  optionName, cuSolIdx, solicitanteDisplayName, filtrarAnexosValidos, waNumberForTask,
-  getCustomField, slaProgressInfo,
-  CATEGORIA_PRIORIDADE, PRIORITY, SOLICITANTES, SOLICITANTES_ALPHA, TIPOS, SETORES,
-  OPERADOR_WHATSAPP, OPERADORES, STATUS_MAP,
+  optionName, buildSolicitanteMaps, myCuIdx, solicitanteDisplayName, migrateLegacyUserIdx,
+  filtrarAnexosValidos, waNumberForTask, getCustomField, slaProgressInfo,
+  CATEGORIA_PRIORIDADE, PRIORITY, LEGACY_USER_IDX_TO_NAME, TIPOS, SETORES,
+  OPERADOR_WHATSAPP, OPERADORES, STATUS_MAP, store,
 };`;
 vm.runInContext(src + exportLine, sandbox, { filename: 'app.js' });
 const A = sandbox.__exports;
@@ -37,6 +48,7 @@ const A = sandbox.__exports;
 let passed = 0, failed = 0;
 function test(name, fn) {
   try {
+    fakeLocalStorage.__reset();
     fn();
     passed++;
     console.log(`  ok  - ${name}`);
@@ -90,24 +102,19 @@ test('sem due_date -> não atrasado', () => {
   assert.strictEqual(A.isOverdue({ status: { status: 'aberto' } }), false);
 });
 
-console.log('optionName');
+console.log('optionName (usado hoje só por TIPOS/SETORES)');
 test('encontra pelo orderindex', () => {
-  assert.strictEqual(A.optionName(A.SOLICITANTES, 11), 'Jhuliany Mendes');
+  assert.strictEqual(A.optionName(A.TIPOS, 0), 'Notebooks');
 });
 test('orderindex como string numérica funciona (Number())', () => {
-  assert.strictEqual(A.optionName(A.SOLICITANTES, '11'), 'Jhuliany Mendes');
+  assert.strictEqual(A.optionName(A.TIPOS, '0'), 'Notebooks');
 });
 test('null/undefined retorna placeholder', () => {
-  assert.strictEqual(A.optionName(A.SOLICITANTES, null), '—');
-  assert.strictEqual(A.optionName(A.SOLICITANTES, undefined), '—');
+  assert.strictEqual(A.optionName(A.TIPOS, null), '—');
+  assert.strictEqual(A.optionName(A.TIPOS, undefined), '—');
 });
 test('orderindex inexistente retorna placeholder', () => {
-  assert.strictEqual(A.optionName(A.SOLICITANTES, 999), '—');
-});
-
-console.log('cuSolIdx (mapeamento de orderindex ClickUp)');
-test('sem mapa carregado, retorna o índice local inalterado', () => {
-  assert.strictEqual(A.cuSolIdx(11), 11);
+  assert.strictEqual(A.optionName(A.TIPOS, 999), '—');
 });
 
 console.log('filtrarAnexosValidos');
@@ -183,43 +190,81 @@ test('pct fica sempre entre 0 e 100', () => {
   assert.ok(info.pct >= 0 && info.pct <= 100);
 });
 
-console.log('SOLICITANTES / STATUS_MAP (integridade de dados)');
-test('42 solicitantes, nenhum orderindex duplicado', () => {
-  const idxs = A.SOLICITANTES.map(s => s.orderindex);
-  assert.strictEqual(idxs.length, 42);
-  assert.strictEqual(new Set(idxs).size, 42, 'há orderindex duplicado em SOLICITANTES');
-});
-test('orderindex de cada pessoa é permanente — regressão do bug de nome trocado (2026-07-23)', () => {
-  // Michael Vasconcelos apareceu como "Késsia" pro usuário porque a ClickUp tinha 2 pessoas
-  // (Ana Clara, Natália Leandro) que não existiam aqui, deslocando o índice de todo mundo depois.
-  // Trava os índices atuais: qualquer novo nome deve ser ACRESCENTADO no fim, nunca inserido no meio.
-  assert.strictEqual(A.optionName(A.SOLICITANTES, 18), 'Késsia Rodrigues');
-  assert.strictEqual(A.optionName(A.SOLICITANTES, 25), 'Michael Vasconcelos');
-  assert.strictEqual(A.optionName(A.SOLICITANTES, 40), 'Ana Clara');
-  assert.strictEqual(A.optionName(A.SOLICITANTES, 41), 'Natália Leandro');
-});
+console.log('STATUS_MAP (integridade de dados)');
 test('STATUS_MAP tem exatamente os 4 status esperados', () => {
   assert.deepStrictEqual(Object.keys(A.STATUS_MAP).sort(), ['aberto', 'em atendimento', 'encerrado', 'pendente']);
 });
 
-console.log('SOLICITANTES_ALPHA (ordem de exibição não deve afetar o orderindex real)');
-test('mesmo conjunto de pessoas que SOLICITANTES, só reordenado', () => {
-  const setOriginal = new Set(A.SOLICITANTES.map(s => `${s.orderindex}:${s.name}`));
-  const setAlpha     = new Set(A.SOLICITANTES_ALPHA.map(s => `${s.orderindex}:${s.name}`));
-  assert.strictEqual(A.SOLICITANTES_ALPHA.length, A.SOLICITANTES.length);
-  assert.deepStrictEqual(setAlpha, setOriginal);
+console.log('buildSolicitanteMaps (lista de solicitantes agora vem direto da ClickUp)');
+const FAKE_CU_OPTIONS = [
+  { name: 'Ana Clara', orderindex: 0 },
+  { name: 'Ariele Santo', orderindex: 1 },
+  { name: 'Késsia Rodrigues', orderindex: 19 },
+  { name: 'Michael Vasconcelos', orderindex: 26 },
+  { name: 'Natália Leandro', orderindex: 28 },
+  { name: 'Outros', orderindex: 29 },
+];
+test('monta o mapa nome -> orderindex da ClickUp corretamente', () => {
+  const { nameToIdx } = A.buildSolicitanteMaps(FAKE_CU_OPTIONS);
+  assert.strictEqual(nameToIdx['Michael Vasconcelos'], 26);
+  assert.strictEqual(nameToIdx['Késsia Rodrigues'], 19);
 });
-test('está de fato em ordem alfabética', () => {
-  const names = A.SOLICITANTES_ALPHA.map(s => s.name).join(' ');
-  const sorted = A.SOLICITANTES_ALPHA.map(s => s.name).sort((a, b) => a.localeCompare(b, 'pt-BR')).join(' ');
-  assert.strictEqual(names, sorted);
+test('monta o mapa reverso orderindex -> nome corretamente', () => {
+  const { idxToName } = A.buildSolicitanteMaps(FAKE_CU_OPTIONS);
+  assert.strictEqual(idxToName[26], 'Michael Vasconcelos');
+  assert.strictEqual(idxToName[19], 'Késsia Rodrigues');
+  // regressão do bug de 2026-07-23: 26 tinha que resolver pro Michael, não pra outra pessoa
+  assert.notStrictEqual(idxToName[26], 'Késsia Rodrigues');
+});
+test('sortedOptions fica em ordem alfabética, independente da ordem de entrada', () => {
+  const { sortedOptions } = A.buildSolicitanteMaps(FAKE_CU_OPTIONS);
+  const names = sortedOptions.map(o => o.name);
+  const expected = [...names].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  assert.strictEqual(names.join('|'), expected.join('|'));
+});
+test('sortedOptions preserva o orderindex original de cada nome (não reindexa)', () => {
+  const { sortedOptions } = A.buildSolicitanteMaps(FAKE_CU_OPTIONS);
+  const michael = sortedOptions.find(o => o.name === 'Michael Vasconcelos');
+  assert.strictEqual(michael.orderindex, 26);
 });
 
-console.log('solicitanteDisplayName (tradução de exibição ClickUp -> nome)');
-test('sem mapa carregado, cai no fallback local por orderindex', () => {
-  assert.strictEqual(A.solicitanteDisplayName(25), 'Michael Vasconcelos');
+console.log('LEGACY_USER_IDX_TO_NAME (tabela de migração — não deve mais ser editada)');
+test('tem os 42 nomes da versão antiga (0.2.4), sem duplicar orderindex', () => {
+  const idxs = Object.keys(A.LEGACY_USER_IDX_TO_NAME).map(Number);
+  assert.strictEqual(idxs.length, 42);
+  assert.strictEqual(new Set(idxs).size, 42);
 });
-test('null/undefined retorna placeholder', () => {
+test('trava os índices do bug reportado em 2026-07-23', () => {
+  assert.strictEqual(A.LEGACY_USER_IDX_TO_NAME[18], 'Késsia Rodrigues');
+  assert.strictEqual(A.LEGACY_USER_IDX_TO_NAME[25], 'Michael Vasconcelos');
+});
+
+console.log('migrateLegacyUserIdx (migra quem já tinha configurado antes da v0.2.5)');
+test('converte user_idx antigo pra user_name e remove a chave antiga', () => {
+  A.store.set('user_idx', '25');
+  A.migrateLegacyUserIdx();
+  assert.strictEqual(A.store.get('user_name'), 'Michael Vasconcelos');
+  assert.strictEqual(A.store.get('user_idx'), null);
+});
+test('não faz nada se já existe user_name', () => {
+  A.store.set('user_name', 'Alguém');
+  A.store.set('user_idx', '25');
+  A.migrateLegacyUserIdx();
+  assert.strictEqual(A.store.get('user_name'), 'Alguém');
+});
+test('não faz nada se nunca configurou (sem user_idx nem user_name)', () => {
+  A.migrateLegacyUserIdx();
+  assert.strictEqual(A.store.get('user_name'), null);
+});
+
+console.log('myCuIdx / solicitanteDisplayName (sem mapa carregado — app recém-aberto)');
+test('myCuIdx sem user_name retorna undefined', () => {
+  assert.strictEqual(A.myCuIdx(), undefined);
+});
+test('solicitanteDisplayName sem mapa carregado retorna placeholder', () => {
+  assert.strictEqual(A.solicitanteDisplayName(26), '—');
+});
+test('solicitanteDisplayName com null/undefined retorna placeholder', () => {
   assert.strictEqual(A.solicitanteDisplayName(null), '—');
   assert.strictEqual(A.solicitanteDisplayName(undefined), '—');
 });
