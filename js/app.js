@@ -120,6 +120,8 @@ const VAPID_PUBLIC_KEY = 'BMgcsTAUEhUr-dau-LaPhTHktmCZ90q4GXFF6CX0p3IvmeB51v68Jq
 const WORKER_URL = 'https://chamados-ti-push.tecnologiadainformacao-isv.workers.dev';
 // Segredo compartilhado com o Worker (env SUBSCRIBE_SECRET) — impede que terceiros chamem /subscribe
 const APP_SHARED_SECRET = 'isv-chamados-2k26-9fQ3vM7xZp';
+// Chave de API do ClickUp hardcoded temporariamente para remover a tela de "código de acesso" (sem fricção no primeiro uso)
+const CU_API_KEY = 'pk_200498355_NA4UG3MU0YH7KJMGWHOIW86EB8VEP2SM';
 
 // ============================================================
 // STATE
@@ -164,8 +166,7 @@ function userFriendlyError(err) {
 }
 
 async function apiRequest(method, path, body = null) {
-  const key = store.get('cu_key');
-  if (!key) throw new Error('API key não configurada');
+  const key = store.get('cu_key') || CU_API_KEY;
   const opts = {
     method,
     headers: { 'Authorization': key, 'Content-Type': 'application/json' }
@@ -186,7 +187,7 @@ async function createTask(payload) {
 }
 
 async function uploadAttachment(taskId, file) {
-  const key = store.get('cu_key');
+  const key = store.get('cu_key') || CU_API_KEY;
   const formData = new FormData();
   formData.append('attachment', file, file.name);
 
@@ -358,10 +359,8 @@ function showSetup() {
   document.getElementById('app').classList.add('hidden');
   populateSelect('setup-name', SOLICITANTES);
 
-  // Remove key field if already configured via invite link
-  if (store.get('cu_key')) {
-    document.getElementById('setup-key-field')?.remove();
-  }
+  // Chave já hardcoded em CU_API_KEY — nunca pede o código de acesso
+  document.getElementById('setup-key-field')?.remove();
 
   // Eye toggle
   const eyeBtn = document.getElementById('toggle-key');
@@ -1393,7 +1392,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  if (store.get('cu_key') && store.get('user_idx') !== null) {
+  if (store.get('user_idx') !== null) {
     initApp();
   } else {
     showSetup();
