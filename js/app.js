@@ -425,11 +425,16 @@ async function initApp() {
   loadTickets();
   setupRefreshPolling();
 
-  // Suporte a deep-link via hash: #tab:taskId (ex: #meus-chamados:abc123)
-  const hashFull             = location.hash.replace('#', '') || 'novo-chamado';
-  const [hashTab, hashTaskId] = hashFull.split(':');
-  if (hashTaskId) pendingHighlightTaskId = hashTaskId;
-  switchTab(hashTab);
+  // Suporte a deep-link via hash: #tab:taskId (ex: #meus-chamados:abc123), usado quando
+  // se clica numa notificação. Fora desse caso, sempre abre em "Novo Chamado" — sem isso,
+  // como switchTab() grava a aba atual no hash, o login "lembrava" da última aba visitada.
+  const [hashTab, hashTaskId] = location.hash.replace('#', '').split(':');
+  if (hashTaskId) {
+    pendingHighlightTaskId = hashTaskId;
+    switchTab(hashTab);
+  } else {
+    switchTab('novo-chamado');
+  }
 }
 
 // ============================================================
