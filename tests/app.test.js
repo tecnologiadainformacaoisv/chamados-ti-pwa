@@ -85,6 +85,29 @@ test('dias e horas', () => {
   assert.strictEqual(A.fmtMs(25 * 3600000), '1d 1h');
 });
 
+console.log('timeUntil (regressão: faltavam os minutos, só mostrava hora cheia)');
+test('menos de 1 minuto retorna "em breve"', () => {
+  assert.strictEqual(A.timeUntil(Date.now() + 30000), 'em breve');
+});
+test('menos de 1h mostra só minutos', () => {
+  assert.strictEqual(A.timeUntil(Date.now() + 45 * 60000), 'em 45min');
+});
+test('3h59min mostra horas E minutos, não arredonda pra 3h', () => {
+  const ts = Date.now() + (3 * 3600000 + 59 * 60000);
+  assert.strictEqual(A.timeUntil(ts), 'em 3h 59min');
+});
+test('hora exata (sem minutos) não mostra "0min" sobrando', () => {
+  assert.strictEqual(A.timeUntil(Date.now() + 4 * 3600000), 'em 4h');
+});
+test('mais de 24h mostra dias e horas', () => {
+  const ts = Date.now() + (25 * 3600000);
+  assert.strictEqual(A.timeUntil(ts), 'em 1d 1h');
+});
+test('ts no passado ou nulo retorna null', () => {
+  assert.strictEqual(A.timeUntil(Date.now() - 1000), null);
+  assert.strictEqual(A.timeUntil(null), null);
+});
+
 console.log('isOverdue / overdueFor');
 test('encerrado nunca está atrasado', () => {
   assert.strictEqual(A.isOverdue({ status: { status: 'encerrado' }, due_date: String(Date.now() - 100000) }), false);

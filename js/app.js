@@ -335,10 +335,15 @@ function timeUntil(ts) {
   if (!ts) return null;
   const diff = Number(ts) - Date.now();
   if (diff <= 0) return null;
-  const h = Math.floor(diff / 3600000);
-  if (h < 1) return 'em breve';
-  if (h < 24) return `em ${h}h`;
-  return `em ${Math.floor(h / 24)}d`;
+  const totalMin = Math.floor(diff / 60000);
+  if (totalMin < 1) return 'em breve';
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h < 1) return `em ${m}min`;
+  if (h < 24) return m > 0 ? `em ${h}h ${m}min` : `em ${h}h`;
+  const d  = Math.floor(h / 24);
+  const rh = h % 24;
+  return rh > 0 ? `em ${d}d ${rh}h` : `em ${d}d`;
 }
 
 // ============================================================
