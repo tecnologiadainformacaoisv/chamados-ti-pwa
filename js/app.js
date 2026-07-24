@@ -385,14 +385,12 @@ function showSetup() {
 function onSetupSubmit(e) {
   e.preventDefault();
   const nameEl  = document.getElementById('setup-name');
-  const email   = document.getElementById('setup-email').value.trim();
   if (nameEl.value === '') {
     toast('Selecione seu nome para continuar', 'error');
     return;
   }
 
   store.set('user_name', nameEl.value);
-  store.set('user_email', email);
 
   document.getElementById('setup-screen').classList.add('hidden');
   initApp();
@@ -1008,8 +1006,6 @@ function openSettings() {
   populateSolicitanteSelect('settings-name');
   document.getElementById('settings-name').value = store.get('user_name') || '';
 
-  document.getElementById('settings-email').value = store.get('user_email') || '';
-
   document.getElementById('settings-modal').classList.remove('hidden');
 }
 
@@ -1018,13 +1014,11 @@ function closeSettings() {
 }
 
 function saveSettings() {
-  const nameVal  = document.getElementById('settings-name').value;
-  const emailVal = document.getElementById('settings-email').value.trim();
+  const nameVal = document.getElementById('settings-name').value;
 
   if (nameVal === '') { toast('Selecione seu nome', 'error'); return; }
 
-  store.set('user_name',   nameVal);
-  store.set('user_email',  emailVal);
+  store.set('user_name', nameVal);
 
   document.getElementById('user-name-display').textContent = nameVal;
   populateForm();
