@@ -56,12 +56,13 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 ### ClickUp como backend
 - Não há banco de dados próprio. Cada chamado é uma **task do ClickUp** na lista `901324490220`.
 - Campos customizados: `EMAIL`, `TIPO`, `SOLICITANTE`, `SETOR`, `SOLUCAO` (IDs em `FIELD_IDS` no app.js).
-- A API key do ClickUp fica em `localStorage` (`cu_key`) — digitada na primeira vez pelo usuário ou pré-preenchida via query string `?key=...`.
+- **O navegador nunca recebe a chave da API do ClickUp.** Toda chamada de `app.js` (`apiRequest`) vai pro Cloudflare Worker (`push-worker.js`, rotas `/api/*`), que injeta `env.CLICKUP_API_KEY` (secret, só existe no Worker) antes de repassar pra `api.clickup.com`. O que `app.js` manda é só `APP_SHARED_SECRET` num header (`X-App-Secret`), que só libera o uso do proxy — não dá acesso à ClickUp por si só.
 
 ### Notificações push
 - Arquitetura: browser → Cloudflare Worker (`chamados-ti-push.tecnologiadainformacao-isv.workers.dev`) → Web Push.
 - O Worker é acionado por uma automação do ClickUp quando o status do chamado muda.
-- `VAPID_PUBLIC_KEY` e `APP_SHARED_SECRET` ficam hardcoded em `app.js` (não são credenciais de acesso a dados sensíveis — apenas identificam a chave pública VAPID).
+- O mesmo Worker também faz o proxy autenticado das rotas `/api/*` descrito acima (ver "ClickUp como backend").
+- `VAPID_PUBLIC_KEY` e `APP_SHARED_SECRET` ficam hardcoded em `app.js` (não são credenciais de acesso a dados sensíveis — `APP_SHARED_SECRET` só libera o proxy, não substitui a chave real da ClickUp, que fica só no Worker).
 
 ### Mapeamento de dados (app.js)
 | Constante | O que é |
@@ -77,7 +78,7 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 
 ## Fluxo do usuário
 
-1. **Setup** — usuário seleciona seu nome (lista buscada em runtime do campo customizado SOLICITANTE na ClickUp — ver seção "Lista de solicitantes" abaixo) e o app persiste em localStorage. API key hardcoded em `app.js` (não pede mais código de acesso).
+1. **Setup** — usuário seleciona seu nome (lista buscada em runtime do campo customizado SOLICITANTE na ClickUp — ver seção "Lista de solicitantes" abaixo) e o app persiste em localStorage. Não pede mais código de acesso — a chave da ClickUp nunca chega ao navegador (ver "ClickUp como backend").
 2. **Tela principal** — exibe "Abrir Chamado" e "Meus Chamados" / "Meu Histórico".
 3. **Abertura de chamado** — formulário com tipo, setor, descrição, anexo opcional (limite 10 MB). Ao submeter, cria task no ClickUp com prioridade automática baseada no tipo.
 4. **Acompanhamento** — filtra as tasks do ClickUp pelo campo SOLICITANTE. Exibe status com SLA e indicação de atraso.
@@ -118,9 +119,9 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 
 ## Estado atual do desenvolvimento
 
-> Última atualização: 2026-07-23
+> Última atualização: 2026-07-24
 
-- **Versão:** v0.2.5. Branch `main`. Pré-teste de usabilidade (UX já tratada para essa etapa).
+- **Versão:** v0.2.6. Branch `main`. Pré-teste de usabilidade (UX já tratada para essa etapa).
 - **PWA funcional** integrado ao ClickUp como backend (lista `901324490220`), sem banco próprio.
 - **O que funciona hoje:**
   - Abertura de chamado com tipo/setor/descrição e **anexo opcional** (limite 10 MB; suporta colar print via Ctrl+V).
@@ -129,16 +130,16 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
   - **SLA pausa em "Pendente"**; solução aplicada lida de campo customizado dedicado e destacada em chamados encerrados.
   - Visualização de anexo em modal central; WhatsApp roteado pelo operador atribuído.
   - **Notificações push** via Cloudflare Worker (`chamados-ti-push.tecnologiadainformacao-isv.workers.dev`), acionadas por automação do ClickUp na mudança de status.
-  - **Login sem código de acesso** — chave de API do ClickUp hardcoded em `app.js` (`CU_API_KEY`), tela de "código de acesso" removida do fluxo.
+  - **Login sem código de acesso**, e sem chave da ClickUp em nenhum lugar do navegador — `app.js` fala só com o Worker, que faz o proxy autenticado pra ClickUp (`/api/*`, ver "ClickUp como backend").
   - **Lista de solicitantes buscada em runtime da ClickUp** (`loadSolicitantes()`), com tela de boot/loading antes do setup; sem mais array fixo pra manter sincronizado a cada colaborador novo.
-- **Tratamento de erros amigável** e suporte offline básico implementados (v0.2.0).
+- **Tratamento de erros amigável** e suporte offline básico implementados (v0.2.0) — obs: o boot atual (busca da lista de solicitantes) depende de rede mesmo pra quem já tinha configurado o app; ver "Próximos passos".
 - **Testes unitários** em `tests/app.test.js` (sem dependências — `node vm`+`assert`; rodar com `node tests/app.test.js`).
 
 ## Decisões técnicas tomadas
 
-- **ClickUp como backend** — cada chamado é uma task; sem banco de dados próprio. API key hardcoded em `app.js` (`CU_API_KEY`) — não é mais pedida ao usuário; `localStorage.cu_key`/`?key=...` continuam funcionando como override se precisar trocar a chave sem publicar código.
+- **ClickUp como backend** — cada chamado é uma task; sem banco de dados próprio. A chave da API do ClickUp mora só no Cloudflare Worker (`env.CLICKUP_API_KEY`, secret) — `app.js` nunca a recebe; ele fala com `WORKER_URL/api/*`, autenticado por `APP_SHARED_SECRET` (header `X-App-Secret`), que o Worker valida contra `env.SUBSCRIBE_SECRET` antes de repassar pra ClickUp.
 - **Zero dependências** — HTML/CSS/JS puro, sem framework/bundler (decisão explícita). `tests/app.test.js` usa só `node vm`+`assert`, nada instalado.
-- **Push desacoplado** num Cloudflare Worker (`push-worker.js`, deploy separado em workers.dev); `VAPID_PUBLIC_KEY`/`APP_SHARED_SECRET` hardcoded por serem identificadores públicos.
+- **Push e proxy da ClickUp desacoplados** no mesmo Cloudflare Worker (`push-worker.js`, deploy separado em workers.dev — colar manualmente no editor do dashboard, sem CI/CD); `VAPID_PUBLIC_KEY`/`APP_SHARED_SECRET` hardcoded em `app.js` por serem identificadores públicos/de baixo risco (não dão acesso à ClickUp por si só).
 - **Contratos de sincronização** que devem permanecer idênticos entre `app.js` e `push-worker.js`: chaves de `STATUS_MAP` ↔ `NOTIFY_STATUSES`, e o field_id de `SOLICITANTE` em `FIELD_IDS`.
 - **Prioridade nunca é manual** — sempre derivada do tipo; não expor seletor de prioridade ao usuário.
 - **Lista de solicitantes buscada em runtime da ClickUp** — decisão tomada em 2026-07-23 após bug de nome trocado causado pela lista fixa desincronizar (ver `LEGACY_USER_IDX_TO_NAME` pra contexto da migração). Adicionar colaborador agora é só no ClickUp, sem tocar no código.

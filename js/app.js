@@ -3,8 +3,15 @@
 // ============================================================
 // CONSTANTS
 // ============================================================
+// Lista "Chamados" na ClickUp. Não é mais usado em nenhuma chamada daqui (o Worker já embute
+// o LIST_ID dele em /api/*) — fica só como referência pra quem for ler o código.
+// ⚠️ Mantenha sincronizado com LIST_ID em push-worker.js
 const LIST_ID = '901324490220';
-const API_BASE = 'https://api.clickup.com/api/v2';
+// Worker que faz proxy autenticado pra ClickUp — o app NUNCA guarda/recebe a chave da ClickUp.
+// O Worker injeta essa chave (env.CLICKUP_API_KEY, secret só do lado do servidor) antes de
+// repassar pra api.clickup.com. Ver push-worker.js.
+const WORKER_URL = 'https://chamados-ti-push.tecnologiadainformacao-isv.workers.dev';
+const API_BASE   = `${WORKER_URL}/api`;
 
 // ⚠️ SOLICITANTE deve ficar sincronizado com SOLICITANTE_FIELD_ID em push-worker.js
 const FIELD_IDS = {
@@ -94,12 +101,10 @@ const STATUS_MAP = {
 
 // VAPID public key (65-byte uncompressed P-256, URL-safe base64)
 const VAPID_PUBLIC_KEY = 'BMgcsTAUEhUr-dau-LaPhTHktmCZ90q4GXFF6CX0p3IvmeB51v68JqZLeuKrO3swUcSXKiNhQ6Ur5I74fm6tp2Q';
-// Worker URL: fill in after deploying to Cloudflare
-const WORKER_URL = 'https://chamados-ti-push.tecnologiadainformacao-isv.workers.dev';
-// Segredo compartilhado com o Worker (env SUBSCRIBE_SECRET) — impede que terceiros chamem /subscribe
+// Segredo compartilhado com o Worker (env SUBSCRIBE_SECRET) — vai no header X-App-Secret de toda
+// chamada a WORKER_URL/api/* e no body de /subscribe. Não dá acesso à ClickUp por si só (só
+// libera o proxy); a chave real da ClickUp fica só no Worker, nunca aqui.
 const APP_SHARED_SECRET = 'isv-chamados-2k26-9fQ3vM7xZp';
-// Chave de API do ClickUp hardcoded temporariamente para remover a tela de "código de acesso" (sem fricção no primeiro uso)
-const CU_API_KEY = 'pk_200498355_NA4UG3MU0YH7KJMGWHOIW86EB8VEP2SM';
 
 // ============================================================
 // STATE
@@ -130,9 +135,6 @@ function userFriendlyError(err) {
   if (!navigator.onLine) return 'Sem conexão com a internet. Verifique sua rede e tente novamente.';
 
   const msg = err?.message || '';
-  if (/API key não configurada/i.test(msg)) {
-    return 'O app não está configurado corretamente. Avise o setor de TI.';
-  }
   if (/Failed to fetch|NetworkError|network/i.test(msg)) {
     return 'Não foi possível conectar. Verifique sua internet e tente novamente.';
   }
@@ -146,10 +148,9 @@ function userFriendlyError(err) {
 }
 
 async function apiRequest(method, path, body = null) {
-  const key = store.get('cu_key') || CU_API_KEY;
   const opts = {
     method,
-    headers: { 'Authorization': key, 'Content-Type': 'application/json' }
+    headers: { 'X-App-Secret': APP_SHARED_SECRET, 'Content-Type': 'application/json' }
   };
   if (body) opts.body = JSON.stringify(body);
 
@@ -157,23 +158,23 @@ async function apiRequest(method, path, body = null) {
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new Error(data.err || `Erro HTTP ${res.status}`);
+    throw new Error(data.err || data.error || `Erro HTTP ${res.status}`);
   }
   return res.json();
 }
 
 async function createTask(payload) {
-  return apiRequest('POST', `/list/${LIST_ID}/task`, payload);
+  return apiRequest('POST', '/tasks', payload);
 }
 
 async function uploadAttachment(taskId, file) {
-  const key = store.get('cu_key') || CU_API_KEY;
   const formData = new FormData();
   formData.append('attachment', file, file.name);
 
-  const res = await fetch(`${API_BASE}/task/${taskId}/attachment`, {
+  // Sem Content-Type manual: o browser define o boundary do multipart sozinho.
+  const res = await fetch(`${API_BASE}/tasks/${taskId}/attachment`, {
     method: 'POST',
-    headers: { Authorization: key },
+    headers: { 'X-App-Secret': APP_SHARED_SECRET },
     body: formData
   });
   if (!res.ok) throw new Error(`Erro HTTP ${res.status}`);
@@ -187,7 +188,7 @@ async function fetchTasks() {
     include_closed: 'true',
     page: '0'
   });
-  const data = await apiRequest('GET', `/list/${LIST_ID}/task?${params}`);
+  const data = await apiRequest('GET', `/tasks?${params}`);
   return data.tasks || [];
 }
 
@@ -205,16 +206,13 @@ async function fetchMyTasks(userIdx) {
       page: '0',
       custom_fields: cf
     });
-    const data = await apiRequest('GET', `/list/${LIST_ID}/task?${params}`);
+    const data = await apiRequest('GET', `/tasks?${params}`);
     return data.tasks || [];
   } catch {
     return [];
   }
 }
 
-// Busca a lista de solicitantes direto do campo customizado SOLICITANTE na ClickUp.
-// Não existe mais lista fixa no código: quem quer que adicione um nome lá já basta, sem precisar
-// tocar/publicar o app. Lança erro se falhar — quem chama decide a UI (ver boot em DOMContentLoaded).
 // Parte pura (sem rede) — separada só pra dar pra testar sem precisar mockar a API.
 function buildSolicitanteMaps(options) {
   const nameToIdx = {};
@@ -230,7 +228,7 @@ function buildSolicitanteMaps(options) {
 }
 
 async function loadSolicitantes() {
-  const data = await apiRequest('GET', `/list/${LIST_ID}/field`);
+  const data = await apiRequest('GET', '/field');
   const field = data.fields?.find(f => f.id === FIELD_IDS.SOLICITANTE);
   const options = field?.type_config?.options || [];
   if (options.length === 0) throw new Error('Campo SOLICITANTE não encontrado ou sem opções na ClickUp');
@@ -382,16 +380,6 @@ function showSetup() {
   document.getElementById('setup-screen').classList.remove('hidden');
   document.getElementById('app').classList.add('hidden');
   populateSolicitanteSelect('setup-name');
-
-  // Chave já hardcoded em CU_API_KEY — nunca pede o código de acesso
-  document.getElementById('setup-key-field')?.remove();
-
-  // Eye toggle
-  const eyeBtn = document.getElementById('toggle-key');
-  const keyInput = document.getElementById('setup-api-key');
-  eyeBtn?.addEventListener('click', () => {
-    if (keyInput) keyInput.type = keyInput.type === 'password' ? 'text' : 'password';
-  });
 }
 
 function onSetupSubmit(e) {
@@ -401,14 +389,6 @@ function onSetupSubmit(e) {
   if (nameEl.value === '') {
     toast('Selecione seu nome para continuar', 'error');
     return;
-  }
-
-  // Key field only exists in DOM when not pre-configured via invite link
-  const keyField = document.getElementById('setup-key-field');
-  if (keyField) {
-    const key = document.getElementById('setup-api-key')?.value.trim();
-    if (!key) { toast('Informe a chave de API', 'error'); return; }
-    store.set('cu_key', key);
   }
 
   store.set('user_name', nameEl.value);
@@ -666,7 +646,7 @@ async function loadAttachments(tasks) {
     }
 
     try {
-      const full = await apiRequest('GET', `/task/${task.id}`);
+      const full = await apiRequest('GET', `/tasks/${task.id}`);
       const attachments = full.attachments || [];
       const html = attachments
         .map(a => `<button type="button" class="attachment-chip" data-url="${escHtml(a.url)}" data-title="${escHtml(a.title || a.name || 'arquivo')}" data-ext="${escHtml(a.extension || '')}">📎 ${escHtml(a.title || a.name || 'arquivo')}</button>`)
@@ -1403,16 +1383,6 @@ async function boot() {
 document.addEventListener('DOMContentLoaded', () => {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').catch(console.warn);
-  }
-
-  // Auto-configure via invite link: #setup=API_KEY
-  const hash = location.hash;
-  if (hash.startsWith('#setup=')) {
-    const key = decodeURIComponent(hash.slice(7));
-    if (key) {
-      store.set('cu_key', key);
-      history.replaceState(null, '', location.pathname);
-    }
   }
 
   // Listener para mensagens do Service Worker (notificationclick com app aberto)

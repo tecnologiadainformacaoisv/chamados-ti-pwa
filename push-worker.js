@@ -5,16 +5,19 @@
 // Variáveis de ambiente (Settings → Variables → Add):
 //   VAPID_PUBLIC_KEY  → chave pública gerada (PUBLIC_KEY)
 //   VAPID_PRIVATE_JWK → chave privada em JSON (PRIVATE_JWK)
-//   CLICKUP_API_KEY   → chave da API do ClickUp (marcar como secret)
-//   SUBSCRIBE_SECRET  → mesmo valor de APP_SHARED_SECRET no app.js (marcar como secret)
+//   CLICKUP_API_KEY   → chave da API do ClickUp (marcar como secret) — usada na automação de
+//                        status E no proxy /api/* (o app.js NUNCA recebe essa chave)
+//   SUBSCRIBE_SECRET  → mesmo valor de APP_SHARED_SECRET no app.js (marcar como secret) —
+//                        valida /subscribe (via body) e /api/* (via header X-App-Secret)
 //
 // KV Namespace (Settings → KV Namespace Bindings → Add):
 //   Nome da variável: SUBSCRIPTIONS
 // =====================================================================
 
-// ⚠️ Mantenha sincronizado com FIELD_IDS.SOLICITANTE em app.js
-const SOLICITANTE_FIELD_ID = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
-const VAPID_SUBJECT        = 'mailto:henrique.krvalho@gmail.com';
+// ⚠️ Mantenha sincronizado com LIST_ID/FIELD_IDS.SOLICITANTE em app.js
+const LIST_ID               = '901324490220';
+const SOLICITANTE_FIELD_ID  = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
+const VAPID_SUBJECT         = 'mailto:henrique.krvalho@gmail.com';
 
 // ⚠️ As chaves de status devem ficar sincronizadas com STATUS_MAP em app.js
 const NOTIFY_STATUSES = {
@@ -25,12 +28,17 @@ const NOTIFY_STATUSES = {
 
 const CORS = {
   'Access-Control-Allow-Origin':  '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, X-App-Secret',
 };
 
 // =====================================================================
 // ROUTER
+//
+// /api/* — proxy autenticado pra ClickUp: o app (app.js) nunca recebe a
+// chave da ClickUp. Ele manda o header X-App-Secret (mesmo valor de
+// APP_SHARED_SECRET em app.js / env.SUBSCRIBE_SECRET aqui); o Worker
+// injeta env.CLICKUP_API_KEY (secret, só existe aqui) antes de repassar.
 // =====================================================================
 export default {
   async fetch(request, env) {
@@ -38,18 +46,95 @@ export default {
       return new Response(null, { status: 204, headers: CORS });
     }
 
-    if (request.method !== 'POST') {
-      return new Response('Chamados TI – Push Worker OK', { status: 200 });
+    const { pathname, search } = new URL(request.url);
+
+    if (request.method === 'POST') {
+      if (pathname === '/subscribe') return handleSubscribe(request, env);
+      if (pathname === '/webhook')   return handleWebhook(request, env);
+      if (pathname === '/api/tasks') return handleCreateTask(request, env);
+      const attachMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/attachment$/);
+      if (attachMatch) return handleUploadAttachment(request, env, attachMatch[1]);
     }
 
-    const { pathname } = new URL(request.url);
-
-    if (pathname === '/subscribe') return handleSubscribe(request, env);
-    if (pathname === '/webhook')   return handleWebhook(request, env);
+    if (request.method === 'GET') {
+      if (pathname === '/api/field') return handleGetField(request, env);
+      if (pathname === '/api/tasks') return handleGetTasks(request, env, search);
+      const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
+      if (taskMatch) return handleGetTask(request, env, taskMatch[1]);
+      return new Response('Chamados TI – Push Worker OK', { status: 200 });
+    }
 
     return new Response('Not Found', { status: 404 });
   }
 };
+
+// =====================================================================
+// PROXY AUTENTICADO PRA CLICKUP (/api/*)
+// =====================================================================
+function hasValidSecret(request, env) {
+  if (!env.SUBSCRIBE_SECRET) return true; // sem segredo configurado no Worker: não bloqueia
+  return request.headers.get('X-App-Secret') === env.SUBSCRIBE_SECRET;
+}
+
+function unauthorized() {
+  return jsonRes({ error: 'não autorizado' }, 403);
+}
+
+async function passthrough(upstream) {
+  const text = await upstream.text();
+  return new Response(text, {
+    status: upstream.status,
+    headers: { ...CORS, 'Content-Type': upstream.headers.get('Content-Type') || 'application/json' }
+  });
+}
+
+async function handleGetField(request, env) {
+  if (!hasValidSecret(request, env)) return unauthorized();
+  const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/field`, {
+    headers: { Authorization: env.CLICKUP_API_KEY }
+  });
+  return passthrough(upstream);
+}
+
+async function handleGetTasks(request, env, search) {
+  if (!hasValidSecret(request, env)) return unauthorized();
+  const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task${search}`, {
+    headers: { Authorization: env.CLICKUP_API_KEY }
+  });
+  return passthrough(upstream);
+}
+
+async function handleGetTask(request, env, taskId) {
+  if (!hasValidSecret(request, env)) return unauthorized();
+  const upstream = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
+    headers: { Authorization: env.CLICKUP_API_KEY }
+  });
+  return passthrough(upstream);
+}
+
+async function handleCreateTask(request, env) {
+  if (!hasValidSecret(request, env)) return unauthorized();
+  const body = await request.text();
+  const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task`, {
+    method: 'POST',
+    headers: { Authorization: env.CLICKUP_API_KEY, 'Content-Type': 'application/json' },
+    body
+  });
+  return passthrough(upstream);
+}
+
+async function handleUploadAttachment(request, env, taskId) {
+  if (!hasValidSecret(request, env)) return unauthorized();
+  const upstream = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/attachment`, {
+    method: 'POST',
+    headers: {
+      Authorization: env.CLICKUP_API_KEY,
+      'Content-Type': request.headers.get('Content-Type') || ''
+    },
+    body: request.body
+  });
+  return passthrough(upstream);
+}
 
 // =====================================================================
 // /subscribe — salva subscription do usuário no KV

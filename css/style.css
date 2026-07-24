@@ -150,32 +150,6 @@ html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
   margin-top: 5px;
 }
 
-.input-eye-wrap {
-  position: relative;
-  display: flex;
-}
-
-.input-eye-wrap input {
-  flex: 1;
-  padding-right: 40px;
-}
-
-.eye-btn {
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 4px;
-  display: flex;
-  align-items: center;
-}
-
-.eye-btn:hover { color: var(--text); }
-
 /* ============================================================
    INPUTS & SELECTS (shared)
    ============================================================ */
