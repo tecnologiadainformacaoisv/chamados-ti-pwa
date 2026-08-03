@@ -36,8 +36,11 @@ const DEFAULT_TIME_ESTIMATE_MS = {
   normal: 60 * 60000, // 1h
 };
 
+// Só o app publicado pode chamar o Worker via navegador — '*' permitia qualquer site
+// embutir uma chamada pro proxy usando o navegador de quem estivesse com a aba aberta.
+const ALLOWED_ORIGIN = 'https://tecnologiadainformacaoisv.github.io';
 const CORS = {
-  'Access-Control-Allow-Origin':  '*',
+  'Access-Control-Allow-Origin':  ALLOWED_ORIGIN,
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-App-Secret',
 };
@@ -125,6 +128,22 @@ async function handleGetTask(request, env, taskId) {
 async function handleCreateTask(request, env) {
   if (!hasValidSecret(request, env)) return unauthorized();
   const body = await request.text();
+
+  // Throttle simples: no máximo 1 chamado a cada 10s por solicitante — evita duplo-clique
+  // acidental virando 2 tickets, e freia flood malicioso sem precisar de infra nova
+  // (reaproveita o mesmo KV já usado pro dedup da automação).
+  let solicitanteIdx;
+  try {
+    solicitanteIdx = JSON.parse(body).custom_fields?.find(f => f.id === SOLICITANTE_FIELD_ID)?.value;
+  } catch {}
+  if (solicitanteIdx != null) {
+    const throttleKey = `throttle_create_${solicitanteIdx}`;
+    if (await env.SUBSCRIPTIONS.get(throttleKey)) {
+      return jsonRes({ error: 'Aguarde alguns segundos antes de abrir outro chamado' }, 429);
+    }
+    await env.SUBSCRIPTIONS.put(throttleKey, '1', { expirationTtl: 10 });
+  }
+
   const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task`, {
     method: 'POST',
     headers: { Authorization: env.CLICKUP_API_KEY, 'Content-Type': 'application/json' },

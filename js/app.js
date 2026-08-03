@@ -141,6 +141,9 @@ function userFriendlyError(err) {
   if (/\b401\b|\b403\b/.test(msg)) {
     return 'Sessão expirada ou sem permissão. Avise o setor de TI.';
   }
+  if (/aguarde alguns segundos/i.test(msg)) {
+    return msg; // mensagem do throttle do Worker já é amigável, só repassa
+  }
   if (/Erro HTTP 5\d\d/.test(msg)) {
     return 'O sistema está indisponível agora. Tente novamente em alguns minutos.';
   }

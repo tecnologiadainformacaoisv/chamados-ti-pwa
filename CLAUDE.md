@@ -57,6 +57,7 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 - Não há banco de dados próprio. Cada chamado é uma **task do ClickUp** na lista `901324490220`.
 - Campos customizados: `EMAIL`, `TIPO`, `SOLICITANTE`, `SETOR`, `SOLUCAO` (IDs em `FIELD_IDS` no app.js).
 - **O navegador nunca recebe a chave da API do ClickUp.** Toda chamada de `app.js` (`apiRequest`) vai pro Cloudflare Worker (`push-worker.js`, rotas `/api/*`), que injeta `env.CLICKUP_API_KEY` (secret, só existe no Worker) antes de repassar pra `api.clickup.com`. O que `app.js` manda é só `APP_SHARED_SECRET` num header (`X-App-Secret`), que só libera o uso do proxy — não dá acesso à ClickUp por si só.
+- **Segurança básica do Worker:** CORS restrito a `ALLOWED_ORIGIN` (só o domínio do GitHub Pages, não mais `*`) e throttle de 10s por solicitante em `/api/tasks` (POST), reaproveitando o KV `SUBSCRIPTIONS` já usado pro dedup da automação — evita duplo-clique virar chamado duplicado e freia flood sem precisar de infra nova.
 
 ### Notificações push
 - Arquitetura: browser → Cloudflare Worker (`chamados-ti-push.tecnologiadainformacao-isv.workers.dev`) → Web Push.
