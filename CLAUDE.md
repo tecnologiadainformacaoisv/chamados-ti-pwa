@@ -90,7 +90,9 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 
 - **Prioridade é automática** — definida pelo tipo do chamado via `CATEGORIA_PRIORIDADE`. Não expor seleção manual de prioridade ao usuário.
 - **Prioridade "Baixa" não existe** — nenhuma categoria mapeia para ela; o ClickUp a ignora neste contexto.
-- **SLA exibido** é informativo (calculado no cliente com `task.due_date`); quem define o `due_date` real é o ClickUp via automação.
+- **SLA exibido** é informativo (calculado no cliente com `task.due_date`); quem define o `due_date` real é o ClickUp via automação (`push-worker.js`). Existem **duas fases de prazo distintas**, não uma só:
+  - **Aceitação** (Aberto → Em Atendimento): contada da criação do chamado. Urgente 1h / Alta 4h / Normal 24h — vem de `PRIORITY.slaMs` em `app.js`.
+  - **Finalização** (Em Atendimento → Encerrado): contada do momento em que o operador marca "Em Atendimento" (não da criação). Se a task tiver `time_estimate` preenchido manualmente na ClickUp, ele tem prioridade; senão, cai no padrão por prioridade em `DEFAULT_TIME_ESTIMATE_MS` (`push-worker.js`): **Urgente 15min / Alta 30min / Normal 1h**. "Baixa" não tem padrão (prioridade não usada pelo app).
 - **Lista de solicitantes é buscada em runtime direto do campo customizado SOLICITANTE na ClickUp** (`loadSolicitantes()` em `app.js`) — não existe mais array fixo no código. Adicionar/renomear alguém só na ClickUp já é suficiente; não precisa mais editar nem publicar o app. `localStorage.user_name` guarda o nome (string), não mais um índice numérico. Existe uma tabela de migração (`LEGACY_USER_IDX_TO_NAME`) só pra traduzir o índice antigo de quem configurou o app antes da v0.2.5 — essa tabela é histórica e não deve ser editada.
 - **Sincronização de status:** as chaves de `STATUS_MAP` em `app.js` devem ficar idênticas a `NOTIFY_STATUSES` em `push-worker.js`.
 - **Sincronização de campo:** o field_id de `SOLICITANTE` deve ser idêntico em `FIELD_IDS` (app.js) e em `push-worker.js`.

@@ -26,6 +26,16 @@ const NOTIFY_STATUSES = {
   'encerrado':      'Encerrado'
 };
 
+// Prazo de finalização por prioridade (contado a partir de "Em Atendimento", não da criação).
+// Usado só quando a task NÃO tem time_estimate manual definido — se alguém preencher a
+// estimativa na ClickUp, ela sempre tem prioridade sobre este padrão. "low" não tem padrão
+// porque a prioridade "Baixa" nunca é usada pelo app (CATEGORIA_PRIORIDADE nunca mapeia pra ela).
+const DEFAULT_TIME_ESTIMATE_MS = {
+  urgent: 15 * 60000, // 15min
+  high:   30 * 60000, // 30min
+  normal: 60 * 60000, // 1h
+};
+
 const CORS = {
   'Access-Control-Allow-Origin':  '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -263,9 +273,9 @@ async function runStatusAutomation(taskId, status, prevStatus, task, env) {
     }
 
     if (status === 'em atendimento') {
-      const timeEstimate = task.time_estimate;
+      const timeEstimate = task.time_estimate || DEFAULT_TIME_ESTIMATE_MS[task.priority?.priority];
       if (!timeEstimate) {
-        console.log(`Automação: sem time_estimate em ${taskId}, ignorando`);
+        console.log(`Automação: sem time_estimate em ${taskId} e sem padrão pra prioridade "${task.priority?.priority}", ignorando`);
         return;
       }
 
