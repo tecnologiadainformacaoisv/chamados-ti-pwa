@@ -9,10 +9,15 @@
 //                        status E no proxy /api/* (o app.js NUNCA recebe essa chave)
 //   SUBSCRIBE_SECRET  → mesmo valor de APP_SHARED_SECRET no app.js (marcar como secret) —
 //                        valida /subscribe e /api/* (header X-App-Secret) e /auth/* (mesmo header)
+//   ADMIN_SECRET      → segredo só seu (marcar como secret) — gere um valor aleatório
+//                        qualquer, NUNCA o mesmo do SUBSCRIBE_SECRET. Não fica em nenhum
+//                        lugar do app.js/navegador. Usado só em GET /admin/users
+//                        (header X-Admin-Secret) pra listar quem já tem senha cadastrada.
 //
 // KV Namespace (Settings → KV Namespace Bindings → Add):
 //   Nome da variável: SUBSCRIPTIONS — reaproveitado também pra login (sem KV novo):
-//     auth_<nome>       → { algo, iterations, salt, hash } (senha, nunca expira sozinha)
+//     auth_<nome>       → { algo, iterations, salt, hash, createdAt, lastLoginAt } (senha,
+//                          nunca expira sozinha — dado exposto em /admin/users é só nome/datas)
 //     session_<token>   → { name } (expira em SESSION_TTL_SECONDS)
 //     loginfail_<nome>  → contador de tentativas erradas (expira em 15min)
 // =====================================================================
@@ -45,7 +50,7 @@ const ALLOWED_ORIGIN = 'https://tecnologiadainformacaoisv.github.io';
 const CORS = {
   'Access-Control-Allow-Origin':  ALLOWED_ORIGIN,
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, X-App-Secret, X-Session-Token',
+  'Access-Control-Allow-Headers': 'Content-Type, X-App-Secret, X-Session-Token, X-Admin-Secret',
 };
 
 // Login: sessão de 90 dias, senha com PBKDF2 (formato autodescritivo — dá pra trocar de
@@ -85,6 +90,7 @@ export default {
     if (request.method === 'GET') {
       if (pathname === '/api/field')    return handleGetField(request, env);
       if (pathname === '/api/my-tasks') return handleGetMyTasks(request, env);
+      if (pathname === '/admin/users')  return handleAdminListUsers(request, env);
       const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
       if (taskMatch) return handleGetTask(request, env, taskMatch[1]);
       return new Response('Chamados TI – Push Worker OK', { status: 200 });
@@ -288,6 +294,8 @@ async function setAuthRecord(name, password, env) {
     iterations: PBKDF2_ITERATIONS,
     salt: bytesToUrlB64(saltBytes),
     hash: await pbkdf2Hash(password, saltBytes, PBKDF2_ITERATIONS),
+    createdAt: Date.now(),
+    lastLoginAt: Date.now(),
   };
   await env.SUBSCRIPTIONS.put(`auth_${name}`, JSON.stringify(record));
 }
@@ -348,16 +356,53 @@ async function handleLogin(request, env) {
 
   const raw = await env.SUBSCRIPTIONS.get(`auth_${name}`);
   if (!raw) return jsonRes({ error: 'Sem senha cadastrada pra esse nome ainda' }, 404);
+  const record = JSON.parse(raw);
 
-  const ok = await verifyPassword(password, JSON.parse(raw));
+  const ok = await verifyPassword(password, record);
   if (!ok) {
     await env.SUBSCRIPTIONS.put(failKey, String(failCount + 1), { expirationTtl: LOGIN_LOCKOUT_SECONDS });
     return jsonRes({ error: 'Senha incorreta' }, 401);
   }
 
   await env.SUBSCRIPTIONS.delete(failKey);
+  record.lastLoginAt = Date.now();
+  await env.SUBSCRIPTIONS.put(`auth_${name}`, JSON.stringify(record));
   const token = await createSession(name, env);
   return jsonRes({ token, name });
+}
+
+// =====================================================================
+// /admin/users — lista quem já tem senha cadastrada (nome, quando criou, último login).
+// Protegido por env.ADMIN_SECRET (header X-Admin-Secret) — segredo separado do
+// APP_SHARED_SECRET, nunca fica em app.js nem em nenhum lugar do navegador de ninguém.
+// Nunca devolve hash/salt de senha, só metadados.
+// =====================================================================
+function isAdmin(request, env) {
+  return !!env.ADMIN_SECRET && request.headers.get('X-Admin-Secret') === env.ADMIN_SECRET;
+}
+
+async function handleAdminListUsers(request, env) {
+  if (!isAdmin(request, env)) return unauthorized();
+
+  const users = [];
+  let cursor;
+  do {
+    const list = await env.SUBSCRIPTIONS.list({ prefix: 'auth_', cursor });
+    for (const key of list.keys) {
+      const raw = await env.SUBSCRIPTIONS.get(key.name);
+      if (!raw) continue;
+      const record = JSON.parse(raw);
+      users.push({
+        name: key.name.slice('auth_'.length),
+        createdAt: record.createdAt ?? null,
+        lastLoginAt: record.lastLoginAt ?? null,
+      });
+    }
+    cursor = list.list_complete ? undefined : list.cursor;
+  } while (cursor);
+
+  users.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  return jsonRes({ total: users.length, users });
 }
 
 // =====================================================================

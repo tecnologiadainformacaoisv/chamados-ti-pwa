@@ -23,6 +23,12 @@ function makeMockKV() {
     get: async k => (store.has(k) ? store.get(k) : null),
     put: async (k, v) => { store.set(k, v); },
     delete: async k => store.delete(k),
+    // Mock simplificado do KV.list({prefix}) real da Cloudflare — sem paginação (nosso volume é pequeno).
+    list: async ({ prefix = '' } = {}) => ({
+      keys: [...store.keys()].filter(k => k.startsWith(prefix)).map(name => ({ name })),
+      list_complete: true,
+      cursor: undefined,
+    }),
   };
 }
 
@@ -64,7 +70,7 @@ async function test(name, fn) {
     return realFetch(url, opts);
   };
 
-  const env = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', SUBSCRIPTIONS: makeMockKV() };
+  const env = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV() };
   const SECRET_HEADERS = { 'X-App-Secret': env.SUBSCRIBE_SECRET, 'Content-Type': 'application/json' };
 
   console.log('--- registro e login ---');
@@ -142,6 +148,42 @@ async function test(name, fn) {
   await test('criação sem sessão dá 401', async () => {
     const res = await worker.fetch(req('POST', '/api/tasks', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'x' }) }), env);
     assert.strictEqual(res.status, 401);
+  });
+
+  console.log('--- /admin/users (visão geral de quem já criou senha) ---');
+  await test('sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('GET', '/admin/users'), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('com X-Admin-Secret errado dá 403', async () => {
+    const res = await worker.fetch(req('GET', '/admin/users', { headers: { 'X-Admin-Secret': 'chute' } }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('X-App-Secret (o do app, não o de admin) NÃO dá acesso ao admin', async () => {
+    const res = await worker.fetch(req('GET', '/admin/users', { headers: SECRET_HEADERS }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('lista Michael e Ariele (os dois já registrados), sem vazar hash/salt de senha', async () => {
+    const res = await worker.fetch(req('GET', '/admin/users', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual(res.status, 200);
+    const { total, users } = await res.json();
+    assert.strictEqual(total, 2);
+    const names = users.map(u => u.name).sort();
+    assert.deepStrictEqual(names, ['Ariele Santo', 'Michael Vasconcelos']);
+    users.forEach(u => {
+      assert.ok(u.createdAt, `${u.name} sem createdAt`);
+      assert.strictEqual(u.hash, undefined, 'endpoint de admin não pode devolver hash de senha');
+      assert.strictEqual(u.salt, undefined, 'endpoint de admin não pode devolver salt de senha');
+    });
+  });
+  await test('lastLoginAt é atualizado depois de um login bem-sucedido', async () => {
+    const before = (await worker.fetch(req('GET', '/admin/users', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json()))
+      .users.find(u => u.name === 'Michael Vasconcelos').lastLoginAt;
+    await new Promise(r => setTimeout(r, 5));
+    await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Michael Vasconcelos', password: 'senha123' }) }), env);
+    const after = (await worker.fetch(req('GET', '/admin/users', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json()))
+      .users.find(u => u.name === 'Michael Vasconcelos').lastLoginAt;
+    assert.ok(after > before, 'lastLoginAt deveria ter avançado após novo login');
   });
 
   console.log('--- CORS e logout ---');

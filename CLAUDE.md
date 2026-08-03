@@ -74,6 +74,7 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 - **Brute-force:** 5 tentativas erradas de senha bloqueiam novos logins daquele nome por 15min (`loginfail_<nome>`, expira sozinho).
 - **Esqueceu a senha / nome "roubado":** sem tela de admin — a TI apaga a chave `auth_<nome>` direto no painel do KV da Cloudflare, e a pessoa cadastra de novo no próximo login.
 - **Não dá mais pra "trocar de nome"** nas configurações do app — quem você é vem da sessão autenticada. Pra usar como outra pessoa, precisa deslogar e logar com a senha dela.
+- **`GET /admin/users`** (2026-07-24) — visão geral de quem já tem senha cadastrada (nome, `createdAt`, `lastLoginAt`; nunca hash/salt), protegida por `env.ADMIN_SECRET` (header `X-Admin-Secret`) — segredo **separado** do `APP_SHARED_SECRET`, nunca fica no app.js/navegador. Não é um painel visual, só um endpoint — a TI consulta via curl (ou uma páginazinha própria, se um dia quiser). Serve pra: acompanhar quem já entrou no rollout, e desconfiar/checar se alguém pode ter cadastrado o nome errado por engano.
 
 ### Notificações push
 - Arquitetura: browser → Cloudflare Worker (`chamados-ti-push.tecnologiadainformacao-isv.workers.dev`) → Web Push.
