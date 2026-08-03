@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="TI Chamados">
-  <meta name="app-version" content="0.2.11">
+  <meta name="app-version" content="0.3.0">
   <title>Chamados de TI – ISV</title>
   <link rel="manifest" href="manifest.json">
   <link rel="icon" type="image/png" href="assets/favicon-isv.png">
@@ -62,8 +62,14 @@
           </select>
         </div>
 
+        <div class="setup-field">
+          <label for="setup-password">Senha *</label>
+          <input id="setup-password" type="password" required autocomplete="current-password" placeholder="Sua senha de acesso">
+          <small>Primeira vez? A senha que você digitar aqui vira sua senha de acesso.</small>
+        </div>
+
         <button id="setup-btn" type="submit" class="btn-primary btn-full">
-          <span>Salvar e Entrar</span>
+          <span>Entrar</span>
         </button>
       </form>
     </div>
@@ -290,7 +296,7 @@
 
     </main>
 
-    <footer class="app-footer">Instituto São Vicente · Chamados de TI · v0.2.11</footer>
+    <footer class="app-footer">Instituto São Vicente · Chamados de TI · v0.3.0</footer>
   </div>
 
   <!-- ===================== SETTINGS MODAL ===================== -->
@@ -307,10 +313,8 @@
       </div>
       <div class="modal-body">
         <div class="form-group">
-          <label for="settings-name">Seu nome</label>
-          <select id="settings-name">
-            <option value="">Selecione...</option>
-          </select>
+          <label>Logado como</label>
+          <div id="settings-name-display" class="input-display"></div>
         </div>
       </div>
       <div class="modal-footer">
@@ -322,8 +326,7 @@
           Desconectar
         </button>
         <div class="modal-footer-right">
-          <button id="settings-cancel" class="btn-secondary">Cancelar</button>
-          <button id="settings-save" class="btn-primary">Salvar</button>
+          <button id="settings-cancel" class="btn-secondary">Fechar</button>
         </div>
       </div>
     </div>

@@ -8,10 +8,13 @@
 //   CLICKUP_API_KEY   → chave da API do ClickUp (marcar como secret) — usada na automação de
 //                        status E no proxy /api/* (o app.js NUNCA recebe essa chave)
 //   SUBSCRIBE_SECRET  → mesmo valor de APP_SHARED_SECRET no app.js (marcar como secret) —
-//                        valida /subscribe (via body) e /api/* (via header X-App-Secret)
+//                        valida /subscribe e /api/* (header X-App-Secret) e /auth/* (mesmo header)
 //
 // KV Namespace (Settings → KV Namespace Bindings → Add):
-//   Nome da variável: SUBSCRIPTIONS
+//   Nome da variável: SUBSCRIPTIONS — reaproveitado também pra login (sem KV novo):
+//     auth_<nome>       → { algo, iterations, salt, hash } (senha, nunca expira sozinha)
+//     session_<token>   → { name } (expira em SESSION_TTL_SECONDS)
+//     loginfail_<nome>  → contador de tentativas erradas (expira em 15min)
 // =====================================================================
 
 // ⚠️ Mantenha sincronizado com LIST_ID/FIELD_IDS.SOLICITANTE em app.js
@@ -42,8 +45,15 @@ const ALLOWED_ORIGIN = 'https://tecnologiadainformacaoisv.github.io';
 const CORS = {
   'Access-Control-Allow-Origin':  ALLOWED_ORIGIN,
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, X-App-Secret',
+  'Access-Control-Allow-Headers': 'Content-Type, X-App-Secret, X-Session-Token',
 };
+
+// Login: sessão de 90 dias, senha com PBKDF2 (formato autodescritivo — dá pra trocar de
+// algoritmo/parâmetros no futuro sem invalidar senha de ninguém, ver auth_<nome> no KV).
+const SESSION_TTL_SECONDS = 90 * 24 * 3600;
+const PBKDF2_ITERATIONS   = 100000;
+const MAX_LOGIN_FAILURES  = 5;
+const LOGIN_LOCKOUT_SECONDS = 15 * 60;
 
 // =====================================================================
 // ROUTER
@@ -59,19 +69,22 @@ export default {
       return new Response(null, { status: 204, headers: CORS });
     }
 
-    const { pathname, search } = new URL(request.url);
+    const { pathname } = new URL(request.url);
 
     if (request.method === 'POST') {
-      if (pathname === '/subscribe') return handleSubscribe(request, env);
-      if (pathname === '/webhook')   return handleWebhook(request, env);
-      if (pathname === '/api/tasks') return handleCreateTask(request, env);
+      if (pathname === '/auth/register') return handleRegister(request, env);
+      if (pathname === '/auth/login')    return handleLogin(request, env);
+      if (pathname === '/auth/logout')   return handleLogout(request, env);
+      if (pathname === '/subscribe')     return handleSubscribe(request, env);
+      if (pathname === '/webhook')       return handleWebhook(request, env);
+      if (pathname === '/api/tasks')     return handleCreateTask(request, env);
       const attachMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/attachment$/);
       if (attachMatch) return handleUploadAttachment(request, env, attachMatch[1]);
     }
 
     if (request.method === 'GET') {
-      if (pathname === '/api/field') return handleGetField(request, env);
-      if (pathname === '/api/tasks') return handleGetTasks(request, env, search);
+      if (pathname === '/api/field')    return handleGetField(request, env);
+      if (pathname === '/api/my-tasks') return handleGetMyTasks(request, env);
       const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
       if (taskMatch) return handleGetTask(request, env, taskMatch[1]);
       return new Response('Chamados TI – Push Worker OK', { status: 200 });
@@ -89,8 +102,12 @@ function hasValidSecret(request, env) {
   return request.headers.get('X-App-Secret') === env.SUBSCRIBE_SECRET;
 }
 
-function unauthorized() {
-  return jsonRes({ error: 'não autorizado' }, 403);
+function unauthorized(msg = 'não autorizado') {
+  return jsonRes({ error: msg }, 403);
+}
+
+function sessionInvalid() {
+  return jsonRes({ error: 'sessão inválida ou expirada, faça login novamente' }, 401);
 }
 
 async function passthrough(upstream) {
@@ -101,6 +118,34 @@ async function passthrough(upstream) {
   });
 }
 
+// Quem está autenticado nesta requisição, segundo o token de sessão — nunca segundo o que
+// o cliente alega no corpo/query. Base de tudo que protege um solicitante ver dado de outro.
+async function requireSession(request, env) {
+  const token = request.headers.get('X-Session-Token');
+  if (!token) return null;
+  const raw = await env.SUBSCRIPTIONS.get(`session_${token}`);
+  return raw ? JSON.parse(raw) : null;
+}
+
+// Nome <-> orderindex real da ClickUp, buscado fresco a cada chamada que precisa (mesma
+// lógica de app.js, só que do lado do servidor — usada pra nunca confiar no índice que o
+// cliente manda ao criar/filtrar/notificar.
+async function getSolicitanteMaps(env) {
+  const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/field`, {
+    headers: { Authorization: env.CLICKUP_API_KEY }
+  });
+  const data = await upstream.json();
+  const field = data.fields?.find(f => f.id === SOLICITANTE_FIELD_ID);
+  const options = field?.type_config?.options || [];
+  const nameToIdx = {};
+  const idxToName = {};
+  for (const opt of options) {
+    nameToIdx[opt.name] = opt.orderindex;
+    idxToName[opt.orderindex] = opt.name;
+  }
+  return { nameToIdx, idxToName };
+}
+
 async function handleGetField(request, env) {
   if (!hasValidSecret(request, env)) return unauthorized();
   const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/field`, {
@@ -109,51 +154,105 @@ async function handleGetField(request, env) {
   return passthrough(upstream);
 }
 
-async function handleGetTasks(request, env, search) {
-  if (!hasValidSecret(request, env)) return unauthorized();
-  const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task${search}`, {
-    headers: { Authorization: env.CLICKUP_API_KEY }
-  });
-  return passthrough(upstream);
+// Substitui o antigo GET /api/tasks (sem filtro nenhum, que devolvia TODO MUNDO pra
+// qualquer um com o secret do app). Agora sempre escopado pra quem está logado — o
+// filtro é decidido aqui dentro, o cliente não escolhe mais de quem são os chamados.
+async function handleGetMyTasks(request, env) {
+  const session = await requireSession(request, env);
+  if (!session) return sessionInvalid();
+
+  const { nameToIdx, idxToName } = await getSolicitanteMaps(env);
+  const cuIdx = nameToIdx[session.name];
+
+  let tasks = [];
+  if (cuIdx != null) {
+    const cf     = JSON.stringify([{ field_id: SOLICITANTE_FIELD_ID, operator: '=', value: cuIdx }]);
+    const params = new URLSearchParams({ order_by: 'created', reverse: 'true', include_closed: 'true', page: '0', custom_fields: cf });
+    const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task?${params}`, {
+      headers: { Authorization: env.CLICKUP_API_KEY }
+    });
+    const data = await upstream.json();
+    tasks = data.tasks || [];
+  }
+
+  if (tasks.length === 0) {
+    // Fallback pra chamados antigos que possam ter sido salvos com índice divergente:
+    // busca tudo e filtra aqui dentro pelo nome real — o cliente nunca recebe os dados
+    // de quem não deveria, mesmo nesse caminho alternativo.
+    const params = new URLSearchParams({ order_by: 'created', reverse: 'true', include_closed: 'true', page: '0' });
+    const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task?${params}`, {
+      headers: { Authorization: env.CLICKUP_API_KEY }
+    });
+    const data = await upstream.json();
+    tasks = (data.tasks || []).filter(t => {
+      const cf = t.custom_fields?.find(f => f.id === SOLICITANTE_FIELD_ID);
+      const v  = cf?.value?.orderindex ?? cf?.value;
+      return idxToName[v] === session.name;
+    });
+  }
+
+  return jsonRes({ tasks });
 }
 
 async function handleGetTask(request, env, taskId) {
-  if (!hasValidSecret(request, env)) return unauthorized();
+  const session = await requireSession(request, env);
+  if (!session) return sessionInvalid();
+
   const upstream = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
     headers: { Authorization: env.CLICKUP_API_KEY }
   });
-  return passthrough(upstream);
+  const text = await upstream.text();
+  if (!upstream.ok) {
+    return new Response(text, { status: upstream.status, headers: { ...CORS, 'Content-Type': 'application/json' } });
+  }
+
+  // Dono do chamado tem que bater com quem está logado — sem isso, dava pra ver qualquer
+  // chamado só sabendo/adivinhando o ID.
+  const task = JSON.parse(text);
+  const { idxToName } = await getSolicitanteMaps(env);
+  const cf = task.custom_fields?.find(f => f.id === SOLICITANTE_FIELD_ID);
+  const v  = cf?.value?.orderindex ?? cf?.value;
+  if (idxToName[v] !== session.name) return unauthorized('sem permissão pra ver esse chamado');
+
+  return new Response(text, { status: 200, headers: { ...CORS, 'Content-Type': 'application/json' } });
 }
 
 async function handleCreateTask(request, env) {
-  if (!hasValidSecret(request, env)) return unauthorized();
-  const body = await request.text();
+  const session = await requireSession(request, env);
+  if (!session) return sessionInvalid();
 
-  // Throttle simples: no máximo 1 chamado a cada 10s por solicitante — evita duplo-clique
-  // acidental virando 2 tickets, e freia flood malicioso sem precisar de infra nova
-  // (reaproveita o mesmo KV já usado pro dedup da automação).
-  let solicitanteIdx;
-  try {
-    solicitanteIdx = JSON.parse(body).custom_fields?.find(f => f.id === SOLICITANTE_FIELD_ID)?.value;
-  } catch {}
-  if (solicitanteIdx != null) {
-    const throttleKey = `throttle_create_${solicitanteIdx}`;
-    if (await env.SUBSCRIPTIONS.get(throttleKey)) {
-      return jsonRes({ error: 'Aguarde alguns segundos antes de abrir outro chamado' }, 429);
-    }
-    await env.SUBSCRIPTIONS.put(throttleKey, '1', { expirationTtl: 10 });
+  let payload;
+  try { payload = JSON.parse(await request.text()); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+
+  // Nunca confia no valor de SOLICITANTE que o cliente mandou — troca pelo da sessão
+  // autenticada. É isso que impede alguém de abrir um chamado "como" outra pessoa.
+  const { nameToIdx } = await getSolicitanteMaps(env);
+  const cuIdx = nameToIdx[session.name];
+  if (cuIdx == null) return jsonRes({ error: 'não foi possível confirmar seu cadastro na ClickUp' }, 400);
+
+  payload.custom_fields = (payload.custom_fields || []).filter(f => f.id !== SOLICITANTE_FIELD_ID);
+  payload.custom_fields.push({ id: SOLICITANTE_FIELD_ID, value: cuIdx });
+
+  // Throttle simples: no máximo 1 chamado a cada 10s por pessoa logada — evita duplo-clique
+  // acidental virando 2 tickets, e freia flood sem precisar de infra nova (reaproveita o
+  // mesmo KV já usado pro dedup da automação).
+  const throttleKey = `throttle_create_${session.name}`;
+  if (await env.SUBSCRIPTIONS.get(throttleKey)) {
+    return jsonRes({ error: 'Aguarde alguns segundos antes de abrir outro chamado' }, 429);
   }
+  await env.SUBSCRIPTIONS.put(throttleKey, '1', { expirationTtl: 10 });
 
   const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task`, {
     method: 'POST',
     headers: { Authorization: env.CLICKUP_API_KEY, 'Content-Type': 'application/json' },
-    body
+    body: JSON.stringify(payload)
   });
   return passthrough(upstream);
 }
 
 async function handleUploadAttachment(request, env, taskId) {
-  if (!hasValidSecret(request, env)) return unauthorized();
+  const session = await requireSession(request, env);
+  if (!session) return sessionInvalid();
   const upstream = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/attachment`, {
     method: 'POST',
     headers: {
@@ -166,22 +265,131 @@ async function handleUploadAttachment(request, env, taskId) {
 }
 
 // =====================================================================
+// AUTENTICAÇÃO — hash de senha (PBKDF2-SHA256, formato autodescritivo em auth_<nome>)
+// e sessão (token opaco em session_<token>, TTL de SESSION_TTL_SECONDS).
+// =====================================================================
+async function pbkdf2Hash(password, saltBytes, iterations) {
+  const keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: saltBytes, iterations, hash: 'SHA-256' }, keyMaterial, 256);
+  return bytesToUrlB64(new Uint8Array(bits));
+}
+
+function timingSafeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function setAuthRecord(name, password, env) {
+  const saltBytes = crypto.getRandomValues(new Uint8Array(16));
+  const record = {
+    algo: 'pbkdf2-sha256',
+    iterations: PBKDF2_ITERATIONS,
+    salt: bytesToUrlB64(saltBytes),
+    hash: await pbkdf2Hash(password, saltBytes, PBKDF2_ITERATIONS),
+  };
+  await env.SUBSCRIPTIONS.put(`auth_${name}`, JSON.stringify(record));
+}
+
+async function verifyPassword(password, record) {
+  const hash = await pbkdf2Hash(password, urlB64ToBytes(record.salt), record.iterations);
+  return timingSafeEqual(hash, record.hash);
+}
+
+async function createSession(name, env) {
+  const token = bytesToUrlB64(crypto.getRandomValues(new Uint8Array(32)));
+  await env.SUBSCRIPTIONS.put(`session_${token}`, JSON.stringify({ name }), { expirationTtl: SESSION_TTL_SECONDS });
+  return token;
+}
+
+// =====================================================================
+// /auth/register — cria a senha de alguém que ainda não tem uma (primeiro acesso).
+// Body: { name, password, secret }
+// =====================================================================
+async function handleRegister(request, env) {
+  if (!hasValidSecret(request, env)) return unauthorized();
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+
+  const name = body.name;
+  const password = body.password;
+  if (!name || !password || password.length < 4) {
+    return jsonRes({ error: 'Nome e senha (mínimo 4 caracteres) são obrigatórios' }, 400);
+  }
+
+  if (await env.SUBSCRIPTIONS.get(`auth_${name}`)) {
+    return jsonRes({ error: 'Já existe uma senha cadastrada pra esse nome. Se esqueceu, peça pro TI resetar.' }, 409);
+  }
+
+  await setAuthRecord(name, password, env);
+  const token = await createSession(name, env);
+  return jsonRes({ token, name });
+}
+
+// =====================================================================
+// /auth/login — valida senha existente e devolve um token de sessão.
+// Body: { name, password, secret }
+// =====================================================================
+async function handleLogin(request, env) {
+  if (!hasValidSecret(request, env)) return unauthorized();
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+
+  const name = body.name;
+  const password = body.password;
+  if (!name || !password) return jsonRes({ error: 'Nome e senha são obrigatórios' }, 400);
+
+  const failKey = `loginfail_${name}`;
+  const failCount = parseInt(await env.SUBSCRIPTIONS.get(failKey) || '0');
+  if (failCount >= MAX_LOGIN_FAILURES) {
+    return jsonRes({ error: 'Muitas tentativas erradas. Aguarde 15 minutos e tente de novo.' }, 429);
+  }
+
+  const raw = await env.SUBSCRIPTIONS.get(`auth_${name}`);
+  if (!raw) return jsonRes({ error: 'Sem senha cadastrada pra esse nome ainda' }, 404);
+
+  const ok = await verifyPassword(password, JSON.parse(raw));
+  if (!ok) {
+    await env.SUBSCRIPTIONS.put(failKey, String(failCount + 1), { expirationTtl: LOGIN_LOCKOUT_SECONDS });
+    return jsonRes({ error: 'Senha incorreta' }, 401);
+  }
+
+  await env.SUBSCRIPTIONS.delete(failKey);
+  const token = await createSession(name, env);
+  return jsonRes({ token, name });
+}
+
+// =====================================================================
+// /auth/logout — invalida o token de sessão atual.
+// =====================================================================
+async function handleLogout(request, env) {
+  const token = request.headers.get('X-Session-Token');
+  if (token) await env.SUBSCRIPTIONS.delete(`session_${token}`);
+  return jsonRes({ ok: true });
+}
+
+// =====================================================================
 // /subscribe — salva subscription do usuário no KV
 // Body: { user_idx: number, subscription: PushSubscription, secret: string }
 // =====================================================================
 async function handleSubscribe(request, env) {
   try {
-    const { user_idx, subscription, secret } = await request.json();
+    if (!hasValidSecret(request, env)) return unauthorized();
 
-    if (env.SUBSCRIBE_SECRET && secret !== env.SUBSCRIBE_SECRET) {
-      return jsonRes({ error: 'não autorizado' }, 403);
-    }
+    const session = await requireSession(request, env);
+    if (!session) return sessionInvalid();
 
-    if (user_idx == null || !subscription?.endpoint) {
-      return jsonRes({ error: 'user_idx ou subscription ausente' }, 400);
-    }
+    const { subscription } = await request.json();
+    if (!subscription?.endpoint) return jsonRes({ error: 'subscription ausente' }, 400);
 
-    await env.SUBSCRIPTIONS.put(`u_${user_idx}`, JSON.stringify(subscription));
+    // O índice usado como chave é resolvido aqui, não mandado pelo cliente — fica
+    // consistente com o valor que /webhook lê depois direto da task pra achar essa chave.
+    const { nameToIdx } = await getSolicitanteMaps(env);
+    const cuIdx = nameToIdx[session.name];
+    if (cuIdx == null) return jsonRes({ error: 'não foi possível confirmar seu cadastro na ClickUp' }, 400);
+
+    await env.SUBSCRIPTIONS.put(`u_${cuIdx}`, JSON.stringify(subscription));
     return jsonRes({ ok: true });
   } catch (err) {
     return jsonRes({ error: err.message }, 500);

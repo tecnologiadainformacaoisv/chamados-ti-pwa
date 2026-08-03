@@ -12,6 +12,7 @@ const LIST_ID = '901324490220';
 // repassar pra api.clickup.com. Ver push-worker.js.
 const WORKER_URL = 'https://chamados-ti-push.tecnologiadainformacao-isv.workers.dev';
 const API_BASE   = `${WORKER_URL}/api`;
+const AUTH_BASE  = `${WORKER_URL}/auth`;
 
 // ⚠️ SOLICITANTE deve ficar sincronizado com SOLICITANTE_FIELD_ID em push-worker.js
 const FIELD_IDS = {
@@ -153,11 +154,23 @@ function userFriendlyError(err) {
 async function apiRequest(method, path, body = null) {
   const opts = {
     method,
-    headers: { 'X-App-Secret': APP_SHARED_SECRET, 'Content-Type': 'application/json' }
+    headers: {
+      'X-App-Secret':    APP_SHARED_SECRET,
+      'X-Session-Token': store.get('session_token') || '',
+      'Content-Type':    'application/json'
+    }
   };
   if (body) opts.body = JSON.stringify(body);
 
   const res = await fetch(`${API_BASE}${path}`, opts);
+
+  if (res.status === 401) {
+    // Sessão inválida/expirada: não dá pra continuar sem novo login. Recarrega a página,
+    // que já cai na tela de login por não ter mais session_token válido.
+    store.remove('session_token');
+    location.reload();
+    throw new Error('Sessão expirada, recarregando...');
+  }
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -177,39 +190,54 @@ async function uploadAttachment(taskId, file) {
   // Sem Content-Type manual: o browser define o boundary do multipart sozinho.
   const res = await fetch(`${API_BASE}/tasks/${taskId}/attachment`, {
     method: 'POST',
-    headers: { 'X-App-Secret': APP_SHARED_SECRET },
+    headers: { 'X-App-Secret': APP_SHARED_SECRET, 'X-Session-Token': store.get('session_token') || '' },
     body: formData
   });
   if (!res.ok) throw new Error(`Erro HTTP ${res.status}`);
   return res.json();
 }
 
-async function fetchTasks() {
-  const params = new URLSearchParams({
-    order_by: 'created',
-    reverse: 'true',
-    include_closed: 'true',
-    page: '0'
+// ============================================================
+// AUTENTICAÇÃO (login com senha — pedido da diretoria pra ninguém ver chamado de outro)
+// ============================================================
+async function authRequest(path, body) {
+  const res = await fetch(`${AUTH_BASE}${path}`, {
+    method: 'POST',
+    headers: { 'X-App-Secret': APP_SHARED_SECRET, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
   });
-  const data = await apiRequest('GET', `/tasks?${params}`);
-  return data.tasks || [];
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || `Erro HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return data; // { token, name }
 }
 
-async function fetchMyTasks(userIdx) {
+function login(name, password) {
+  return authRequest('/login', { name, password });
+}
+
+function register(name, password) {
+  return authRequest('/register', { name, password });
+}
+
+async function logoutFromServer() {
+  const token = store.get('session_token');
+  if (!token) return;
   try {
-    const cf = JSON.stringify([{
-      field_id: FIELD_IDS.SOLICITANTE,
-      operator: '=',
-      value: userIdx
-    }]);
-    const params = new URLSearchParams({
-      order_by: 'created',
-      reverse: 'true',
-      include_closed: 'true',
-      page: '0',
-      custom_fields: cf
-    });
-    const data = await apiRequest('GET', `/tasks?${params}`);
+    await fetch(`${AUTH_BASE}/logout`, { method: 'POST', headers: { 'X-Session-Token': token } });
+  } catch {
+    // se não conseguir avisar o servidor, tudo bem — a sessão vai expirar sozinha
+  }
+}
+
+// O Worker decide de quem são os chamados a partir do token de sessão — não manda mais
+// nenhum índice/nome daqui. Ver handleGetMyTasks em push-worker.js.
+async function fetchMyTasks() {
+  try {
+    const data = await apiRequest('GET', '/my-tasks');
     return data.tasks || [];
   } catch {
     return [];
@@ -240,14 +268,6 @@ async function loadSolicitantes() {
   cuSolicitanteMap    = nameToIdx;
   cuIdxToNameMap      = idxToName;
   solicitanteOptions  = sortedOptions;
-}
-
-// Traduz o nome do usuário logado (localStorage.user_name) pro orderindex real da ClickUp,
-// buscado fresco a cada carregamento — por isso não quebra quando a ClickUp reordena o campo.
-function myCuIdx() {
-  const name = store.get('user_name');
-  if (!name) return undefined;
-  return cuSolicitanteMap?.[name];
 }
 
 // Traduz o valor do campo SOLICITANTE vindo da ClickUp (orderindex real dela) pro nome a exibir.
@@ -388,20 +408,69 @@ function showSetup() {
   document.getElementById('setup-screen').classList.remove('hidden');
   document.getElementById('app').classList.add('hidden');
   populateSolicitanteSelect('setup-name');
+  // Pré-seleciona se já sabemos quem é (ex.: sessão expirada, ou migração de versão antiga)
+  const knownName = store.get('user_name');
+  const nameSel = document.getElementById('setup-name');
+  if (knownName && nameSel && [...nameSel.options].some(o => o.value === knownName)) {
+    nameSel.value = knownName;
+  }
+  const passwordEl = document.getElementById('setup-password');
+  if (passwordEl) passwordEl.value = '';
 }
 
-function onSetupSubmit(e) {
+// Erros de /auth/* já vêm com mensagem pronta pra mostrar (definidas em push-worker.js,
+// já em português e já pensadas pra quem não é de TI) — só cai no tradutor genérico se
+// for um erro sem status definido (rede, etc.).
+function authErrorMessage(err) {
+  return err?.status ? err.message : userFriendlyError(err);
+}
+
+async function onSetupSubmit(e) {
   e.preventDefault();
-  const nameEl  = document.getElementById('setup-name');
-  if (nameEl.value === '') {
+  const nameEl     = document.getElementById('setup-name');
+  const passwordEl = document.getElementById('setup-password');
+  const name       = nameEl.value;
+  const password   = passwordEl.value;
+
+  if (name === '') {
     toast('Selecione seu nome para continuar', 'error');
     return;
   }
+  if (!password) {
+    toast('Digite sua senha para continuar', 'error');
+    return;
+  }
 
-  store.set('user_name', nameEl.value);
+  const btn = document.getElementById('setup-btn');
+  const originalHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span>Entrando...</span>';
 
-  document.getElementById('setup-screen').classList.add('hidden');
-  initApp();
+  try {
+    let result;
+    try {
+      result = await login(name, password);
+    } catch (err) {
+      // Sem senha cadastrada ainda pra esse nome: a senha digitada agora vira a senha dele.
+      if (err.status === 404) {
+        result = await register(name, password);
+      } else {
+        throw err;
+      }
+    }
+
+    store.set('session_token', result.token);
+    store.set('user_name', result.name);
+    passwordEl.value = '';
+
+    document.getElementById('setup-screen').classList.add('hidden');
+    initApp();
+  } catch (err) {
+    toast(authErrorMessage(err), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = originalHtml;
+  }
 }
 
 // ============================================================
@@ -500,8 +569,7 @@ function populateForm() {
 async function onFormSubmit(e) {
   e.preventDefault();
 
-  const solName  = store.get('user_name');
-  const cuIdx    = myCuIdx();
+  const solName     = store.get('user_name');
   const setor       = document.getElementById('f-setor').value;
   const tipo        = document.getElementById('f-tipo').value;
   const operador    = document.querySelector('input[name="operador"]:checked')?.value;
@@ -509,10 +577,6 @@ async function onFormSubmit(e) {
   const detalhes    = document.getElementById('f-detalhes').value.trim();
   const anexos      = filtrarAnexosValidos(Array.from(document.getElementById('f-anexo')?.files || [])).validos;
 
-  if (!solName || cuIdx === undefined) {
-    toast('Não foi possível confirmar seu cadastro. Recarregue a página e tente de novo.', 'error');
-    return;
-  }
   if (!setor || !tipo || !operador || !descricao) {
     toast('Preencha todos os campos obrigatórios (*)', 'error');
     return;
@@ -534,10 +598,12 @@ async function onFormSubmit(e) {
   const taskName = descricao;
   const taskDesc = detalhes || '';
 
+  // SOLICITANTE não vai daqui — o Worker sempre sobrescreve com quem está autenticado na
+  // sessão (ver handleCreateTask em push-worker.js), pra ninguém conseguir abrir um chamado
+  // "como" outra pessoa mesmo mexendo no que o navegador manda.
   const customFields = [
-    { id: FIELD_IDS.SOLICITANTE, value: cuIdx },
-    { id: FIELD_IDS.SETOR,       value: parseInt(setor) },
-    { id: FIELD_IDS.TIPO,        value: parseInt(tipo) }
+    { id: FIELD_IDS.SETOR, value: parseInt(setor) },
+    { id: FIELD_IDS.TIPO,  value: parseInt(tipo) }
   ];
 
   try {
@@ -594,18 +660,10 @@ function setLoadingState(which, loading) {
 async function loadTickets() {
   setLoadingState('all', true);
   try {
-    const myName = store.get('user_name');
-    const cuIdx  = myCuIdx();
-    if (cuIdx === undefined) throw new Error('Não foi possível identificar seu usuário. Recarregue a página.');
-
-    let fetched = await fetchMyTasks(cuIdx);
-
-    if (fetched.length === 0) {
-      // Fallback: busca tudo e filtra no cliente pelo nome (cobre tarefas antigas que possam
-      // ter sido salvas com um índice diferente do orderindex atual da ClickUp)
-      const all = await fetchTasks();
-      fetched = all.filter(t => solicitanteDisplayName(getCustomField(t, FIELD_IDS.SOLICITANTE)) === myName);
-    }
+    // O Worker já devolve só os chamados de quem está logado (identidade vem da sessão, não
+    // de nada que o cliente manda) — o fallback pra dados antigos com índice divergente
+    // acontece lá dentro. Ver handleGetMyTasks em push-worker.js.
+    const fetched = await fetchMyTasks();
     checkStatusChanges(fetched);
     myTasks = fetched;
     // Garante mais recentes no topo, independente da ordenação da API
@@ -1011,14 +1069,11 @@ function setupSettings() {
   document.getElementById('settings-close')?.addEventListener('click', closeSettings);
   document.getElementById('settings-cancel')?.addEventListener('click', closeSettings);
   document.getElementById('settings-overlay')?.addEventListener('click', closeSettings);
-  document.getElementById('settings-save')?.addEventListener('click',  saveSettings);
   document.getElementById('settings-logout')?.addEventListener('click', doLogout);
 }
 
 function openSettings() {
-  populateSolicitanteSelect('settings-name');
-  document.getElementById('settings-name').value = store.get('user_name') || '';
-
+  document.getElementById('settings-name-display').textContent = store.get('user_name') || '—';
   document.getElementById('settings-modal').classList.remove('hidden');
 }
 
@@ -1026,22 +1081,12 @@ function closeSettings() {
   document.getElementById('settings-modal').classList.add('hidden');
 }
 
-function saveSettings() {
-  const nameVal = document.getElementById('settings-name').value;
-
-  if (nameVal === '') { toast('Selecione seu nome', 'error'); return; }
-
-  store.set('user_name', nameVal);
-
-  document.getElementById('user-name-display').textContent = nameVal;
-  populateForm();
-  renderAll();
-  closeSettings();
-  toast('Configurações salvas!');
-}
-
-function doLogout() {
-  if (!confirm('Desconectar e remover todas as configurações?')) return;
+// Não dá mais pra "trocar de nome" aqui — quem você é vem da sessão autenticada por senha,
+// não de uma seleção livre. Pra usar o app como outra pessoa, precisa desconectar e logar
+// de novo com a senha dela (é exatamente isso que impede um solicitante ver chamado de outro).
+async function doLogout() {
+  if (!confirm('Desconectar?')) return;
+  await logoutFromServer();
   localStorage.clear();
   location.reload();
 }
@@ -1287,12 +1332,16 @@ async function subscribeToPush() {
     });
   }
 
-  const cuIdx = myCuIdx();
-  if (cuIdx === undefined) return;
+  // Quem é o dono da subscription é resolvido pelo Worker a partir da sessão — não manda
+  // mais nenhum índice daqui (ver handleSubscribe em push-worker.js).
   await fetch(`${WORKER_URL}/subscribe`, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ user_idx: cuIdx, subscription: sub.toJSON(), secret: APP_SHARED_SECRET })
+    headers: {
+      'Content-Type':    'application/json',
+      'X-App-Secret':    APP_SHARED_SECRET,
+      'X-Session-Token': store.get('session_token') || ''
+    },
+    body: JSON.stringify({ subscription: sub.toJSON() })
   });
 }
 
@@ -1376,10 +1425,11 @@ async function boot() {
   }
 
   document.getElementById('boot-screen').classList.add('hidden');
-  migrateLegacyUserIdx();
+  migrateLegacyUserIdx(); // só preenche user_name pra pré-selecionar — não substitui o login
 
   const myName = store.get('user_name');
-  if (myName && cuSolicitanteMap[myName] !== undefined) {
+  const hasSession = !!store.get('session_token');
+  if (hasSession && myName && cuSolicitanteMap[myName] !== undefined) {
     initApp();
   } else {
     showSetup();
