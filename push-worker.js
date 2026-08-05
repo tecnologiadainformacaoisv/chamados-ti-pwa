@@ -22,10 +22,22 @@
 //     loginfail_<nome>  → contador de tentativas erradas (expira em 15min)
 // =====================================================================
 
-// ⚠️ Mantenha sincronizado com LIST_ID/FIELD_IDS.SOLICITANTE em app.js
+// ⚠️ Mantenha sincronizado com LIST_ID/FIELD_IDS.SOLICITANTE/FIELD_IDS.TIPO em app.js
 const LIST_ID               = '901324490220';
 const SOLICITANTE_FIELD_ID  = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
+const TIPO_FIELD_ID         = '47e475fe-e911-40cd-b4a2-23625fbf57f1';
 const VAPID_SUBJECT         = 'mailto:henrique.krvalho@gmail.com';
+
+// ⚠️ Mantenha sincronizado com CATEGORIA_PRIORIDADE/PRIORITY em app.js — "prioridade é sempre
+// automática, nunca manual" é regra de negócio do projeto (ver CLAUDE.md); recalculada aqui de
+// novo (não só na UI) pra ninguém conseguir abrir chamado com prioridade/prazo forjados mandando
+// direto pro proxy.
+const CATEGORIA_PRIORIDADE = { 0: 1, 1: 1, 2: 1, 3: 2, 4: 3, 5: 2, 6: 3, 7: 2 };
+const PRIORITY_SLA_MS = {
+  1: 1  * 3600000, // Urgente: 1h
+  2: 4  * 3600000, // Alta: 4h
+  3: 24 * 3600000, // Normal: 24h
+};
 
 // ⚠️ As chaves de status devem ficar sincronizadas com STATUS_MAP em app.js
 const NOTIFY_STATUSES = {
@@ -104,7 +116,9 @@ export default {
 // PROXY AUTENTICADO PRA CLICKUP (/api/*)
 // =====================================================================
 function hasValidSecret(request, env) {
-  if (!env.SUBSCRIBE_SECRET) return true; // sem segredo configurado no Worker: não bloqueia
+  // Falha FECHADA se o Worker não tiver SUBSCRIBE_SECRET configurado (deploy é manual, colado
+  // no dashboard — esquecer de setar a env var não pode virar "proxy fica aberto pra qualquer um").
+  if (!env.SUBSCRIBE_SECRET) return false;
   return request.headers.get('X-App-Secret') === env.SUBSCRIBE_SECRET;
 }
 
@@ -170,34 +184,32 @@ async function handleGetMyTasks(request, env) {
   const { nameToIdx, idxToName } = await getSolicitanteMaps(env);
   const cuIdx = nameToIdx[session.name];
 
-  let tasks = [];
-  if (cuIdx != null) {
-    const cf     = JSON.stringify([{ field_id: SOLICITANTE_FIELD_ID, operator: '=', value: cuIdx }]);
-    const params = new URLSearchParams({ order_by: 'created', reverse: 'true', include_closed: 'true', page: '0', custom_fields: cf });
-    const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task?${params}`, {
-      headers: { Authorization: env.CLICKUP_API_KEY }
-    });
-    const data = await upstream.json();
-    tasks = data.tasks || [];
-  }
-
-  if (tasks.length === 0) {
-    // Fallback pra chamados antigos que possam ter sido salvos com índice divergente:
-    // busca tudo e filtra aqui dentro pelo nome real — o cliente nunca recebe os dados
-    // de quem não deveria, mesmo nesse caminho alternativo.
+  // Só cai no fallback (buscar TODA a lista e filtrar aqui dentro) quando o nome da sessão
+  // nem existe no campo SOLICITANTE agora — isso sim é divergência de verdade. Zero chamados
+  // filtrados NÃO entra mais nessa condição: é o caso normal de colaborador novo sem nenhum
+  // chamado ainda, e isso ia disparar 2 chamadas extra à API da ClickUp a cada poll de 60s
+  // pra cada pessoa nessa situação — pesado justo na semana de rollout, quando é a maioria.
+  if (cuIdx == null) {
     const params = new URLSearchParams({ order_by: 'created', reverse: 'true', include_closed: 'true', page: '0' });
     const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task?${params}`, {
       headers: { Authorization: env.CLICKUP_API_KEY }
     });
     const data = await upstream.json();
-    tasks = (data.tasks || []).filter(t => {
+    const tasks = (data.tasks || []).filter(t => {
       const cf = t.custom_fields?.find(f => f.id === SOLICITANTE_FIELD_ID);
       const v  = cf?.value?.orderindex ?? cf?.value;
       return idxToName[v] === session.name;
     });
+    return jsonRes({ tasks });
   }
 
-  return jsonRes({ tasks });
+  const cf     = JSON.stringify([{ field_id: SOLICITANTE_FIELD_ID, operator: '=', value: cuIdx }]);
+  const params = new URLSearchParams({ order_by: 'created', reverse: 'true', include_closed: 'true', page: '0', custom_fields: cf });
+  const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task?${params}`, {
+    headers: { Authorization: env.CLICKUP_API_KEY }
+  });
+  const data = await upstream.json();
+  return jsonRes({ tasks: data.tasks || [] });
 }
 
 async function handleGetTask(request, env, taskId) {
@@ -239,6 +251,17 @@ async function handleCreateTask(request, env) {
   payload.custom_fields = (payload.custom_fields || []).filter(f => f.id !== SOLICITANTE_FIELD_ID);
   payload.custom_fields.push({ id: SOLICITANTE_FIELD_ID, value: cuIdx });
 
+  // Prioridade e prazo também nunca vêm do cliente — "prioridade é sempre automática, nunca
+  // manual" é regra do projeto, e o due_date define a fila de SLA. Recalcula os dois a partir
+  // do TIPO só pra garantir que quem chamar o proxy direto (sabendo o APP_SHARED_SECRET, que é
+  // público por design) não consiga abrir chamado como Urgente com prazo já vencido.
+  const tipoField = payload.custom_fields.find(f => f.id === TIPO_FIELD_ID);
+  const tipoIdx   = tipoField?.value;
+  const prio      = CATEGORIA_PRIORIDADE[tipoIdx] ?? 3;
+  payload.priority      = prio;
+  payload.due_date       = Date.now() + (PRIORITY_SLA_MS[prio] ?? PRIORITY_SLA_MS[3]);
+  payload.due_date_time  = true;
+
   // Throttle simples: no máximo 1 chamado a cada 10s por pessoa logada — evita duplo-clique
   // acidental virando 2 tickets, e freia flood sem precisar de infra nova (reaproveita o
   // mesmo KV já usado pro dedup da automação).
@@ -259,6 +282,19 @@ async function handleCreateTask(request, env) {
 async function handleUploadAttachment(request, env, taskId) {
   const session = await requireSession(request, env);
   if (!session) return sessionInvalid();
+
+  // Mesma checagem de dono que handleGetTask já faz — sem isso, qualquer pessoa logada
+  // conseguia anexar arquivo no chamado de outra só sabendo/adivinhando o ID.
+  const taskResp = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
+    headers: { Authorization: env.CLICKUP_API_KEY }
+  });
+  if (!taskResp.ok) return passthrough(taskResp);
+  const task = await taskResp.json();
+  const { idxToName } = await getSolicitanteMaps(env);
+  const cf = task.custom_fields?.find(f => f.id === SOLICITANTE_FIELD_ID);
+  const v  = cf?.value?.orderindex ?? cf?.value;
+  if (idxToName[v] !== session.name) return unauthorized('sem permissão pra anexar nesse chamado');
+
   const upstream = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/attachment`, {
     method: 'POST',
     headers: {
@@ -322,8 +358,8 @@ async function handleRegister(request, env) {
 
   const name = body.name;
   const password = body.password;
-  if (!name || !password || password.length < 4) {
-    return jsonRes({ error: 'Nome e senha (mínimo 4 caracteres) são obrigatórios' }, 400);
+  if (!name || !password || password.length < 8) {
+    return jsonRes({ error: 'Nome e senha (mínimo 8 caracteres) são obrigatórios' }, 400);
   }
 
   if (await env.SUBSCRIPTIONS.get(`auth_${name}`)) {

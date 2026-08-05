@@ -1352,7 +1352,7 @@ function urlB64ToUint8Array(b64) {
 }
 
 function checkStatusChanges(newTasks) {
-  if (Notification.permission !== 'granted') return;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
 
   const stored      = JSON.parse(store.get('cu_task_statuses') || '{}');
   const isFirstLoad = Object.keys(stored).length === 0;

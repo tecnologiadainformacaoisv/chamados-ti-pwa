@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="TI Chamados">
-  <meta name="app-version" content="0.3.0">
+  <meta name="app-version" content="0.3.1">
   <title>Chamados de TI – ISV</title>
   <link rel="manifest" href="manifest.json">
   <link rel="icon" type="image/png" href="assets/favicon-isv.png">
@@ -64,8 +64,8 @@
 
         <div class="setup-field">
           <label for="setup-password">Senha *</label>
-          <input id="setup-password" type="password" required autocomplete="current-password" placeholder="Sua senha de acesso">
-          <small>Primeira vez? A senha que você digitar aqui vira sua senha de acesso.</small>
+          <input id="setup-password" type="password" required autocomplete="current-password" placeholder="Sua senha de acesso" minlength="8">
+          <small>Primeira vez? A senha que você digitar aqui vira sua senha de acesso (mínimo 8 caracteres).</small>
         </div>
 
         <button id="setup-btn" type="submit" class="btn-primary btn-full">
@@ -296,7 +296,7 @@
 
     </main>
 
-    <footer class="app-footer">Instituto São Vicente · Chamados de TI · v0.3.0</footer>
+    <footer class="app-footer">Instituto São Vicente · Chamados de TI · v0.3.1</footer>
   </div>
 
   <!-- ===================== SETTINGS MODAL ===================== -->
