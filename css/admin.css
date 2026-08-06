@@ -1,0 +1,275 @@
+/* ============================================================
+   PAINEL DE ADMIN — estilos específicos de admin.html
+   Reaproveita variáveis/tokens/componentes de style.css (cores, botões,
+   inputs, spinner, toast, status-badge) — aqui só o que é exclusivo
+   do painel (gate de segredo, cards de métricas, filtros, tabela).
+   ============================================================ */
+
+/* ============================================================
+   GATE (pedir o segredo de admin) — mesmo layout de #setup-screen
+   ============================================================ */
+#gate-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  position: relative;
+}
+
+.gate-error {
+  background: var(--danger-pale);
+  color: #991b1b;
+  font-size: .85rem;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  padding: 10px 13px;
+  margin-bottom: 16px;
+}
+
+#gate-screen small code {
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: .82em;
+}
+
+/* ============================================================
+   LAYOUT GERAL DO PAINEL
+   ============================================================ */
+.admin-main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+
+.error-banner {
+  background: var(--danger-pale);
+  color: #991b1b;
+  font-size: .88rem;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+/* ============================================================
+   MÉTRICAS
+   ============================================================ */
+.metrics-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.metric-card {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px 18px;
+}
+
+.metric-card .metric-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--primary);
+  line-height: 1.15;
+}
+
+.metric-card .metric-label {
+  font-size: .78rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  margin-top: 4px;
+}
+
+.metric-card.metric-danger .metric-value { color: var(--danger); }
+.metric-card.metric-success .metric-value { color: var(--success); }
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.metrics-panel {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px 18px;
+}
+
+.metrics-panel h3 {
+  font-size: .85rem;
+  font-weight: 700;
+  color: var(--text-mid);
+  margin-bottom: 12px;
+}
+
+.bar-list { display: flex; flex-direction: column; gap: 9px; }
+
+.bar-row { display: flex; align-items: center; gap: 8px; }
+
+.bar-label {
+  flex: 0 0 auto;
+  font-size: .82rem;
+  color: var(--text);
+  white-space: nowrap;
+  min-width: 100px;
+}
+
+.bar-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.bar-fill { height: 100%; border-radius: 999px; }
+
+.bar-count {
+  flex: 0 0 auto;
+  font-size: .8rem;
+  font-weight: 700;
+  color: var(--text-mid);
+  min-width: 24px;
+  text-align: right;
+}
+
+.operador-cards { display: flex; flex-direction: column; gap: 10px; }
+
+.operador-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+}
+
+.operador-nome { font-size: .87rem; font-weight: 600; color: var(--text); }
+.operador-qtd { font-size: .76rem; color: var(--text-muted); }
+.operador-tempo { font-size: .95rem; font-weight: 700; color: var(--primary); white-space: nowrap; }
+
+.metrics-panel .empty-mini {
+  font-size: .82rem;
+  color: var(--text-muted);
+  padding: 8px 0;
+}
+
+/* ============================================================
+   FILTROS
+   ============================================================ */
+.filters-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px 18px;
+  margin-bottom: 20px;
+}
+
+.filter-field { display: flex; flex-direction: column; gap: 5px; min-width: 150px; }
+.filter-field-grow { flex: 1; min-width: 190px; }
+
+.filter-field label {
+  font-size: .74rem;
+  font-weight: 600;
+  color: var(--text-mid);
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+
+.filter-field select {
+  padding: 9px 30px 9px 11px;
+  font-size: .85rem;
+  height: 38px;
+}
+
+.filter-actions { display: flex; gap: 8px; margin-left: auto; }
+
+/* ============================================================
+   TABELA DE CHAMADOS
+   ============================================================ */
+.tasks-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.tasks-header h2 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.admin-table-wrap {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow-x: auto;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .85rem;
+  min-width: 760px;
+}
+
+.admin-table th {
+  text-align: left;
+  padding: 12px 14px;
+  font-size: .74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: var(--text-muted);
+  border-bottom: 2px solid var(--border);
+  white-space: nowrap;
+}
+
+.admin-table td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  vertical-align: middle;
+}
+
+.admin-table tbody tr:hover { background: var(--bg); }
+.admin-table tbody tr:last-child td { border-bottom: none; }
+
+.admin-table .task-name {
+  font-weight: 600;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+
+.admin-table .cell-atrasado {
+  color: #b91c1c;
+  font-weight: 700;
+}
+
+.admin-table .cell-muted { color: var(--text-muted); }
+
+/* ============================================================
+   RESPONSIVO
+   ============================================================ */
+@media (max-width: 640px) {
+  .filters-bar { flex-direction: column; align-items: stretch; }
+  .filter-field, .filter-field-grow { min-width: 0; width: 100%; }
+  .filter-actions { margin-left: 0; width: 100%; }
+  .filter-actions .btn-primary, .filter-actions .btn-secondary { flex: 1; justify-content: center; }
+}

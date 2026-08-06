@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1a3a6b">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Painel de Admin – Chamados TI ISV</title>
+  <link rel="icon" type="image/png" href="assets/favicon-isv.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/admin.css">
+</head>
+<body>
+
+  <!-- ===================== GATE (segredo de admin) ===================== -->
+  <div id="gate-screen">
+    <div class="setup-bg"></div>
+    <div class="setup-card">
+      <div class="setup-logo">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+          <rect width="64" height="64" rx="12" fill="#1a3a6b"/>
+          <rect x="12" y="14" width="40" height="34" rx="4" fill="none" stroke="#fff" stroke-width="3"/>
+          <line x1="12" y1="24" x2="52" y2="24" stroke="#fff" stroke-width="3"/>
+          <rect x="18" y="30" width="10" height="14" rx="1.5" fill="none" stroke="#4a90d9" stroke-width="2.5"/>
+          <rect x="34" y="30" width="10" height="8" rx="1.5" fill="none" stroke="#4a90d9" stroke-width="2.5"/>
+        </svg>
+        <h1>Painel de Admin</h1>
+        <p>Chamados de TI – ISV</p>
+      </div>
+
+      <form id="gate-form" autocomplete="off" novalidate>
+        <div class="setup-field">
+          <label for="gate-secret">Segredo de admin *</label>
+          <input id="gate-secret" type="password" required autocomplete="off" placeholder="X-Admin-Secret">
+          <small>Não é sua senha de login do app — é o segredo separado configurado no Worker (<code>ADMIN_SECRET</code>), que a TI já tem.</small>
+        </div>
+        <div id="gate-error" class="gate-error hidden"></div>
+        <button id="gate-btn" type="submit" class="btn-primary btn-full">
+          <span>Entrar</span>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===================== PAINEL ===================== -->
+  <div id="admin-app" class="hidden">
+
+    <header class="app-header">
+      <div class="header-logo">
+        <img src="assets/logo-isv.svg" alt="Instituto São Vicente" class="isv-logo">
+      </div>
+      <div class="header-center">
+        <div class="brand-lockup">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="26" height="26">
+            <rect width="40" height="40" rx="8" fill="rgba(255,255,255,0.15)"/>
+            <rect x="8" y="9" width="24" height="20" rx="2.5" fill="none" stroke="#fff" stroke-width="2.2"/>
+            <line x1="8" y1="15.5" x2="32" y2="15.5" stroke="#fff" stroke-width="2.2"/>
+            <rect x="12" y="19" width="6" height="8" rx="1" fill="none" stroke="#90c4f9" stroke-width="1.8"/>
+            <rect x="21" y="19" width="6" height="4.5" rx="1" fill="none" stroke="#90c4f9" stroke-width="1.8"/>
+          </svg>
+          <div class="brand-text">
+            <span class="brand-title">Painel de Admin</span>
+            <span class="brand-sub">Chamados de TI</span>
+          </div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="btn-refresh" class="icon-btn" title="Atualizar">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M4 10a6 6 0 1 0 .5-2.5" stroke-linecap="round"/>
+            <polyline points="4,4 4,8 8,8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <button id="btn-sair" class="icon-btn" title="Sair">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M8 3H4.5A1.5 1.5 0 0 0 3 4.5v11A1.5 1.5 0 0 0 4.5 17H8" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M13 14l4-4-4-4M17 10H7.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="admin-main">
+
+      <!-- MÉTRICAS -->
+      <section id="metrics-section">
+        <div id="metrics-loading" class="loading-state"><span class="spinner"></span> Carregando métricas…</div>
+        <div id="metrics-error" class="error-banner hidden"></div>
+        <div id="metrics-content" class="hidden">
+          <div class="metrics-cards" id="metrics-cards"></div>
+          <div class="metrics-grid">
+            <div class="metrics-panel">
+              <h3>Volume por tipo</h3>
+              <div id="metrics-por-tipo" class="bar-list"></div>
+            </div>
+            <div class="metrics-panel">
+              <h3>Volume por setor</h3>
+              <div id="metrics-por-setor" class="bar-list"></div>
+            </div>
+            <div class="metrics-panel">
+              <h3>Tempo médio de atendimento</h3>
+              <div id="metrics-operadores" class="operador-cards"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- FILTROS -->
+      <section class="filters-bar">
+        <div class="filter-field">
+          <label for="f-status">Status</label>
+          <select id="f-status"><option value="">Todos</option></select>
+        </div>
+        <div class="filter-field">
+          <label for="f-setor">Setor</label>
+          <select id="f-setor"><option value="">Todos</option></select>
+        </div>
+        <div class="filter-field">
+          <label for="f-tipo">Tipo</label>
+          <select id="f-tipo"><option value="">Todos</option></select>
+        </div>
+        <div class="filter-field">
+          <label for="f-operador">Operador</label>
+          <select id="f-operador"><option value="">Todos</option></select>
+        </div>
+        <div class="filter-field filter-field-grow">
+          <label for="f-solicitante">Solicitante</label>
+          <select id="f-solicitante"><option value="">Todos</option></select>
+        </div>
+        <div class="filter-actions">
+          <button id="btn-filtrar" type="button" class="btn-primary">Filtrar</button>
+          <button id="btn-limpar" type="button" class="btn-secondary">Limpar</button>
+        </div>
+      </section>
+
+      <!-- CHAMADOS -->
+      <section id="tasks-section">
+        <div class="tasks-header">
+          <h2 id="tasks-count">Chamados</h2>
+        </div>
+        <div id="tasks-loading" class="loading-state"><span class="spinner"></span> Carregando chamados…</div>
+        <div id="tasks-error" class="error-banner hidden"></div>
+        <div id="tasks-empty" class="empty-state hidden">
+          <div class="empty-icon">🗂️</div>
+          <p>Nenhum chamado encontrado com esses filtros.</p>
+        </div>
+        <div id="tasks-table-wrap" class="admin-table-wrap hidden">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Chamado</th>
+                <th>Tipo</th>
+                <th>Setor</th>
+                <th>Solicitante</th>
+                <th>Operador</th>
+                <th>Prazo</th>
+                <th>Criado em</th>
+              </tr>
+            </thead>
+            <tbody id="tasks-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <div id="toast-container" aria-live="polite"></div>
+
+  <script src="js/admin.js"></script>
+</body>
+</html>
