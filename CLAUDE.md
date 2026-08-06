@@ -173,6 +173,7 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 2. Avaliar caminho para **v1.0** (primeiro deploy "oficial") quando a usabilidade estiver validada.
 3. **`POST /webhook` não tem autenticação** — diferente de toda outra rota, aceita qualquer POST sem checar segredo/assinatura. Quem souber a URL do Worker (hardcoded em `app.js`, pública) e um `task_id` real pode forjar uma mudança de status e disparar a automação de SLA/push. Corrigir exige também mudar a URL configurada na automação do ClickUp (coordenar antes de implementar).
 4. **Nota de atendimento no chamado encerrado** (sugerida, não implementada) — 1 a 5 estrelas ou 👍/👎 quando o usuário abre um chamado recém-encerrado; precisa de campo novo na ClickUp + endpoint novo no Worker.
-5. Possíveis melhorias futuras: histórico de notificações, métricas de SLA por operador, refinamento do fluxo offline, avaliar migrar o backend de ClickUp pra uma solução própria/outra SaaS (arquitetura ainda em definição com o gestor, pensando em escala).
+5. **Decisão de arquitetura (alinhada com o gestor, 2026-08-03): ClickUp permanece como backend.** Em vez de trocar de backend pra escalar, o caminho escolhido é construir um **painel de admin** por cima do que já existe. `GET /admin/users` (protegido por `ADMIN_SECRET`, ver "Autenticação") já é o primeiro endpoint desse tipo — a expansão natural é mais rotas de admin no mesmo Worker (ex.: ver todos os chamados, métricas de SLA por operador), sem precisar de infraestrutura nova.
+6. Possíveis melhorias futuras: histórico de notificações, refinamento do fluxo offline.
 
 > ⚠️ **Regra de commit/versão deste projeto:** nenhuma mudança (visual OU lógica) versiona/commita/pusha sozinha. Agrupar em lote e só quando o usuário sinalizar.
