@@ -11,8 +11,10 @@
 //                        valida /subscribe e /api/* (header X-App-Secret) e /auth/* (mesmo header)
 //   ADMIN_SECRET      → segredo só seu (marcar como secret) — gere um valor aleatório
 //                        qualquer, NUNCA o mesmo do SUBSCRIBE_SECRET. Não fica em nenhum
-//                        lugar do app.js/navegador. Usado só em GET /admin/users
-//                        (header X-Admin-Secret) pra listar quem já tem senha cadastrada.
+//                        lugar do app.js/navegador. Usado nas rotas /admin/* (header
+//                        X-Admin-Secret): GET /admin/users (quem já tem senha cadastrada),
+//                        GET /admin/tasks (todos os chamados, com filtros) e GET /admin/metrics
+//                        (agregados de SLA/volume/tempo de atendimento) — painel de admin, Fase 1.
 //
 // KV Namespace (Settings → KV Namespace Bindings → Add):
 //   Nome da variável: SUBSCRIPTIONS — reaproveitado também pra login (sem KV novo):
@@ -22,10 +24,11 @@
 //     loginfail_<nome>  → contador de tentativas erradas (expira em 15min)
 // =====================================================================
 
-// ⚠️ Mantenha sincronizado com LIST_ID/FIELD_IDS.SOLICITANTE/FIELD_IDS.TIPO em app.js
+// ⚠️ Mantenha sincronizado com LIST_ID/FIELD_IDS.SOLICITANTE/FIELD_IDS.TIPO/FIELD_IDS.SETOR em app.js
 const LIST_ID               = '901324490220';
 const SOLICITANTE_FIELD_ID  = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
 const TIPO_FIELD_ID         = '47e475fe-e911-40cd-b4a2-23625fbf57f1';
+const SETOR_FIELD_ID        = 'c1ca88de-4b01-4933-93ff-24494bed59e2';
 const VAPID_SUBJECT         = 'mailto:henrique.krvalho@gmail.com';
 
 // ⚠️ Mantenha sincronizado com CATEGORIA_PRIORIDADE/PRIORITY em app.js — "prioridade é sempre
@@ -100,9 +103,11 @@ export default {
     }
 
     if (request.method === 'GET') {
-      if (pathname === '/api/field')    return handleGetField(request, env);
-      if (pathname === '/api/my-tasks') return handleGetMyTasks(request, env);
-      if (pathname === '/admin/users')  return handleAdminListUsers(request, env);
+      if (pathname === '/api/field')     return handleGetField(request, env);
+      if (pathname === '/api/my-tasks')  return handleGetMyTasks(request, env);
+      if (pathname === '/admin/users')   return handleAdminListUsers(request, env);
+      if (pathname === '/admin/tasks')   return handleAdminListTasks(request, env);
+      if (pathname === '/admin/metrics') return handleAdminMetrics(request, env);
       const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
       if (taskMatch) return handleGetTask(request, env, taskMatch[1]);
       return new Response('Chamados TI – Push Worker OK', { status: 200 });
@@ -439,6 +444,147 @@ async function handleAdminListUsers(request, env) {
 
   users.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
   return jsonRes({ total: users.length, users });
+}
+
+// Valor "puro" de um campo customizado — mesmo padrão repetido em handleGetMyTasks/
+// handleGetTask/handleUploadAttachment (cf?.value?.orderindex ?? cf?.value), só que
+// nomeado, pra não reescrever de novo nas rotas de admin abaixo.
+function cfValue(task, fieldId) {
+  const cf = task.custom_fields?.find(f => f.id === fieldId);
+  return cf?.value?.orderindex ?? cf?.value ?? null;
+}
+
+// Busca TODOS os chamados da lista (não só a primeira página) — as rotas de admin
+// precisam do total real pra métricas/filtros baterem, diferente de handleGetMyTasks
+// (que é por pessoa e raramente passa de 100 chamados). Teto de 20 páginas (~2000
+// chamados) só como salvaguarda contra loop infinito se a API mudar de formato.
+async function fetchAllTasks(env) {
+  const tasks = [];
+  for (let page = 0; page < 20; page++) {
+    const params = new URLSearchParams({ order_by: 'created', reverse: 'true', include_closed: 'true', page: String(page) });
+    const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task?${params}`, {
+      headers: { Authorization: env.CLICKUP_API_KEY }
+    });
+    const data  = await upstream.json();
+    const batch = data.tasks || [];
+    tasks.push(...batch);
+    if (batch.length < 100 || data.last_page) break;
+  }
+  return tasks;
+}
+
+// =====================================================================
+// /admin/tasks — todos os chamados da lista, com filtros opcionais via query string
+// (status, setor, tipo, operador, solicitante). Protegido por ADMIN_SECRET, mesmo
+// padrão de /admin/users. "setor"/"tipo" são o orderindex numérico (o mesmo valor
+// gravado no custom field — ver SETORES/TIPOS em app.js pra mapear pra nome);
+// "operador" é o id do assignee na ClickUp (ver OPERADORES em app.js); "solicitante"
+// é o nome (resolvido aqui pro orderindex real via getSolicitanteMaps, igual o resto
+// do arquivo já faz — nunca comparamos nome direto contra o índice guardado na task).
+// =====================================================================
+async function handleAdminListTasks(request, env) {
+  if (!isAdmin(request, env)) return unauthorized();
+
+  const { searchParams } = new URL(request.url);
+  const statusFilter      = searchParams.get('status');
+  const setorFilter       = searchParams.get('setor');
+  const tipoFilter        = searchParams.get('tipo');
+  const operadorFilter    = searchParams.get('operador');
+  const solicitanteFilter = searchParams.get('solicitante');
+
+  let solicitanteIdx = null;
+  if (solicitanteFilter) {
+    const { nameToIdx } = await getSolicitanteMaps(env);
+    solicitanteIdx = nameToIdx[solicitanteFilter];
+    if (solicitanteIdx == null) return jsonRes({ total: 0, tasks: [] });
+  }
+
+  const tasks = await fetchAllTasks(env);
+  const filtered = tasks.filter(t => {
+    if (statusFilter && (t.status?.status || '').toLowerCase() !== statusFilter.toLowerCase()) return false;
+    if (operadorFilter && !(t.assignees || []).some(a => String(a.id) === operadorFilter)) return false;
+    if (setorFilter && String(cfValue(t, SETOR_FIELD_ID)) !== setorFilter) return false;
+    if (tipoFilter && String(cfValue(t, TIPO_FIELD_ID)) !== tipoFilter) return false;
+    if (solicitanteFilter && Number(cfValue(t, SOLICITANTE_FIELD_ID)) !== Number(solicitanteIdx)) return false;
+    return true;
+  });
+
+  return jsonRes({ total: filtered.length, tasks: filtered });
+}
+
+// =====================================================================
+// /admin/metrics — agregados pro painel de admin: total por status, tempo médio de
+// atendimento por operador (duração real "em atendimento" -> "encerrado", pelos
+// timestamps start_date/date_closed da própria task), % dentro do SLA vs atrasado
+// (comparando due_date com date_closed pra encerrados, ou com "agora" pra tasks
+// ainda abertas — mesma lógica informativa que o app.js já usa no cliente) e volume
+// por tipo/setor (chaves = orderindex, mapear pro nome no painel via TIPOS/SETORES
+// de app.js). Protegido por ADMIN_SECRET, mesmo padrão de /admin/users.
+// =====================================================================
+async function handleAdminMetrics(request, env) {
+  if (!isAdmin(request, env)) return unauthorized();
+
+  const tasks = await fetchAllTasks(env);
+
+  const porStatus = {};
+  const porTipo   = {};
+  const porSetor  = {};
+  const atendimentoPorOperador = {}; // id -> { nome, somaMs, count }
+  let dentroDoSla = 0;
+  let atrasado    = 0;
+
+  for (const t of tasks) {
+    const status = (t.status?.status || '').toLowerCase();
+    porStatus[status] = (porStatus[status] || 0) + 1;
+
+    const tipoIdx = cfValue(t, TIPO_FIELD_ID);
+    if (tipoIdx != null) porTipo[tipoIdx] = (porTipo[tipoIdx] || 0) + 1;
+
+    const setorIdx = cfValue(t, SETOR_FIELD_ID);
+    if (setorIdx != null) porSetor[setorIdx] = (porSetor[setorIdx] || 0) + 1;
+
+    if (t.due_date) {
+      const dueDate    = Number(t.due_date);
+      const referencia = (status === 'encerrado' && t.date_closed) ? Number(t.date_closed) : Date.now();
+      if (referencia > dueDate) atrasado++; else dentroDoSla++;
+    }
+
+    if (status === 'encerrado' && t.start_date && t.date_closed) {
+      const duracaoMs = Number(t.date_closed) - Number(t.start_date);
+      for (const a of (t.assignees || [])) {
+        const key = String(a.id);
+        if (!atendimentoPorOperador[key]) {
+          atendimentoPorOperador[key] = { nome: a.username || null, somaMs: 0, count: 0 };
+        }
+        atendimentoPorOperador[key].somaMs += duracaoMs;
+        atendimentoPorOperador[key].count  += 1;
+      }
+    }
+  }
+
+  const tempoMedioPorOperador = {};
+  for (const [id, dado] of Object.entries(atendimentoPorOperador)) {
+    tempoMedioPorOperador[id] = {
+      nome: dado.nome,
+      mediaMs: Math.round(dado.somaMs / dado.count),
+      totalChamados: dado.count
+    };
+  }
+
+  const totalComSla = dentroDoSla + atrasado;
+  return jsonRes({
+    total: tasks.length,
+    porStatus,
+    porTipo,
+    porSetor,
+    sla: {
+      dentroDoSla,
+      atrasado,
+      dentroDoSlaPercent: totalComSla ? Math.round((dentroDoSla / totalComSla) * 1000) / 10 : null,
+      atrasadoPercent:    totalComSla ? Math.round((atrasado    / totalComSla) * 1000) / 10 : null,
+    },
+    tempoMedioPorOperador
+  });
 }
 
 // =====================================================================

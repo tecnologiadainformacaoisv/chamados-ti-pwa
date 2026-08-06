@@ -9,14 +9,39 @@ const { pathToFileURL } = require('url');
 
 const SOLICITANTE_FIELD_ID = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
 const TIPO_FIELD_ID = '47e475fe-e911-40cd-b4a2-23625fbf57f1';
+const SETOR_FIELD_ID = 'c1ca88de-4b01-4933-93ff-24494bed59e2';
 const FAKE_OPTIONS = [
   { id: 'a1', name: 'Ariele Santo', orderindex: 1 },
   { id: 'a27', name: 'Michael Vasconcelos', orderindex: 27 },
   { id: 'a4', name: 'Bruno Guilherme', orderindex: 4 }, // existe na ClickUp, mas nunca abriu chamado (pra testar o fallback)
 ];
+// Datas fixas (não Date.now()) pra métricas/SLA ficarem determinísticas nos testes de /admin/metrics.
+const FAKE_DUE_DATE_MICHAEL = 1700000000000;
 const FAKE_TASKS = [
-  { id: 'task-michael-1', name: 'Chamado do Michael', custom_fields: [{ id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } }] },
-  { id: 'task-ariele-1', name: 'Chamado da Ariele', custom_fields: [{ id: SOLICITANTE_FIELD_ID, value: { orderindex: 1 } }] },
+  {
+    id: 'task-michael-1', name: 'Chamado do Michael',
+    status: { status: 'encerrado' },
+    assignees: [{ id: 170628721, username: 'Everson' }],
+    due_date: FAKE_DUE_DATE_MICHAEL,
+    date_closed: FAKE_DUE_DATE_MICHAEL - 60000,   // fechou 1min ANTES do prazo -> dentro do SLA
+    start_date: FAKE_DUE_DATE_MICHAEL - 3600000,  // ~59min de atendimento até fechar
+    custom_fields: [
+      { id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } },
+      { id: TIPO_FIELD_ID, value: 0 },
+      { id: SETOR_FIELD_ID, value: 1 },
+    ],
+  },
+  {
+    id: 'task-ariele-1', name: 'Chamado da Ariele',
+    status: { status: 'aberto' },
+    assignees: [{ id: 200498355, username: 'Henrique' }],
+    due_date: Date.now() - 60000, // prazo já vencido e ainda aberta -> atrasado
+    custom_fields: [
+      { id: SOLICITANTE_FIELD_ID, value: { orderindex: 1 } },
+      { id: TIPO_FIELD_ID, value: 2 },
+      { id: SETOR_FIELD_ID, value: 0 },
+    ],
+  },
 ];
 
 function makeMockKV() {
@@ -252,6 +277,91 @@ async function test(name, fn) {
     const { tasks } = await res.json();
     assert.strictEqual(tasks.length, 0, 'Bruno realmente não tem nenhum chamado nos dados fake');
     assert.strictEqual(taskListCallCount, 1, 'nome encontrado deveria fazer só 1 chamada de listagem (a filtrada), sem cair no fallback de buscar tudo');
+  });
+
+  console.log('--- /admin/tasks (todos os chamados, com filtros) ---');
+  await test('sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('GET', '/admin/tasks'), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('X-App-Secret (o do app, não o de admin) NÃO dá acesso', async () => {
+    const res = await worker.fetch(req('GET', '/admin/tasks', { headers: SECRET_HEADERS }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('sem filtro nenhum, devolve todos os chamados', async () => {
+    const res = await worker.fetch(req('GET', '/admin/tasks', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual(res.status, 200);
+    const { total, tasks } = await res.json();
+    assert.strictEqual(total, 2);
+    assert.strictEqual(tasks.length, 2);
+  });
+  await test('filtro por status devolve só os chamados daquele status', async () => {
+    const res = await worker.fetch(req('GET', '/admin/tasks?status=aberto', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const { total, tasks } = await res.json();
+    assert.strictEqual(total, 1);
+    assert.strictEqual(tasks[0].id, 'task-ariele-1');
+  });
+  await test('filtro por operador (assignee) funciona', async () => {
+    const res = await worker.fetch(req('GET', '/admin/tasks?operador=170628721', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const { total, tasks } = await res.json();
+    assert.strictEqual(total, 1);
+    assert.strictEqual(tasks[0].id, 'task-michael-1');
+  });
+  await test('filtro por setor (orderindex) funciona', async () => {
+    const res = await worker.fetch(req('GET', '/admin/tasks?setor=0', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const { total, tasks } = await res.json();
+    assert.strictEqual(total, 1);
+    assert.strictEqual(tasks[0].id, 'task-ariele-1');
+  });
+  await test('filtro por tipo (orderindex) funciona', async () => {
+    const res = await worker.fetch(req('GET', '/admin/tasks?tipo=0', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const { total, tasks } = await res.json();
+    assert.strictEqual(total, 1);
+    assert.strictEqual(tasks[0].id, 'task-michael-1');
+  });
+  await test('filtro por solicitante (nome) resolve pro orderindex certo, mesmo padrão anti-forjamento do resto do arquivo', async () => {
+    const res = await worker.fetch(req('GET', '/admin/tasks?solicitante=' + encodeURIComponent('Michael Vasconcelos'), { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const { total, tasks } = await res.json();
+    assert.strictEqual(total, 1);
+    assert.strictEqual(tasks[0].id, 'task-michael-1');
+  });
+  await test('solicitante que não existe na ClickUp devolve lista vazia (não erro)', async () => {
+    const res = await worker.fetch(req('GET', '/admin/tasks?solicitante=Ninguém+Assim', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual(res.status, 200);
+    const { total } = await res.json();
+    assert.strictEqual(total, 0);
+  });
+
+  console.log('--- /admin/metrics (agregados de SLA/volume/tempo de atendimento) ---');
+  await test('sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('GET', '/admin/metrics'), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('agrega total, por status, por tipo/setor, SLA e tempo médio por operador', async () => {
+    const res = await worker.fetch(req('GET', '/admin/metrics', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+
+    assert.strictEqual(data.total, 2);
+    assert.deepStrictEqual(data.porStatus, { encerrado: 1, aberto: 1 });
+    assert.strictEqual(data.porTipo['0'], 1, 'chamado do Michael é tipo 0 (Notebooks)');
+    assert.strictEqual(data.porTipo['2'], 1, 'chamado da Ariele é tipo 2 (Redes)');
+    assert.strictEqual(data.porSetor['1'], 1);
+    assert.strictEqual(data.porSetor['0'], 1);
+
+    // Michael: encerrado 1min antes do prazo -> dentro do SLA. Ariele: aberta e já vencida -> atrasado.
+    assert.strictEqual(data.sla.dentroDoSla, 1);
+    assert.strictEqual(data.sla.atrasado, 1);
+    assert.strictEqual(data.sla.dentroDoSlaPercent, 50);
+    assert.strictEqual(data.sla.atrasadoPercent, 50);
+
+    // Só o chamado do Michael tem start_date+date_closed -> só Everson entra na média.
+    const everson = data.tempoMedioPorOperador['170628721'];
+    assert.ok(everson, 'Everson deveria aparecer no tempo médio de atendimento');
+    assert.strictEqual(everson.nome, 'Everson');
+    assert.strictEqual(everson.totalChamados, 1);
+    assert.ok(everson.mediaMs > 0);
+    assert.strictEqual(data.tempoMedioPorOperador['200498355'], undefined, 'chamado da Ariele não foi encerrado, não deveria contar tempo de atendimento pro Henrique');
   });
 
   console.log('--- CORS e logout ---');
