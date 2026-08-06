@@ -21,7 +21,8 @@
 //     auth_<nome>       → { algo, iterations, salt, hash, createdAt, lastLoginAt } (senha,
 //                          nunca expira sozinha — dado exposto em /admin/users é só nome/datas)
 //     session_<token>   → { name } (expira em SESSION_TTL_SECONDS)
-//     loginfail_<nome>  → contador de tentativas erradas (expira em 15min)
+//     loginfail_<nome>  → contador de tentativas erradas de senha de usuário (expira em 15min)
+//     adminfail_<ip>    → contador de tentativas erradas de ADMIN_SECRET, por IP (expira em 15min)
 // =====================================================================
 
 // ⚠️ Mantenha sincronizado com LIST_ID/FIELD_IDS.SOLICITANTE/FIELD_IDS.TIPO/FIELD_IDS.SETOR em app.js
@@ -418,12 +419,37 @@ async function handleLogin(request, env) {
 // APP_SHARED_SECRET, nunca fica em app.js nem em nenhum lugar do navegador de ninguém.
 // Nunca devolve hash/salt de senha, só metadados.
 // =====================================================================
-function isAdmin(request, env) {
-  return !!env.ADMIN_SECRET && request.headers.get('X-Admin-Secret') === env.ADMIN_SECRET;
+// Mesma proteção de brute-force do login (MAX_LOGIN_FAILURES/LOGIN_LOCKOUT_SECONDS), mas por
+// IP em vez de nome — ADMIN_SECRET é um segredo único e global (não por pessoa), então a chave
+// de lockout precisa ser algo que não deixe um atacante travar a TI de fora mandando tentativas
+// erradas: o IP de quem está tentando, nunca o segredo em si. Só conta como "tentativa" quando
+// o header X-Admin-Secret é realmente mandado (com valor errado) — não quando vem ausente, senão
+// qualquer chamada sem esse header (ex.: bater com o secret errado por engano, ou até crawler)
+// já contaria como tentativa de adivinhar.
+const MAX_ADMIN_FAILURES     = 5;
+const ADMIN_LOCKOUT_SECONDS  = 15 * 60;
+
+async function isAdmin(request, env) {
+  if (!env.ADMIN_SECRET) return false;
+
+  const provided = request.headers.get('X-Admin-Secret');
+  if (!provided) return false;
+
+  const ip      = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const failKey = `adminfail_${ip}`;
+  const failCount = parseInt(await env.SUBSCRIPTIONS.get(failKey) || '0');
+  if (failCount >= MAX_ADMIN_FAILURES) return false;
+
+  if (provided !== env.ADMIN_SECRET) {
+    await env.SUBSCRIPTIONS.put(failKey, String(failCount + 1), { expirationTtl: ADMIN_LOCKOUT_SECONDS });
+    return false;
+  }
+  if (failCount > 0) await env.SUBSCRIPTIONS.delete(failKey);
+  return true;
 }
 
 async function handleAdminListUsers(request, env) {
-  if (!isAdmin(request, env)) return unauthorized();
+  if (!(await isAdmin(request, env))) return unauthorized();
 
   const users = [];
   let cursor;
@@ -456,11 +482,21 @@ function cfValue(task, fieldId) {
 
 // Busca TODOS os chamados da lista (não só a primeira página) — as rotas de admin
 // precisam do total real pra métricas/filtros baterem, diferente de handleGetMyTasks
-// (que é por pessoa e raramente passa de 100 chamados). Teto de 20 páginas (~2000
-// chamados) só como salvaguarda contra loop infinito se a API mudar de formato.
-async function fetchAllTasks(env) {
+// (que é por pessoa e raramente passa de 100 chamados).
+//
+// LIMITAÇÃO CONHECIDA (teto de páginas + double-fetch): teto de `maxPages` páginas
+// (~2000 chamados no padrão) só como salvaguarda contra loop infinito se a API mudar
+// de formato — mas na prática, se o volume real passar disso, os chamados mais antigos
+// somem silenciosamente das métricas/filtros. Por isso devolve `truncated: true` quando
+// bate o teto, pra quem chama poder avisar. Além disso, /admin/tasks e /admin/metrics
+// chamam esta função de forma independente (cada carregamento do painel faz a paginação
+// completa duas vezes) — aceitável no volume atual (dezenas de chamados = 1 página cada),
+// mas vira ~40 chamadas à ClickUp por carregamento se o volume um dia chegar na casa dos
+// milhares. Se isso passar a importar, a solução é cachear o resultado por alguns
+// segundos no KV (chave curta, TTL de 15-30s) em vez de buscar tudo de novo a cada rota.
+async function fetchAllTasks(env, maxPages = 20) {
   const tasks = [];
-  for (let page = 0; page < 20; page++) {
+  for (let page = 0; page < maxPages; page++) {
     const params = new URLSearchParams({ order_by: 'created', reverse: 'true', include_closed: 'true', page: String(page) });
     const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task?${params}`, {
       headers: { Authorization: env.CLICKUP_API_KEY }
@@ -468,9 +504,11 @@ async function fetchAllTasks(env) {
     const data  = await upstream.json();
     const batch = data.tasks || [];
     tasks.push(...batch);
-    if (batch.length < 100 || data.last_page) break;
+    if (batch.length < 100 || data.last_page) return { tasks, truncated: false };
   }
-  return tasks;
+  // Só chega aqui se todas as `maxPages` páginas vieram cheias (100 itens, sem last_page) —
+  // sinal de que ainda tem mais chamados na ClickUp que não foram buscados.
+  return { tasks, truncated: true };
 }
 
 // =====================================================================
@@ -483,7 +521,7 @@ async function fetchAllTasks(env) {
 // do arquivo já faz — nunca comparamos nome direto contra o índice guardado na task).
 // =====================================================================
 async function handleAdminListTasks(request, env) {
-  if (!isAdmin(request, env)) return unauthorized();
+  if (!(await isAdmin(request, env))) return unauthorized();
 
   const { searchParams } = new URL(request.url);
   const statusFilter      = searchParams.get('status');
@@ -499,7 +537,7 @@ async function handleAdminListTasks(request, env) {
     if (solicitanteIdx == null) return jsonRes({ total: 0, tasks: [] });
   }
 
-  const tasks = await fetchAllTasks(env);
+  const { tasks, truncated } = await fetchAllTasks(env);
   const filtered = tasks.filter(t => {
     if (statusFilter && (t.status?.status || '').toLowerCase() !== statusFilter.toLowerCase()) return false;
     if (operadorFilter && !(t.assignees || []).some(a => String(a.id) === operadorFilter)) return false;
@@ -509,7 +547,7 @@ async function handleAdminListTasks(request, env) {
     return true;
   });
 
-  return jsonRes({ total: filtered.length, tasks: filtered });
+  return jsonRes({ total: filtered.length, tasks: filtered, truncated });
 }
 
 // =====================================================================
@@ -522,9 +560,9 @@ async function handleAdminListTasks(request, env) {
 // de app.js). Protegido por ADMIN_SECRET, mesmo padrão de /admin/users.
 // =====================================================================
 async function handleAdminMetrics(request, env) {
-  if (!isAdmin(request, env)) return unauthorized();
+  if (!(await isAdmin(request, env))) return unauthorized();
 
-  const tasks = await fetchAllTasks(env);
+  const { tasks, truncated } = await fetchAllTasks(env);
 
   const porStatus = {};
   const porTipo   = {};
@@ -551,6 +589,9 @@ async function handleAdminMetrics(request, env) {
 
     if (status === 'encerrado' && t.start_date && t.date_closed) {
       const duracaoMs = Number(t.date_closed) - Number(t.start_date);
+      // Chamado com 2+ assignees: cada um recebe a duração INTEIRA, não uma fração dividida
+      // entre eles — decisão deliberada (cada operador atribuído "esteve no chamado" o tempo
+      // todo, não meio-a-meio), não é bug.
       for (const a of (t.assignees || [])) {
         const key = String(a.id);
         if (!atendimentoPorOperador[key]) {
@@ -574,6 +615,7 @@ async function handleAdminMetrics(request, env) {
   const totalComSla = dentroDoSla + atrasado;
   return jsonRes({
     total: tasks.length,
+    truncated,
     porStatus,
     porTipo,
     porSetor,

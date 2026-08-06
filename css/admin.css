@@ -53,6 +53,23 @@
   margin-bottom: 16px;
 }
 
+.warning-banner {
+  background: var(--accent-pale);
+  color: #92400e;
+  font-size: .85rem;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  padding: 11px 16px;
+  margin-bottom: 16px;
+}
+
+.warning-banner code {
+  background: rgba(0,0,0,.08);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: .82em;
+}
+
 /* ============================================================
    MÉTRICAS
    ============================================================ */

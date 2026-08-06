@@ -143,6 +143,16 @@ let lastVisibleTasks = [];  // allTasks após a busca por título — é o que a
 let currentPage = 1;
 const PAGE_SIZE = 25;
 
+// fetchAllTasks (no Worker) tem um teto de páginas — se algum dos dois endpoints bater
+// nele, mostra um aviso (ver LIMITAÇÃO CONHECIDA em push-worker.js). Qualquer um dos dois
+// marcando true já é suficiente pra avisar, por isso dois flags separados.
+let metricsTruncated = false;
+let tasksTruncated = false;
+
+function updateTruncatedBanner() {
+  document.getElementById('truncated-banner').classList.toggle('hidden', !metricsTruncated && !tasksTruncated);
+}
+
 function showGate(msg) {
   document.getElementById('admin-app').classList.add('hidden');
   document.getElementById('gate-screen').classList.remove('hidden');
@@ -384,6 +394,8 @@ async function loadMetrics() {
     const data = await adminRequest('/metrics');
     renderMetrics(data);
     contentEl.classList.remove('hidden');
+    metricsTruncated = !!data.truncated;
+    updateTruncatedBanner();
   } catch (err) {
     errEl.textContent = err.message || 'Não foi possível carregar as métricas.';
     errEl.classList.remove('hidden');
@@ -484,9 +496,14 @@ document.getElementById('btn-next-page').addEventListener('click', () => { curre
 // EXPORTAÇÃO CSV — exporta o conjunto visível (filtros de servidor + busca por
 // título), não só a página atual. Tudo no cliente, sem endpoint novo no Worker.
 // ============================================================
+// Proteção contra "formula injection": task.name é texto livre digitado por qualquer
+// solicitante (ver js/app.js, campo de descrição) — se abrir com =, +, -, @ ou tab/CR, o
+// Excel/Sheets pode interpretar como fórmula ao abrir o CSV exportado. Prefixa com aspas
+// simples pra forçar leitura como texto puro, antes do escaping normal de CSV.
 function csvEscape(value) {
-  const str = String(value ?? '');
-  return /[",\n]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
+  let str = String(value ?? '');
+  if (/^[=+\-@\t\r]/.test(str)) str = `'${str}`;
+  return /[",\r\n]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
 }
 
 function taskToCsvRow(task) {
@@ -555,6 +572,8 @@ async function loadTasks() {
     allTasks = data.tasks || [];
     currentPage = 1;
     applySearchAndRender();
+    tasksTruncated = !!data.truncated;
+    updateTruncatedBanner();
   } catch (err) {
     errEl.textContent = err.message || 'Não foi possível carregar os chamados.';
     errEl.classList.remove('hidden');

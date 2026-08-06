@@ -291,9 +291,14 @@ async function test(name, fn) {
   await test('sem filtro nenhum, devolve todos os chamados', async () => {
     const res = await worker.fetch(req('GET', '/admin/tasks', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
     assert.strictEqual(res.status, 200);
-    const { total, tasks } = await res.json();
+    const { total, tasks, truncated } = await res.json();
     assert.strictEqual(total, 2);
     assert.strictEqual(tasks.length, 2);
+    assert.strictEqual(truncated, false, 'volume normal não deveria bater no teto de páginas');
+  });
+  await test('token de sessão válido (sem X-Admin-Secret) NÃO dá acesso — admin é um segredo separado da sessão de usuário', async () => {
+    const res = await worker.fetch(req('GET', '/admin/tasks', { headers: { 'X-Session-Token': token } }), env);
+    assert.strictEqual(res.status, 403);
   });
   await test('filtro por status devolve só os chamados daquele status', async () => {
     const res = await worker.fetch(req('GET', '/admin/tasks?status=aberto', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
@@ -331,6 +336,48 @@ async function test(name, fn) {
     const { total } = await res.json();
     assert.strictEqual(total, 0);
   });
+  await test('combina múltiplos filtros com AND, não OR', async () => {
+    const noMatch = await worker.fetch(req('GET', '/admin/tasks?status=aberto&setor=1', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual((await noMatch.json()).total, 0, 'Ariele é aberto+setor 0, Michael é encerrado+setor 1 — aberto+setor1 não deveria bater com nenhum dos dois');
+
+    const bothMatch = await worker.fetch(req('GET', '/admin/tasks?status=aberto&setor=0', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const data = await bothMatch.json();
+    assert.strictEqual(data.total, 1);
+    assert.strictEqual(data.tasks[0].id, 'task-ariele-1');
+  });
+
+  console.log('--- fetchAllTasks pagina de verdade e avisa (truncated) quando bate no teto ---');
+  await test('bate no teto de 20 páginas e devolve truncated:true, sem perder chamado silenciosamente', async () => {
+    const previousFetch = globalThis.fetch;
+    let pagesRequested = 0;
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      if (u.includes('/list/') && /\/task\?/.test(u) && opts?.method !== 'POST') {
+        pagesRequested++;
+        // Sempre devolve 100 itens cheios, sem last_page — simula volume maior que o teto
+        // de fetchAllTasks (20 páginas x 100 = 2000), forçando o loop a esgotar as páginas.
+        const batch = Array.from({ length: 100 }, (_, i) => ({
+          id: `bulk-${pagesRequested}-${i}`,
+          name: 'chamado em massa (teste de paginação)',
+          status: { status: 'aberto' },
+          assignees: [],
+          custom_fields: [{ id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } }],
+        }));
+        return new Response(JSON.stringify({ tasks: batch }), { status: 200 });
+      }
+      return previousFetch(url, opts);
+    };
+
+    try {
+      const res = await worker.fetch(req('GET', '/admin/tasks', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+      const data = await res.json();
+      assert.strictEqual(pagesRequested, 20, 'deveria ter parado exatamente no teto de 20 páginas');
+      assert.strictEqual(data.total, 2000, 'deveria ter buscado as 20 páginas x 100 antes de parar');
+      assert.strictEqual(data.truncated, true, 'deveria avisar que bateu no teto — sem esse aviso, chamado sumiria em silêncio');
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
 
   console.log('--- /admin/metrics (agregados de SLA/volume/tempo de atendimento) ---');
   await test('sem X-Admin-Secret dá 403', async () => {
@@ -343,6 +390,7 @@ async function test(name, fn) {
     const data = await res.json();
 
     assert.strictEqual(data.total, 2);
+    assert.strictEqual(data.truncated, false, 'volume normal não deveria bater no teto de páginas');
     assert.deepStrictEqual(data.porStatus, { encerrado: 1, aberto: 1 });
     assert.strictEqual(data.porTipo['0'], 1, 'chamado do Michael é tipo 0 (Notebooks)');
     assert.strictEqual(data.porTipo['2'], 1, 'chamado da Ariele é tipo 2 (Redes)');
@@ -362,6 +410,29 @@ async function test(name, fn) {
     assert.strictEqual(everson.totalChamados, 1);
     assert.ok(everson.mediaMs > 0);
     assert.strictEqual(data.tempoMedioPorOperador['200498355'], undefined, 'chamado da Ariele não foi encerrado, não deveria contar tempo de atendimento pro Henrique');
+  });
+
+  console.log('--- lockout de ADMIN_SECRET por IP (mesma proteção do login, mas por IP em vez de nome) ---');
+  await test('após 5 tentativas com X-Admin-Secret errado do mesmo IP, o IP fica bloqueado mesmo com o segredo certo depois', async () => {
+    const ipHeaders = { 'CF-Connecting-IP': '203.0.113.9' };
+    for (let i = 0; i < 5; i++) {
+      const r = await worker.fetch(req('GET', '/admin/users', { headers: { ...ipHeaders, 'X-Admin-Secret': 'chute-errado' } }), env);
+      assert.strictEqual(r.status, 403, `tentativa ${i + 1} deveria dar 403`);
+    }
+    const withCorrectSecret = await worker.fetch(req('GET', '/admin/users', { headers: { ...ipHeaders, 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual(withCorrectSecret.status, 403, 'IP travado por lockout deveria continuar bloqueado mesmo com o segredo certo');
+  });
+  await test('outro IP não é afetado pelo lockout do IP anterior', async () => {
+    const res = await worker.fetch(req('GET', '/admin/users', { headers: { 'CF-Connecting-IP': '198.51.100.20', 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual(res.status, 200);
+  });
+  await test('requisição sem X-Admin-Secret nenhum não conta como tentativa de adivinhar (não contribui pro lockout)', async () => {
+    const ipHeaders = { 'CF-Connecting-IP': '192.0.2.55' };
+    for (let i = 0; i < 10; i++) {
+      await worker.fetch(req('GET', '/admin/users', { headers: ipHeaders }), env); // sem X-Admin-Secret nenhum
+    }
+    const res = await worker.fetch(req('GET', '/admin/users', { headers: { ...ipHeaders, 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual(res.status, 200, 'não deveria estar bloqueado só por chamadas sem header nenhum');
   });
 
   console.log('--- CORS e logout ---');
