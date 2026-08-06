@@ -203,6 +203,8 @@
 .tasks-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 12px;
 }
 
@@ -263,6 +265,61 @@
 }
 
 .admin-table .cell-muted { color: var(--text-muted); }
+
+/* ============================================================
+   PAGINAÇÃO
+   ============================================================ */
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 14px 0 4px;
+}
+
+.pagination-bar span {
+  font-size: .82rem;
+  color: var(--text-mid);
+  font-weight: 500;
+}
+
+.pagination-bar .btn-secondary:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+/* ============================================================
+   GRÁFICO DE SLA (SVG nativo, sem lib)
+   ============================================================ */
+.metrics-panel-sla { display: flex; flex-direction: column; }
+
+.sla-chart-wrap {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex: 1;
+}
+
+.sla-chart-wrap svg { flex-shrink: 0; }
+
+.sla-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: .82rem;
+}
+
+.sla-legend-item { display: flex; align-items: center; gap: 7px; }
+
+.sla-legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.sla-legend-label { color: var(--text-mid); }
+.sla-legend-value { font-weight: 700; color: var(--text); margin-left: 3px; }
 
 /* ============================================================
    RESPONSIVO

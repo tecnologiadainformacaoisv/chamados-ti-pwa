@@ -2,8 +2,10 @@
 
 // ============================================================
 // PAINEL DE ADMIN — consome GET /admin/tasks e GET /admin/metrics do
-// mesmo Worker (push-worker.js). Fase 2 do painel (ver CLAUDE.md):
-// só leitura, sem ações — Fase 3 é que trata exportação/paginação/ações.
+// mesmo Worker (push-worker.js). Ver CLAUDE.md, seção "Painel de admin":
+// Fase 2 (gate, métricas, filtros, tabela) + parte da Fase 3 (busca,
+// paginação, exportação CSV e gráfico de SLA — tudo client-side, sem
+// endpoint novo). Segue só leitura — nenhuma ação muta chamado na ClickUp.
 //
 // ⚠️ Nunca coloque o ADMIN_SECRET aqui — este arquivo é público (GitHub
 // Pages). O segredo é digitado pelo usuário na tela de gate e fica só no
@@ -134,6 +136,13 @@ function toast(msg, type = 'success') {
 let adminSecret = store.get('admin_secret') || '';
 let solicitanteIdxToName = {}; // preenchido por loadSolicitanteOptions()
 
+// Estado da tabela (Fase 3: busca/paginação são client-side, sobre o resultado já
+// filtrado pelo servidor — evita reconsultar o Worker a cada tecla digitada).
+let allTasks = [];          // último resultado bruto de /admin/tasks (filtros de servidor já aplicados)
+let lastVisibleTasks = [];  // allTasks após a busca por título — é o que a exportação CSV usa
+let currentPage = 1;
+const PAGE_SIZE = 25;
+
 function showGate(msg) {
   document.getElementById('admin-app').classList.add('hidden');
   document.getElementById('gate-screen').classList.remove('hidden');
@@ -249,7 +258,7 @@ function currentFilterParams() {
 
 document.getElementById('btn-filtrar').addEventListener('click', () => loadTasks());
 document.getElementById('btn-limpar').addEventListener('click', () => {
-  ['f-status', 'f-setor', 'f-tipo', 'f-operador', 'f-solicitante'].forEach(id => {
+  ['f-status', 'f-setor', 'f-tipo', 'f-operador', 'f-solicitante', 'f-busca'].forEach(id => {
     document.getElementById(id).value = '';
   });
   loadTasks();
@@ -310,6 +319,42 @@ function renderOperadores(tempoMedio) {
   }).join('');
 }
 
+// Donut de SLA em SVG puro (stroke-dasharray por segmento) — sem lib de gráfico,
+// mesma filosofia zero-dependência do resto do projeto.
+function renderSlaChart(sla) {
+  const el = document.getElementById('metrics-sla-chart');
+  const pctDentro   = sla?.dentroDoSlaPercent;
+  const pctAtrasado = sla?.atrasadoPercent;
+
+  if (pctDentro === null || pctDentro === undefined) {
+    el.innerHTML = '<p class="empty-mini">Nenhum chamado com prazo definido ainda.</p>';
+    return;
+  }
+
+  const r = 50, cx = 60, cy = 60;
+  const circumference = 2 * Math.PI * r;
+  const dentroLen   = circumference * (pctDentro / 100);
+  const atrasadoLen = circumference * (pctAtrasado / 100);
+
+  el.innerHTML = `
+    <svg viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Dentro do SLA: ${pctDentro}%, Atrasado: ${pctAtrasado}%">
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--border)" stroke-width="14"/>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#22c55e" stroke-width="14"
+        stroke-dasharray="${dentroLen} ${circumference - dentroLen}"
+        transform="rotate(-90 ${cx} ${cy})"/>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#ef4444" stroke-width="14"
+        stroke-dasharray="${atrasadoLen} ${circumference - atrasadoLen}"
+        stroke-dashoffset="${-dentroLen}"
+        transform="rotate(-90 ${cx} ${cy})"/>
+      <text x="${cx}" y="${cy - 4}" text-anchor="middle" font-size="20" font-weight="700" fill="var(--text)">${pctDentro}%</text>
+      <text x="${cx}" y="${cy + 14}" text-anchor="middle" font-size="9" fill="var(--text-muted)">dentro do SLA</text>
+    </svg>
+    <div class="sla-legend">
+      <div class="sla-legend-item"><span class="sla-legend-dot" style="background:#22c55e"></span><span class="sla-legend-label">Dentro do SLA</span><span class="sla-legend-value">${pctDentro}%</span></div>
+      <div class="sla-legend-item"><span class="sla-legend-dot" style="background:#ef4444"></span><span class="sla-legend-label">Atrasado</span><span class="sla-legend-value">${pctAtrasado}%</span></div>
+    </div>`;
+}
+
 function renderMetrics(data) {
   const cardsEl = document.getElementById('metrics-cards');
   const statusOrder = ['aberto', 'em atendimento', 'pendente', 'encerrado'];
@@ -324,6 +369,7 @@ function renderMetrics(data) {
   renderBarList('metrics-por-tipo', data.porTipo, TIPOS);
   renderBarList('metrics-por-setor', data.porSetor, SETORES);
   renderOperadores(data.tempoMedioPorOperador);
+  renderSlaChart(data.sla);
 }
 
 async function loadMetrics() {
@@ -379,30 +425,136 @@ function taskRowHtml(task) {
   </tr>`;
 }
 
+// Busca por título (client-side, sobre o que o servidor já filtrou) + paginação —
+// não refaz a chamada ao Worker a cada tecla digitada, só reaplica sobre allTasks.
+function applySearchAndRender() {
+  const term = document.getElementById('f-busca').value.trim().toLowerCase();
+  lastVisibleTasks = term
+    ? allTasks.filter(t => (t.name || '').toLowerCase().includes(term))
+    : allTasks;
+  renderTasksTable(lastVisibleTasks, term);
+}
+
+function renderTasksTable(list, term) {
+  const emptyEl = document.getElementById('tasks-empty');
+  const wrapEl  = document.getElementById('tasks-table-wrap');
+  const tbody   = document.getElementById('tasks-tbody');
+  const pagEl   = document.getElementById('tasks-pagination');
+  const countEl = document.getElementById('tasks-count');
+
+  countEl.textContent = term
+    ? `Chamados (${list.length} de ${allTasks.length})`
+    : `Chamados (${allTasks.length})`;
+
+  if (list.length === 0) {
+    emptyEl.classList.remove('hidden');
+    wrapEl.classList.add('hidden');
+    pagEl.classList.add('hidden');
+    tbody.innerHTML = '';
+    return;
+  }
+  emptyEl.classList.add('hidden');
+  wrapEl.classList.remove('hidden');
+
+  const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  if (currentPage > totalPages) currentPage = totalPages;
+  if (currentPage < 1) currentPage = 1;
+  const start = (currentPage - 1) * PAGE_SIZE;
+  tbody.innerHTML = list.slice(start, start + PAGE_SIZE).map(taskRowHtml).join('');
+
+  if (totalPages > 1) {
+    pagEl.classList.remove('hidden');
+    document.getElementById('pagination-label').textContent = `Página ${currentPage} de ${totalPages}`;
+    document.getElementById('btn-prev-page').disabled = currentPage <= 1;
+    document.getElementById('btn-next-page').disabled = currentPage >= totalPages;
+  } else {
+    pagEl.classList.add('hidden');
+  }
+}
+
+document.getElementById('f-busca').addEventListener('input', () => {
+  clearTimeout(window.__buscaDebounce);
+  window.__buscaDebounce = setTimeout(() => { currentPage = 1; applySearchAndRender(); }, 200);
+});
+
+document.getElementById('btn-prev-page').addEventListener('click', () => { currentPage--; applySearchAndRender(); });
+document.getElementById('btn-next-page').addEventListener('click', () => { currentPage++; applySearchAndRender(); });
+
+// ============================================================
+// EXPORTAÇÃO CSV — exporta o conjunto visível (filtros de servidor + busca por
+// título), não só a página atual. Tudo no cliente, sem endpoint novo no Worker.
+// ============================================================
+function csvEscape(value) {
+  const str = String(value ?? '');
+  return /[",\n]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
+}
+
+function taskToCsvRow(task) {
+  const statusKey = (task.status?.status || '').toLowerCase();
+  const info = STATUS_MAP[statusKey];
+  const tipoNome  = optionName(TIPOS, getCF(task, TIPO_FIELD_ID));
+  const setorNome = optionName(SETORES, getCF(task, SETOR_FIELD_ID));
+  const solNome   = solicitanteIdxToName[getCF(task, SOLICITANTE_FIELD_ID)] ?? '—';
+  const operadores = (task.assignees || [])
+    .map(a => a.username || OPERADORES[String(a.id)] || `#${a.id}`)
+    .join('; ') || '—';
+
+  return [
+    task.id,
+    task.name || '',
+    info?.label || task.status?.status || '',
+    tipoNome,
+    setorNome,
+    solNome,
+    operadores,
+    task.date_created ? new Date(Number(task.date_created)).toISOString() : '',
+    task.due_date ? new Date(Number(task.due_date)).toISOString() : '',
+    isAtrasado(task) ? 'Sim' : 'Não',
+  ];
+}
+
+function exportCsv() {
+  if (!lastVisibleTasks || lastVisibleTasks.length === 0) {
+    toast('Nada para exportar com os filtros/busca atuais.', 'info');
+    return;
+  }
+  const headers = ['ID', 'Chamado', 'Status', 'Tipo', 'Setor', 'Solicitante', 'Operador(es)', 'Criado em', 'Prazo', 'Atrasado'];
+  const csv = [headers, ...lastVisibleTasks.map(taskToCsvRow)]
+    .map(row => row.map(csvEscape).join(','))
+    .join('\r\n');
+
+  // BOM (﻿) na frente — sem isso o Excel abre acento errado em UTF-8.
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `chamados-ti-isv-${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  toast(`${lastVisibleTasks.length} chamado(s) exportado(s).`, 'success');
+}
+
+document.getElementById('btn-export-csv').addEventListener('click', exportCsv);
+
 async function loadTasks() {
   const loadingEl = document.getElementById('tasks-loading');
   const errEl     = document.getElementById('tasks-error');
-  const emptyEl   = document.getElementById('tasks-empty');
   const wrapEl    = document.getElementById('tasks-table-wrap');
-  const tbody     = document.getElementById('tasks-tbody');
-  const countEl   = document.getElementById('tasks-count');
 
   loadingEl.classList.remove('hidden');
   errEl.classList.add('hidden');
-  emptyEl.classList.add('hidden');
   wrapEl.classList.add('hidden');
 
   try {
     const qs   = currentFilterParams().toString();
     const data = await adminRequest(`/tasks${qs ? '?' + qs : ''}`);
-
-    countEl.textContent = `Chamados (${data.total ?? 0})`;
-    if (!data.tasks || data.tasks.length === 0) {
-      emptyEl.classList.remove('hidden');
-    } else {
-      tbody.innerHTML = data.tasks.map(taskRowHtml).join('');
-      wrapEl.classList.remove('hidden');
-    }
+    allTasks = data.tasks || [];
+    currentPage = 1;
+    applySearchAndRender();
   } catch (err) {
     errEl.textContent = err.message || 'Não foi possível carregar os chamados.';
     errEl.classList.remove('hidden');

@@ -104,6 +104,10 @@
               <h3>Tempo médio de atendimento</h3>
               <div id="metrics-operadores" class="operador-cards"></div>
             </div>
+            <div class="metrics-panel metrics-panel-sla">
+              <h3>Distribuição de SLA</h3>
+              <div id="metrics-sla-chart" class="sla-chart-wrap"></div>
+            </div>
           </div>
         </div>
       </section>
@@ -126,9 +130,13 @@
           <label for="f-operador">Operador</label>
           <select id="f-operador"><option value="">Todos</option></select>
         </div>
-        <div class="filter-field filter-field-grow">
+        <div class="filter-field">
           <label for="f-solicitante">Solicitante</label>
           <select id="f-solicitante"><option value="">Todos</option></select>
+        </div>
+        <div class="filter-field filter-field-grow">
+          <label for="f-busca">Buscar por título</label>
+          <input id="f-busca" type="text" placeholder="Ex.: notebook, impressora…" autocomplete="off">
         </div>
         <div class="filter-actions">
           <button id="btn-filtrar" type="button" class="btn-primary">Filtrar</button>
@@ -140,6 +148,7 @@
       <section id="tasks-section">
         <div class="tasks-header">
           <h2 id="tasks-count">Chamados</h2>
+          <button id="btn-export-csv" type="button" class="btn-secondary">⬇ Exportar CSV</button>
         </div>
         <div id="tasks-loading" class="loading-state"><span class="spinner"></span> Carregando chamados…</div>
         <div id="tasks-error" class="error-banner hidden"></div>
@@ -163,6 +172,11 @@
             </thead>
             <tbody id="tasks-tbody"></tbody>
           </table>
+        </div>
+        <div id="tasks-pagination" class="pagination-bar hidden">
+          <button id="btn-prev-page" type="button" class="btn-secondary">‹ Anterior</button>
+          <span id="pagination-label"></span>
+          <button id="btn-next-page" type="button" class="btn-secondary">Próxima ›</button>
         </div>
       </section>
 
