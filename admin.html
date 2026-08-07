@@ -118,7 +118,7 @@
 
       <!-- FILTROS -->
       <section class="filters-bar">
-        <div class="filter-field">
+        <div class="filter-field" id="filter-field-status">
           <label for="f-status">Status</label>
           <select id="f-status"><option value="">Todos</option></select>
         </div>
@@ -143,8 +143,7 @@
           <input id="f-busca" type="text" placeholder="Ex.: notebook, impressora…" autocomplete="off">
         </div>
         <div class="filter-actions">
-          <button id="btn-filtrar" type="button" class="btn-primary">Filtrar</button>
-          <button id="btn-limpar" type="button" class="btn-secondary">Limpar</button>
+          <button id="btn-limpar" type="button" class="btn-secondary">Limpar filtros</button>
         </div>
       </section>
 
@@ -154,8 +153,8 @@
           <h2 id="tasks-count">Chamados</h2>
           <div class="tasks-header-actions">
             <div class="view-toggle">
-              <button id="btn-view-tabela" type="button" class="view-toggle-btn active">☰ Tabela</button>
-              <button id="btn-view-quadro" type="button" class="view-toggle-btn">▦ Quadro</button>
+              <button id="btn-view-quadro" type="button" class="view-toggle-btn active">▦ Quadro</button>
+              <button id="btn-view-tabela" type="button" class="view-toggle-btn">☰ Tabela</button>
             </div>
             <button id="btn-export-csv" type="button" class="btn-secondary">⬇ Exportar CSV</button>
           </div>

@@ -169,8 +169,11 @@ let solicitanteIdxToName = {}; // preenchido por loadSolicitanteOptions()
 let allTasks = [];          // último resultado bruto de /admin/tasks (filtros de servidor já aplicados)
 let lastVisibleTasks = [];  // allTasks após a busca por título — é o que a exportação CSV usa
 
-// 'tabela' ou 'quadro' — mesma lógica de filtro/busca por trás, só muda como renderiza.
-let viewMode = 'tabela';
+// 'quadro' ou 'tabela' — mesma lógica de filtro/busca por trás, só muda como renderiza.
+// Quadro é o padrão (2026-08-07): é a visão que a TI usa pra trabalhar no dia a dia,
+// igual ao board que eles já usavam na ClickUp. A Tabela fica pra quando precisa
+// varrer/exportar muita coisa de uma vez.
+let viewMode = 'quadro';
 
 // Tabela agrupada por status (mesma ideia visual da própria ClickUp: seção por status,
 // expande/recolhe) — substitui a paginação global antiga. Lembra estado entre re-renders
@@ -300,13 +303,28 @@ function currentFilterParams() {
   return params;
 }
 
-document.getElementById('btn-filtrar').addEventListener('click', () => loadTasks());
+// Filtros aplicam sozinhos ao mudar — sem botão "Filtrar". São filtros de servidor
+// (viram query string em /admin/tasks), então cada mudança é 1 chamada ao Worker;
+// como são selects (não digitação), não precisa de debounce. A busca por título é
+// que é client-side e tem debounce próprio, ver o listener de #f-busca.
+const FILTER_SELECT_IDS = ['f-status', 'f-setor', 'f-tipo', 'f-operador', 'f-solicitante'];
+FILTER_SELECT_IDS.forEach(id => {
+  document.getElementById(id).addEventListener('change', () => loadTasks());
+});
+
 document.getElementById('btn-limpar').addEventListener('click', () => {
-  ['f-status', 'f-setor', 'f-tipo', 'f-operador', 'f-solicitante', 'f-busca'].forEach(id => {
+  [...FILTER_SELECT_IDS, 'f-busca'].forEach(id => {
     document.getElementById(id).value = '';
   });
   loadTasks();
 });
+
+// O filtro de Status não faz sentido no Quadro — ele já é agrupado por status, então
+// filtrar por um status só deixa as outras 3 colunas vazias em vez de "filtrar" algo.
+// Some no Quadro, volta na Tabela.
+function updateFilterVisibility() {
+  document.getElementById('filter-field-status').classList.toggle('hidden', viewMode === 'quadro');
+}
 
 // ============================================================
 // MÉTRICAS
@@ -736,6 +754,16 @@ function setViewMode(mode) {
   viewMode = mode;
   document.getElementById('btn-view-tabela').classList.toggle('active', mode === 'tabela');
   document.getElementById('btn-view-quadro').classList.toggle('active', mode === 'quadro');
+  updateFilterVisibility();
+
+  // Indo pro Quadro com filtro de status ativo: limpa e recarrega, senão ficaria um
+  // filtro aplicado que o usuário não consegue mais ver nem desfazer (o campo sumiu).
+  const statusEl = document.getElementById('f-status');
+  if (mode === 'quadro' && statusEl.value) {
+    statusEl.value = '';
+    loadTasks();
+    return;
+  }
   applySearchAndRender();
 }
 
@@ -845,6 +873,7 @@ async function loadTasks() {
 async function initPanelData() {
   populateFilters();
   populateModalOperadores();
+  updateFilterVisibility(); // Quadro é o padrão, então o filtro de Status já nasce escondido
   try {
     await loadSolicitanteOptions();
   } catch (err) {
