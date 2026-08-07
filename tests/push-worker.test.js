@@ -10,6 +10,7 @@ const { pathToFileURL } = require('url');
 const SOLICITANTE_FIELD_ID = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
 const TIPO_FIELD_ID = '47e475fe-e911-40cd-b4a2-23625fbf57f1';
 const SETOR_FIELD_ID = 'c1ca88de-4b01-4933-93ff-24494bed59e2';
+const SOLUCAO_FIELD_ID = '16144175-845e-4e3c-baaa-a2517325cd43';
 const FAKE_OPTIONS = [
   { id: 'a1', name: 'Ariele Santo', orderindex: 1 },
   { id: 'a27', name: 'Michael Vasconcelos', orderindex: 27 },
@@ -410,6 +411,115 @@ async function test(name, fn) {
     assert.strictEqual(everson.totalChamados, 1);
     assert.ok(everson.mediaMs > 0);
     assert.strictEqual(data.tempoMedioPorOperador['200498355'], undefined, 'chamado da Ariele não foi encerrado, não deveria contar tempo de atendimento pro Henrique');
+  });
+
+  console.log('--- POST /admin/tasks/:id — a TI passa a trabalhar por aqui em vez de abrir a ClickUp ---');
+  await test('sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks/task-michael-1', { body: JSON.stringify({ status: 'em atendimento' }) }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('status inválido dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks/task-michael-1', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'invalido' })
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('corpo sem nada pra atualizar dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks/task-michael-1', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({})
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('muda status, escreve solução e reatribui operador — cada mudança chama o endpoint certo da ClickUp', async () => {
+    const previousFetch = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      calls.push({ url: u, method: opts?.method || 'GET', body: opts?.body ? JSON.parse(opts.body) : null });
+      if (u.endsWith('/task/task-update-1') && (!opts?.method || opts.method === 'GET')) {
+        return new Response(JSON.stringify({ id: 'task-update-1', assignees: [{ id: 170628721, username: 'Everson' }] }), { status: 200 });
+      }
+      if (u.endsWith('/task/task-update-1') && opts.method === 'PUT') {
+        return new Response(JSON.stringify({ id: 'task-update-1', ok: true }), { status: 200 });
+      }
+      if (u.includes('/task/task-update-1/field/') && opts.method === 'POST') {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      return previousFetch(url, opts);
+    };
+
+    try {
+      const res = await worker.fetch(req('POST', '/admin/tasks/task-update-1', {
+        headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+        body: JSON.stringify({ status: 'em atendimento', solucao: 'Reiniciei o notebook e atualizei o driver.', assigneeId: 200498355 })
+      }), env);
+      assert.strictEqual(res.status, 200);
+      const data = await res.json();
+      assert.deepStrictEqual(data.updated, { status: 'em atendimento', solucao: true, assigneeId: 200498355 });
+
+      const statusCall = calls.find(c => c.method === 'PUT' && c.body?.status === 'em atendimento');
+      assert.ok(statusCall, 'deveria ter dado PUT com o status novo');
+
+      const fieldCall = calls.find(c => c.url.includes('/field/') && c.method === 'POST');
+      assert.ok(fieldCall, 'deveria ter dado POST no endpoint de campo customizado');
+      assert.ok(fieldCall.url.includes(SOLUCAO_FIELD_ID), 'deveria usar o field_id da SOLUCAO');
+      assert.strictEqual(fieldCall.body.value, 'Reiniciei o notebook e atualizei o driver.');
+
+      const assigneeCall = calls.find(c => c.method === 'PUT' && c.body?.assignees);
+      assert.ok(assigneeCall, 'deveria ter dado PUT trocando assignees');
+      assert.deepStrictEqual(assigneeCall.body.assignees, { add: [200498355], rem: [170628721] }, 'deveria remover o Everson e adicionar o Henrique, não empilhar os dois');
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+  await test('reatribuir pra quem já é o assignee não dispara PUT nenhum (nada pra mudar)', async () => {
+    const previousFetch = globalThis.fetch;
+    let putCalled = false;
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      if (u.endsWith('/task/task-update-2') && (!opts?.method || opts.method === 'GET')) {
+        return new Response(JSON.stringify({ id: 'task-update-2', assignees: [{ id: 170628721, username: 'Everson' }] }), { status: 200 });
+      }
+      if (u.endsWith('/task/task-update-2') && opts.method === 'PUT') {
+        putCalled = true;
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      return previousFetch(url, opts);
+    };
+    try {
+      const res = await worker.fetch(req('POST', '/admin/tasks/task-update-2', {
+        headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ assigneeId: 170628721 })
+      }), env);
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(putCalled, false, 'já era o assignee — não deveria mandar PUT nenhum');
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+
+  await test('assigneeId:null ("Sem atribuição") remove quem estava atribuído', async () => {
+    const previousFetch = globalThis.fetch;
+    let sentPayload = null;
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      if (u.endsWith('/task/task-update-3') && (!opts?.method || opts.method === 'GET')) {
+        return new Response(JSON.stringify({ id: 'task-update-3', assignees: [{ id: 170628721, username: 'Everson' }, { id: 200498355, username: 'Henrique' }] }), { status: 200 });
+      }
+      if (u.endsWith('/task/task-update-3') && opts.method === 'PUT') {
+        sentPayload = JSON.parse(opts.body);
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      return previousFetch(url, opts);
+    };
+    try {
+      const res = await worker.fetch(req('POST', '/admin/tasks/task-update-3', {
+        headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ assigneeId: null })
+      }), env);
+      assert.strictEqual(res.status, 200);
+      assert.deepStrictEqual(sentPayload.assignees, { add: [], rem: [170628721, 200498355] }, 'deveria remover todo mundo que estava atribuído');
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
   });
 
   console.log('--- lockout de ADMIN_SECRET por IP (mesma proteção do login, mas por IP em vez de nome) ---');

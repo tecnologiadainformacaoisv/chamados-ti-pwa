@@ -24,6 +24,7 @@ const APP_SHARED_SECRET = 'isv-chamados-2k26-9fQ3vM7xZp';
 const SOLICITANTE_FIELD_ID = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
 const TIPO_FIELD_ID        = '47e475fe-e911-40cd-b4a2-23625fbf57f1';
 const SETOR_FIELD_ID       = 'c1ca88de-4b01-4933-93ff-24494bed59e2';
+const SOLUCAO_FIELD_ID     = '16144175-845e-4e3c-baaa-a2517325cd43';
 
 const TIPOS = [
   { orderindex: 0, name: 'Notebooks', color: '#30a46c' },
@@ -434,8 +435,94 @@ function taskRowHtml(task) {
     <td>${escHtml(operadores)}</td>
     <td class="${atrasado ? 'cell-atrasado' : ''}">${escHtml(prazoTxt)}${atrasado ? ' ⚠' : ''}</td>
     <td class="cell-muted">${escHtml(criadoTxt)}</td>
+    <td><button type="button" class="btn-gerenciar" data-task-id="${escHtml(task.id)}">Gerenciar</button></td>
   </tr>`;
 }
+
+// ============================================================
+// MODAL DE GERENCIAMENTO — status/operador/solução mutam a ClickUp por trás
+// (POST /admin/tasks/:id). É isso que substitui a ClickUp como interface de
+// trabalho da TI (ver CLAUDE.md, "Painel de admin" — decisão de 2026-08-07).
+// ============================================================
+let modalTaskId = null;
+
+function populateModalOperadores() {
+  const el = document.getElementById('modal-operador');
+  el.innerHTML = '<option value="">Sem atribuição</option>' +
+    Object.entries(OPERADORES).map(([id, nome]) => `<option value="${id}">${escHtml(nome)}</option>`).join('');
+}
+
+function openTaskModal(task) {
+  modalTaskId = task.id;
+  document.getElementById('task-modal-title').textContent = task.name || '(sem título)';
+  document.getElementById('modal-status').value = (task.status?.status || 'aberto').toLowerCase();
+  const currentAssignee = (task.assignees || [])[0]?.id;
+  document.getElementById('modal-operador').value = currentAssignee ? String(currentAssignee) : '';
+  document.getElementById('modal-solucao').value = getCF(task, SOLUCAO_FIELD_ID) || '';
+  document.getElementById('task-modal-error').classList.add('hidden');
+  document.getElementById('task-modal-overlay').classList.remove('hidden');
+}
+
+function closeTaskModal() {
+  document.getElementById('task-modal-overlay').classList.add('hidden');
+  modalTaskId = null;
+}
+
+document.getElementById('tasks-tbody').addEventListener('click', e => {
+  const btn = e.target.closest('.btn-gerenciar');
+  if (!btn) return;
+  const task = allTasks.find(t => String(t.id) === btn.dataset.taskId);
+  if (task) openTaskModal(task);
+});
+
+document.getElementById('btn-modal-cancelar').addEventListener('click', closeTaskModal);
+document.getElementById('task-modal-overlay').addEventListener('click', e => {
+  if (e.target.id === 'task-modal-overlay') closeTaskModal(); // clique fora do card fecha
+});
+
+document.getElementById('btn-modal-salvar').addEventListener('click', async () => {
+  if (!modalTaskId) return;
+  const btn   = document.getElementById('btn-modal-salvar');
+  const errEl = document.getElementById('task-modal-error');
+  errEl.classList.add('hidden');
+  btn.disabled = true;
+
+  try {
+    const operadorVal = document.getElementById('modal-operador').value;
+    const body = {
+      status: document.getElementById('modal-status').value,
+      solucao: document.getElementById('modal-solucao').value,
+      assigneeId: operadorVal ? Number(operadorVal) : null, // null = "Sem atribuição" remove quem estava atribuído
+    };
+
+    const res = await fetch(`${ADMIN_BASE}/tasks/${modalTaskId}`, {
+      method: 'POST',
+      headers: { 'X-Admin-Secret': adminSecret, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (res.status === 403) {
+      store.remove('admin_secret');
+      adminSecret = '';
+      closeTaskModal();
+      showGate('Segredo de admin inválido ou expirado. Entre de novo.');
+      return;
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `Erro HTTP ${res.status}`);
+    }
+
+    toast('Chamado atualizado.', 'success');
+    closeTaskModal();
+    loadTasks();
+    loadMetrics();
+  } catch (err) {
+    errEl.textContent = err.message || 'Não foi possível salvar.';
+    errEl.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 // Busca por título (client-side, sobre o que o servidor já filtrou) + paginação —
 // não refaz a chamada ao Worker a cada tecla digitada, só reaplica sobre allTasks.
@@ -588,6 +675,7 @@ async function loadTasks() {
 // ============================================================
 async function initPanelData() {
   populateFilters();
+  populateModalOperadores();
   try {
     await loadSolicitanteOptions();
   } catch (err) {

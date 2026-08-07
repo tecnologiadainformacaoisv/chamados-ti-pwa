@@ -13,8 +13,10 @@
 //                        qualquer, NUNCA o mesmo do SUBSCRIBE_SECRET. Não fica em nenhum
 //                        lugar do app.js/navegador. Usado nas rotas /admin/* (header
 //                        X-Admin-Secret): GET /admin/users (quem já tem senha cadastrada),
-//                        GET /admin/tasks (todos os chamados, com filtros) e GET /admin/metrics
-//                        (agregados de SLA/volume/tempo de atendimento) — painel de admin, Fase 1.
+//                        GET /admin/tasks (todos os chamados, com filtros), GET /admin/metrics
+//                        (agregados de SLA/volume/tempo de atendimento) e POST /admin/tasks/:id
+//                        (única rota de admin que MUTA a ClickUp — status/solução/operador;
+//                        é o que substitui a ClickUp como interface de trabalho da TI).
 //
 // KV Namespace (Settings → KV Namespace Bindings → Add):
 //   Nome da variável: SUBSCRIPTIONS — reaproveitado também pra login (sem KV novo):
@@ -25,12 +27,19 @@
 //     adminfail_<ip>    → contador de tentativas erradas de ADMIN_SECRET, por IP (expira em 15min)
 // =====================================================================
 
-// ⚠️ Mantenha sincronizado com LIST_ID/FIELD_IDS.SOLICITANTE/FIELD_IDS.TIPO/FIELD_IDS.SETOR em app.js
+// ⚠️ Mantenha sincronizado com LIST_ID/FIELD_IDS.SOLICITANTE/FIELD_IDS.TIPO/FIELD_IDS.SETOR/
+// FIELD_IDS.SOLUCAO em app.js
 const LIST_ID               = '901324490220';
 const SOLICITANTE_FIELD_ID  = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
 const TIPO_FIELD_ID         = '47e475fe-e911-40cd-b4a2-23625fbf57f1';
 const SETOR_FIELD_ID        = 'c1ca88de-4b01-4933-93ff-24494bed59e2';
+const SOLUCAO_FIELD_ID      = '16144175-845e-4e3c-baaa-a2517325cd43';
 const VAPID_SUBJECT         = 'mailto:henrique.krvalho@gmail.com';
+
+// ⚠️ Mantenha sincronizado com as chaves de STATUS_MAP em app.js (que por sua vez precisam
+// ficar iguais a NOTIFY_STATUSES, ver abaixo) — usado por handleAdminUpdateTask pra validar
+// o status recebido do painel de admin antes de mandar pra ClickUp.
+const VALID_STATUSES = ['aberto', 'em atendimento', 'pendente', 'encerrado'];
 
 // ⚠️ Mantenha sincronizado com CATEGORIA_PRIORIDADE/PRIORITY em app.js — "prioridade é sempre
 // automática, nunca manual" é regra de negócio do projeto (ver CLAUDE.md); recalculada aqui de
@@ -101,6 +110,8 @@ export default {
       if (pathname === '/api/tasks')     return handleCreateTask(request, env);
       const attachMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/attachment$/);
       if (attachMatch) return handleUploadAttachment(request, env, attachMatch[1]);
+      const adminUpdateMatch = pathname.match(/^\/admin\/tasks\/([^/]+)$/);
+      if (adminUpdateMatch) return handleAdminUpdateTask(request, env, adminUpdateMatch[1]);
     }
 
     if (request.method === 'GET') {
@@ -627,6 +638,78 @@ async function handleAdminMetrics(request, env) {
     },
     tempoMedioPorOperador
   });
+}
+
+// =====================================================================
+// POST /admin/tasks/:id — a TI passa a trabalhar por aqui em vez de abrir a ClickUp
+// (decisão de 2026-08-07: ClickUp continua guardando o dado, mas deixa de ser a
+// INTERFACE de trabalho — ver CLAUDE.md, "Painel de admin"). Protegido por ADMIN_SECRET,
+// mesmo padrão das outras rotas /admin/*. Body aceita qualquer subconjunto de:
+//   { status, solucao, assigneeId }
+// Cada campo presente dispara uma chamada própria pra ClickUp, porque a API dela usa
+// formatos diferentes pra cada tipo de mudança (status é PUT direto na task; campo
+// customizado como SOLUCAO é POST num endpoint próprio de campo; assignee é PUT com
+// {add, rem} depois de buscar quem já está atribuído). Mudar o status aqui já é
+// suficiente pra disparar a automação de SLA existente (runStatusAutomation) — ela reage
+// à automação/webhook configurada na ClickUp, que dispara em QUALQUER mudança de status,
+// não importa se veio da UI da ClickUp ou da API (que é o que este endpoint usa).
+// =====================================================================
+async function handleAdminUpdateTask(request, env, taskId) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+
+  if (body.status !== undefined && !VALID_STATUSES.includes(body.status)) {
+    return jsonRes({ error: `status inválido — use um de: ${VALID_STATUSES.join(', ')}` }, 400);
+  }
+  if (body.status === undefined && body.solucao === undefined && body.assigneeId === undefined) {
+    return jsonRes({ error: 'nada pra atualizar — mande status, solucao e/ou assigneeId' }, 400);
+  }
+
+  const headers = { Authorization: env.CLICKUP_API_KEY, 'Content-Type': 'application/json' };
+  const updated = {};
+
+  if (body.status !== undefined) {
+    const upstream = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
+      method: 'PUT', headers, body: JSON.stringify({ status: body.status })
+    });
+    if (!upstream.ok) return passthrough(upstream);
+    updated.status = body.status;
+  }
+
+  if (typeof body.solucao === 'string') {
+    const upstream = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/field/${SOLUCAO_FIELD_ID}`, {
+      method: 'POST', headers, body: JSON.stringify({ value: body.solucao })
+    });
+    if (!upstream.ok) return passthrough(upstream);
+    updated.solucao = true;
+  }
+
+  if (body.assigneeId !== undefined) {
+    // null = "Sem atribuição" (remove quem estiver atribuído); qualquer outro valor = o
+    // id de pra quem atribuir.
+    const desiredId = body.assigneeId === null ? null : Number(body.assigneeId);
+    // Busca quem já está atribuído pra montar o diff {add, rem} — a API da ClickUp não
+    // tem "set assignee", só "adicionar"/"remover" em cima do que já existe. Sem isso,
+    // "atribuir pro Henrique" um chamado que já era do Everson deixaria os dois atribuídos.
+    const taskResp = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, { headers: { Authorization: env.CLICKUP_API_KEY } });
+    if (!taskResp.ok) return passthrough(taskResp);
+    const task = await taskResp.json();
+    const currentIds = (task.assignees || []).map(a => a.id);
+    const rem = desiredId === null ? currentIds : currentIds.filter(id => id !== desiredId);
+    const add = desiredId === null ? [] : (currentIds.includes(desiredId) ? [] : [desiredId]);
+
+    if (add.length || rem.length) {
+      const upstream = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
+        method: 'PUT', headers, body: JSON.stringify({ assignees: { add, rem } })
+      });
+      if (!upstream.ok) return passthrough(upstream);
+    }
+    updated.assigneeId = desiredId;
+  }
+
+  return jsonRes({ ok: true, updated });
 }
 
 // =====================================================================

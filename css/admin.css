@@ -339,6 +339,62 @@
 .sla-legend-value { font-weight: 700; color: var(--text); margin-left: 3px; }
 
 /* ============================================================
+   MODAL DE GERENCIAMENTO (status/operador/solução — muta a ClickUp)
+   ============================================================ */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, .55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 500;
+}
+
+.modal-card {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 24px 26px;
+  width: 100%;
+  max-width: 460px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal-card h3 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 18px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.btn-gerenciar {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--primary-pale);
+  color: var(--primary);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-size: .8rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.btn-gerenciar:hover { opacity: .85; }
+
+/* ============================================================
    RESPONSIVO
    ============================================================ */
 @media (max-width: 640px) {

@@ -172,6 +172,7 @@
                 <th>Operador</th>
                 <th>Prazo</th>
                 <th>Criado em</th>
+                <th>Ações</th>
               </tr>
             </thead>
             <tbody id="tasks-tbody"></tbody>
@@ -185,6 +186,43 @@
       </section>
 
     </main>
+  </div>
+
+  <!-- MODAL DE GERENCIAMENTO — status/operador/solução mutam a ClickUp por trás
+       (a TI trabalha por aqui, sem abrir mais a ClickUp; ver CLAUDE.md, "Painel de admin") -->
+  <div id="task-modal-overlay" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h3 id="task-modal-title">Gerenciar chamado</h3>
+
+      <div class="setup-field">
+        <label for="modal-status">Status</label>
+        <select id="modal-status">
+          <option value="aberto">Aberto</option>
+          <option value="em atendimento">Em Atendimento</option>
+          <option value="pendente">Pendente</option>
+          <option value="encerrado">Encerrado</option>
+        </select>
+      </div>
+
+      <div class="setup-field">
+        <label for="modal-operador">Operador</label>
+        <select id="modal-operador">
+          <option value="">Sem atribuição</option>
+        </select>
+      </div>
+
+      <div class="setup-field">
+        <label for="modal-solucao">Solução</label>
+        <textarea id="modal-solucao" rows="4" placeholder="Descreva a solução aplicada..."></textarea>
+      </div>
+
+      <div id="task-modal-error" class="error-banner hidden"></div>
+
+      <div class="modal-actions">
+        <button id="btn-modal-cancelar" type="button" class="btn-secondary">Cancelar</button>
+        <button id="btn-modal-salvar" type="button" class="btn-primary">Salvar</button>
+      </div>
+    </div>
   </div>
 
   <div id="toast-container" aria-live="polite"></div>
