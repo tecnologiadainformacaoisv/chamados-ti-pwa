@@ -227,28 +227,28 @@
                     <span class="kanban-column-title">Aberto</span>
                     <span class="kanban-column-count" id="kanban-count-aberto">0</span>
                   </div>
-                  <div class="kanban-cards" id="kanban-cards-aberto"></div>
+                  <div class="kanban-cards" id="kanban-cards-aberto" data-status="aberto"></div>
                 </div>
                 <div class="kanban-column">
                   <div class="kanban-column-header">
                     <span class="kanban-column-title">Em Atendimento</span>
                     <span class="kanban-column-count" id="kanban-count-em-atendimento">0</span>
                   </div>
-                  <div class="kanban-cards" id="kanban-cards-em-atendimento"></div>
+                  <div class="kanban-cards" id="kanban-cards-em-atendimento" data-status="em atendimento"></div>
                 </div>
                 <div class="kanban-column">
                   <div class="kanban-column-header">
                     <span class="kanban-column-title">Pendente</span>
                     <span class="kanban-column-count" id="kanban-count-pendente">0</span>
                   </div>
-                  <div class="kanban-cards" id="kanban-cards-pendente"></div>
+                  <div class="kanban-cards" id="kanban-cards-pendente" data-status="pendente"></div>
                 </div>
                 <div class="kanban-column">
                   <div class="kanban-column-header">
                     <span class="kanban-column-title">Encerrado</span>
                     <span class="kanban-column-count" id="kanban-count-encerrado">0</span>
                   </div>
-                  <div class="kanban-cards" id="kanban-cards-encerrado"></div>
+                  <div class="kanban-cards" id="kanban-cards-encerrado" data-status="encerrado"></div>
                 </div>
               </div>
             </section>
@@ -264,6 +264,11 @@
   <div id="task-modal-overlay" class="modal-overlay hidden">
     <div class="modal-card">
       <h3 id="task-modal-title">Gerenciar chamado</h3>
+
+      <div class="setup-field">
+        <label>Descrição (o que o solicitante escreveu)</label>
+        <div id="modal-descricao" class="input-display modal-descricao">—</div>
+      </div>
 
       <div class="setup-field">
         <label for="modal-status">Status</label>

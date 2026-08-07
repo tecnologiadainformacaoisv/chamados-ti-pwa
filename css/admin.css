@@ -566,6 +566,14 @@
   margin-bottom: 18px;
 }
 
+.modal-descricao {
+  white-space: pre-line;
+  max-height: 140px;
+  overflow-y: auto;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;
@@ -659,6 +667,15 @@
 }
 
 .kanban-card.is-atrasado { border-color: #fca5a5; }
+.kanban-card.dragging { opacity: .4; }
+.kanban-card[draggable="true"] { cursor: grab; }
+
+.kanban-cards.drag-over {
+  background: var(--primary-pale);
+  outline: 2px dashed var(--primary-light);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
 
 .kanban-card-title {
   font-size: .85rem;

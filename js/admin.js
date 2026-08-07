@@ -65,8 +65,12 @@ const PRIORITY_MAP = {
   low:    { label: 'Baixa',   color: '#8d8d8d' },
 };
 
+// ⚠️ Cores confirmadas direto na configuração real da lista na ClickUp (GET /list/:id via
+// MCP, 2026-08-07) — não são só uma aproximação visual. "aberto" usa a cor padrão do tipo
+// "open" da própria ClickUp (var(--cu-status-open), sem hex customizado — por isso aparece
+// cinza/vazado nas telas da ClickUp, nunca foi azul de verdade); as outras 3 já batiam.
 const STATUS_MAP = {
-  'aberto':          { label: 'Aberto',          bg: '#e3f2fd', color: '#1565c0', dot: '#1976d2' },
+  'aberto':          { label: 'Aberto',          bg: '#e3f2fd', color: '#1565c0', dot: '#87909e' },
   'em atendimento':  { label: 'Em Atendimento',  bg: '#e3e0fb', color: '#4527a0', dot: '#5f55ee' },
   'pendente':        { label: 'Pendente',         bg: '#fce4ec', color: '#880e4f', dot: '#b660e0' },
   'encerrado':       { label: 'Encerrado',        bg: '#e8f5e9', color: '#1b5e20', dot: '#008844' }
@@ -544,6 +548,10 @@ function populateModalOperadores() {
 function openTaskModal(task) {
   modalTaskId = task.id;
   document.getElementById('task-modal-title').textContent = task.name || '(sem título)';
+  // description é texto puro que já vem no payload da ClickUp (passa direto por /admin/tasks,
+  // sem custom field nenhum) — text_content é o fallback que a API usa quando description
+  // vem vazio em algumas versões da task.
+  document.getElementById('modal-descricao').textContent = task.description || task.text_content || '(sem descrição)';
   document.getElementById('modal-status').value = (task.status?.status || 'aberto').toLowerCase();
   const currentAssignee = (task.assignees || [])[0]?.id;
   document.getElementById('modal-operador').value = currentAssignee ? String(currentAssignee) : '';
@@ -569,6 +577,30 @@ document.getElementById('task-modal-overlay').addEventListener('click', e => {
   if (e.target.id === 'task-modal-overlay') closeTaskModal(); // clique fora do card fecha
 });
 
+// POST /admin/tasks/:id compartilhado entre o modal "Gerenciar" e o arrastar-e-soltar do
+// Quadro — os dois mutam chamado do mesmo jeito, só o body que muda (completo vs. só status).
+// 403 aqui já limpa a sessão e devolve pro gate, igual o resto do arquivo já faz.
+async function postTaskUpdate(taskId, body) {
+  const res = await fetch(`${ADMIN_BASE}/tasks/${taskId}`, {
+    method: 'POST',
+    headers: { 'X-Admin-Secret': adminSecret, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (res.status === 403) {
+    store.remove('admin_secret');
+    adminSecret = '';
+    showGate('Segredo de admin inválido ou expirado. Entre de novo.');
+    const err = new Error('Segredo de admin inválido ou expirado.');
+    err.status = 403;
+    throw err;
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Erro HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 document.getElementById('btn-modal-salvar').addEventListener('click', async () => {
   if (!modalTaskId) return;
   const btn   = document.getElementById('btn-modal-salvar');
@@ -584,28 +616,14 @@ document.getElementById('btn-modal-salvar').addEventListener('click', async () =
       assigneeId: operadorVal ? Number(operadorVal) : null, // null = "Sem atribuição" remove quem estava atribuído
     };
 
-    const res = await fetch(`${ADMIN_BASE}/tasks/${modalTaskId}`, {
-      method: 'POST',
-      headers: { 'X-Admin-Secret': adminSecret, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    if (res.status === 403) {
-      store.remove('admin_secret');
-      adminSecret = '';
-      closeTaskModal();
-      showGate('Segredo de admin inválido ou expirado. Entre de novo.');
-      return;
-    }
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || `Erro HTTP ${res.status}`);
-    }
+    await postTaskUpdate(modalTaskId, body);
 
     toast('Chamado atualizado.', 'success');
     closeTaskModal();
     loadTasks();
     loadMetrics();
   } catch (err) {
+    if (err.status === 403) { closeTaskModal(); return; }
     errEl.textContent = err.message || 'Não foi possível salvar.';
     errEl.classList.remove('hidden');
   } finally {
@@ -746,7 +764,7 @@ function kanbanCardHtml(task) {
   const atrasado = isAtrasado(task);
   const prazoTxt = task.due_date ? fmtDate(task.due_date) : '—';
 
-  return `<div class="kanban-card${atrasado ? ' is-atrasado' : ''}" data-task-id="${escHtml(task.id)}">
+  return `<div class="kanban-card${atrasado ? ' is-atrasado' : ''}" data-task-id="${escHtml(task.id)}" draggable="true">
     <div class="kanban-card-title" title="${escHtml(task.name || '')}">${escHtml(task.name || '(sem título)')}</div>
     <div class="kanban-card-tags">
       ${tipoChipHtml(getCF(task, TIPO_FIELD_ID))}
@@ -788,6 +806,55 @@ document.getElementById('kanban-board').addEventListener('click', e => {
   if (!card) return;
   const task = allTasks.find(t => String(t.id) === card.dataset.taskId);
   if (task) openTaskModal(task);
+});
+
+// ============================================================
+// ARRASTAR E SOLTAR — mover um card entre colunas muda só o status (não toca
+// operador/solução). Mesma rota de mutação do modal "Gerenciar" (postTaskUpdate).
+// Um drag-and-drop de verdade não dispara o 'click' que abre o modal (comportamento
+// nativo do navegador), então os dois convivem sem conflito.
+// ============================================================
+document.getElementById('kanban-board').addEventListener('dragstart', e => {
+  const card = e.target.closest('.kanban-card');
+  if (!card) return;
+  card.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', card.dataset.taskId);
+});
+
+document.getElementById('kanban-board').addEventListener('dragend', e => {
+  const card = e.target.closest('.kanban-card');
+  if (card) card.classList.remove('dragging');
+  document.querySelectorAll('.kanban-cards.drag-over').forEach(el => el.classList.remove('drag-over'));
+});
+
+document.querySelectorAll('.kanban-cards').forEach(coluna => {
+  coluna.addEventListener('dragover', e => {
+    e.preventDefault(); // sem isso o navegador nunca dispara o evento 'drop'
+    coluna.classList.add('drag-over');
+  });
+  coluna.addEventListener('dragleave', () => coluna.classList.remove('drag-over'));
+  coluna.addEventListener('drop', async e => {
+    e.preventDefault();
+    coluna.classList.remove('drag-over');
+
+    const taskId = e.dataTransfer.getData('text/plain');
+    const novoStatus = coluna.dataset.status;
+    if (!taskId || !novoStatus) return;
+
+    const task = allTasks.find(t => String(t.id) === taskId);
+    if (!task) return;
+    if ((task.status?.status || '').toLowerCase() === novoStatus) return; // soltou na mesma coluna
+
+    try {
+      await postTaskUpdate(taskId, { status: novoStatus });
+      toast(`Chamado movido para ${STATUS_MAP[novoStatus]?.label || novoStatus}.`, 'success');
+      loadTasks();
+      loadMetrics();
+    } catch (err) {
+      if (err.status !== 403) toast(err.message || 'Não foi possível mover o chamado.', 'error');
+    }
+  });
 });
 
 function setViewMode(mode) {
