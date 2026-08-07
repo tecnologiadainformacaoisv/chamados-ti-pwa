@@ -152,7 +152,13 @@
       <section id="tasks-section">
         <div class="tasks-header">
           <h2 id="tasks-count">Chamados</h2>
-          <button id="btn-export-csv" type="button" class="btn-secondary">⬇ Exportar CSV</button>
+          <div class="tasks-header-actions">
+            <div class="view-toggle">
+              <button id="btn-view-tabela" type="button" class="view-toggle-btn active">☰ Tabela</button>
+              <button id="btn-view-quadro" type="button" class="view-toggle-btn">▦ Quadro</button>
+            </div>
+            <button id="btn-export-csv" type="button" class="btn-secondary">⬇ Exportar CSV</button>
+          </div>
         </div>
         <div id="tasks-loading" class="loading-state"><span class="spinner"></span> Carregando chamados…</div>
         <div id="tasks-error" class="error-banner hidden"></div>
@@ -164,8 +170,8 @@
           <table class="admin-table">
             <thead>
               <tr>
-                <th>Status</th>
                 <th>Chamado</th>
+                <th>Prioridade</th>
                 <th>Tipo</th>
                 <th>Setor</th>
                 <th>Solicitante</th>
@@ -178,10 +184,36 @@
             <tbody id="tasks-tbody"></tbody>
           </table>
         </div>
-        <div id="tasks-pagination" class="pagination-bar hidden">
-          <button id="btn-prev-page" type="button" class="btn-secondary">‹ Anterior</button>
-          <span id="pagination-label"></span>
-          <button id="btn-next-page" type="button" class="btn-secondary">Próxima ›</button>
+        <!-- QUADRO (Kanban) — mesmos dados da tabela, clique no card abre o mesmo modal de gerenciar -->
+        <div id="kanban-board" class="kanban-board hidden">
+          <div class="kanban-column">
+            <div class="kanban-column-header">
+              <span class="kanban-column-title">Aberto</span>
+              <span class="kanban-column-count" id="kanban-count-aberto">0</span>
+            </div>
+            <div class="kanban-cards" id="kanban-cards-aberto"></div>
+          </div>
+          <div class="kanban-column">
+            <div class="kanban-column-header">
+              <span class="kanban-column-title">Em Atendimento</span>
+              <span class="kanban-column-count" id="kanban-count-em-atendimento">0</span>
+            </div>
+            <div class="kanban-cards" id="kanban-cards-em-atendimento"></div>
+          </div>
+          <div class="kanban-column">
+            <div class="kanban-column-header">
+              <span class="kanban-column-title">Pendente</span>
+              <span class="kanban-column-count" id="kanban-count-pendente">0</span>
+            </div>
+            <div class="kanban-cards" id="kanban-cards-pendente"></div>
+          </div>
+          <div class="kanban-column">
+            <div class="kanban-column-header">
+              <span class="kanban-column-title">Encerrado</span>
+              <span class="kanban-column-count" id="kanban-count-encerrado">0</span>
+            </div>
+            <div class="kanban-cards" id="kanban-cards-encerrado"></div>
+          </div>
         </div>
       </section>
 

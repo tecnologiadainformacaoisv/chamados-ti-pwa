@@ -54,6 +54,17 @@ const OPERADORES = {
   '200498355': 'Henrique'
 };
 
+// ⚠️ Mesmas cores de PRIORITY em app.js — chave aqui é a string que a própria ClickUp
+// devolve em task.priority.priority (raw da API, não passa por CATEGORIA_PRIORIDADE).
+// "low" não é usado pela regra de negócio do app (nenhuma categoria mapeia pra ela),
+// mas fica mapeado por segurança caso apareça em algum chamado antigo/editado direto na ClickUp.
+const PRIORITY_MAP = {
+  urgent: { label: 'Urgente', color: '#ef5350' },
+  high:   { label: 'Alta',    color: '#ff9800' },
+  normal: { label: 'Normal',  color: '#2196f3' },
+  low:    { label: 'Baixa',   color: '#8d8d8d' },
+};
+
 const STATUS_MAP = {
   'aberto':          { label: 'Aberto',          bg: '#e3f2fd', color: '#1565c0', dot: '#1976d2' },
   'em atendimento':  { label: 'Em Atendimento',  bg: '#e3e0fb', color: '#4527a0', dot: '#5f55ee' },
@@ -117,6 +128,22 @@ function isAtrasado(task) {
   return referencia > dueDate;
 }
 
+// Reaproveita .prio-dot de css/style.css (já usado nos cards de chamado do app principal) —
+// bolinha colorida + label, mesma linguagem visual em vez de inventar componente novo.
+function priorityHtml(task) {
+  const info = PRIORITY_MAP[task.priority?.priority];
+  if (!info) return '<span class="cell-muted">—</span>';
+  return `<span class="prio-dot" style="color:${info.color}">${escHtml(info.label)}</span>`;
+}
+
+// Chip colorido de Tipo — mesma cor usada em "Volume por tipo", pra bater com a
+// linguagem visual de tag colorida que a própria ClickUp usa nessa coluna.
+function tipoChipHtml(tipoIdx) {
+  const tipo = TIPOS.find(t => t.orderindex === Number(tipoIdx));
+  if (!tipo) return '—';
+  return `<span class="tipo-chip" style="background:${tipo.color}22;color:${tipo.color}">${escHtml(tipo.name)}</span>`;
+}
+
 function toast(msg, type = 'success') {
   const c = document.getElementById('toast-container');
   const el = document.createElement('div');
@@ -141,8 +168,14 @@ let solicitanteIdxToName = {}; // preenchido por loadSolicitanteOptions()
 // filtrado pelo servidor — evita reconsultar o Worker a cada tecla digitada).
 let allTasks = [];          // último resultado bruto de /admin/tasks (filtros de servidor já aplicados)
 let lastVisibleTasks = [];  // allTasks após a busca por título — é o que a exportação CSV usa
-let currentPage = 1;
-const PAGE_SIZE = 25;
+
+// 'tabela' ou 'quadro' — mesma lógica de filtro/busca por trás, só muda como renderiza.
+let viewMode = 'tabela';
+
+// Tabela agrupada por status (mesma ideia visual da própria ClickUp: seção por status,
+// expande/recolhe) — substitui a paginação global antiga. Lembra estado entre re-renders
+// (filtrar, buscar, atualizar) até a página ser recarregada.
+let groupCollapsed = { aberto: false, 'em atendimento': false, pendente: false, encerrado: false };
 
 // fetchAllTasks (no Worker) tem um teto de páginas — se algum dos dois endpoints bater
 // nele, mostra um aviso (ver LIMITAÇÃO CONHECIDA em push-worker.js). Qualquer um dos dois
@@ -411,10 +444,6 @@ async function loadMetrics() {
 // TABELA DE CHAMADOS
 // ============================================================
 function taskRowHtml(task) {
-  const statusKey = (task.status?.status || '').toLowerCase();
-  const info = STATUS_MAP[statusKey] || { label: task.status?.status || '—', bg: 'transparent', color: 'inherit', dot: '#94a3b8' };
-
-  const tipoNome  = optionName(TIPOS, getCF(task, TIPO_FIELD_ID));
   const setorNome = optionName(SETORES, getCF(task, SETOR_FIELD_ID));
   const solIdx    = getCF(task, SOLICITANTE_FIELD_ID);
   const solNome   = solicitanteIdxToName[solIdx] ?? '—';
@@ -426,10 +455,11 @@ function taskRowHtml(task) {
   const prazoTxt  = task.due_date ? fmtDate(task.due_date) : '—';
   const criadoTxt = task.date_created ? fmtDate(task.date_created) : '—';
 
+  // Sem coluna de Status aqui — já fica implícito pelo cabeçalho do grupo (ver renderTableGrouped).
   return `<tr>
-    <td><span class="status-badge" style="background:${info.bg};color:${info.color}"><span class="status-dot" style="background:${info.dot}"></span>${escHtml(info.label)}</span></td>
     <td><span class="task-name" title="${escHtml(task.name || '')}">${escHtml(task.name || '(sem título)')}</span></td>
-    <td>${escHtml(tipoNome)}</td>
+    <td>${priorityHtml(task)}</td>
+    <td>${tipoChipHtml(getCF(task, TIPO_FIELD_ID))}</td>
     <td>${escHtml(setorNome)}</td>
     <td>${escHtml(solNome)}</td>
     <td>${escHtml(operadores)}</td>
@@ -535,11 +565,10 @@ function applySearchAndRender() {
 }
 
 function renderTasksTable(list, term) {
-  const emptyEl = document.getElementById('tasks-empty');
-  const wrapEl  = document.getElementById('tasks-table-wrap');
-  const tbody   = document.getElementById('tasks-tbody');
-  const pagEl   = document.getElementById('tasks-pagination');
-  const countEl = document.getElementById('tasks-count');
+  const emptyEl  = document.getElementById('tasks-empty');
+  const wrapEl   = document.getElementById('tasks-table-wrap');
+  const kanbanEl = document.getElementById('kanban-board');
+  const countEl  = document.getElementById('tasks-count');
 
   countEl.textContent = term
     ? `Chamados (${list.length} de ${allTasks.length})`
@@ -548,36 +577,175 @@ function renderTasksTable(list, term) {
   if (list.length === 0) {
     emptyEl.classList.remove('hidden');
     wrapEl.classList.add('hidden');
-    pagEl.classList.add('hidden');
-    tbody.innerHTML = '';
+    kanbanEl.classList.add('hidden');
+    document.getElementById('tasks-tbody').innerHTML = '';
     return;
   }
   emptyEl.classList.add('hidden');
-  wrapEl.classList.remove('hidden');
 
-  const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
-  if (currentPage > totalPages) currentPage = totalPages;
-  if (currentPage < 1) currentPage = 1;
-  const start = (currentPage - 1) * PAGE_SIZE;
-  tbody.innerHTML = list.slice(start, start + PAGE_SIZE).map(taskRowHtml).join('');
-
-  if (totalPages > 1) {
-    pagEl.classList.remove('hidden');
-    document.getElementById('pagination-label').textContent = `Página ${currentPage} de ${totalPages}`;
-    document.getElementById('btn-prev-page').disabled = currentPage <= 1;
-    document.getElementById('btn-next-page').disabled = currentPage >= totalPages;
+  if (viewMode === 'quadro') {
+    wrapEl.classList.add('hidden');
+    kanbanEl.classList.remove('hidden');
+    renderKanban(list);
   } else {
-    pagEl.classList.add('hidden');
+    kanbanEl.classList.add('hidden');
+    wrapEl.classList.remove('hidden');
+    renderTableGrouped(list);
   }
 }
 
-document.getElementById('f-busca').addEventListener('input', () => {
-  clearTimeout(window.__buscaDebounce);
-  window.__buscaDebounce = setTimeout(() => { currentPage = 1; applySearchAndRender(); }, 200);
+// ============================================================
+// TABELA AGRUPADA POR STATUS — mesma ideia visual da própria ClickUp: cada
+// status é uma seção com ícone+contador, expande/recolhe (substitui a
+// paginação global de 25/página; cada grupo já é uma divisão natural).
+// ============================================================
+const STATUS_GROUP_ORDER = ['aberto', 'em atendimento', 'pendente', 'encerrado'];
+const GROUP_TABLE_LIMIT = 200; // teto por grupo, mesma ideia do KANBAN_CARD_LIMIT
+const TABLE_COLSPAN = 9; // Chamado, Prioridade, Tipo, Setor, Solicitante, Operador, Prazo, Criado em, Ações
+
+// Círculo vazado pra "Aberto" (nada feito ainda) e círculo preenchido com check pra
+// qualquer status que já teve algum andamento (Em Atendimento/Pendente/Encerrado) —
+// mesmo padrão de ícone da própria ClickUp nas seções agrupadas por status.
+function statusGroupIconHtml(statusKey, color) {
+  if (statusKey === 'aberto') {
+    return `<svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="${color}" stroke-width="1.6"/></svg>`;
+  }
+  return `<svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8" fill="${color}"/><path d="M4.5 8.2l2.3 2.3L11.5 5.8" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+
+function groupHeaderRowHtml(statusKey, count) {
+  const info = STATUS_MAP[statusKey] || { label: statusKey, dot: '#94a3b8' };
+  const collapsed = !!groupCollapsed[statusKey];
+  return `<tr class="group-header-row">
+    <td colspan="${TABLE_COLSPAN}">
+      <button type="button" class="group-toggle-btn" data-group-toggle="${statusKey}">
+        <span class="group-chevron${collapsed ? ' collapsed' : ''}">▾</span>
+        <span class="group-status-icon">${statusGroupIconHtml(statusKey, info.dot)}</span>
+        <span class="group-status-label">${escHtml(info.label)}</span>
+        <span class="group-status-count">${count}</span>
+      </button>
+    </td>
+  </tr>`;
+}
+
+function renderTableGrouped(list) {
+  const tbody = document.getElementById('tasks-tbody');
+  const byStatus = { aberto: [], 'em atendimento': [], pendente: [], encerrado: [] };
+  for (const t of list) {
+    const key = (t.status?.status || '').toLowerCase();
+    if (byStatus[key]) byStatus[key].push(t);
+    // status fora dos 4 esperados não aparece agrupado (raro).
+  }
+
+  let html = '';
+  for (const statusKey of STATUS_GROUP_ORDER) {
+    const tasks = byStatus[statusKey];
+    html += groupHeaderRowHtml(statusKey, tasks.length);
+    if (groupCollapsed[statusKey]) continue;
+
+    if (tasks.length === 0) {
+      html += `<tr class="group-body-row"><td colspan="${TABLE_COLSPAN}" class="group-empty-cell">Nenhum chamado.</td></tr>`;
+      continue;
+    }
+    const shown = tasks.slice(0, GROUP_TABLE_LIMIT);
+    html += shown.map(taskRowHtml).join('');
+    if (tasks.length > GROUP_TABLE_LIMIT) {
+      html += `<tr class="group-body-row"><td colspan="${TABLE_COLSPAN}" class="group-empty-cell">+${tasks.length - GROUP_TABLE_LIMIT} chamado(s) — refine os filtros/busca pra ver todos</td></tr>`;
+    }
+  }
+  tbody.innerHTML = html;
+}
+
+document.getElementById('tasks-tbody').addEventListener('click', e => {
+  const toggleBtn = e.target.closest('[data-group-toggle]');
+  if (toggleBtn) {
+    const key = toggleBtn.dataset.groupToggle;
+    groupCollapsed[key] = !groupCollapsed[key];
+    renderTableGrouped(lastVisibleTasks);
+  }
 });
 
-document.getElementById('btn-prev-page').addEventListener('click', () => { currentPage--; applySearchAndRender(); });
-document.getElementById('btn-next-page').addEventListener('click', () => { currentPage++; applySearchAndRender(); });
+// ============================================================
+// QUADRO (Kanban) — mesmos dados/filtros da tabela, só outra forma de olhar.
+// Clique no card abre o mesmo modal de "Gerenciar" (sem arrastar-e-soltar,
+// decisão deliberada: reaproveita 100% do modal já testado, menor risco).
+// ============================================================
+const KANBAN_CARD_LIMIT = 100; // teto por coluna, só pra não desenhar milhares de cards de uma vez
+const KANBAN_COLUMN_IDS = {
+  'aberto':          'aberto',
+  'em atendimento':  'em-atendimento',
+  'pendente':        'pendente',
+  'encerrado':       'encerrado',
+};
+
+function kanbanCardHtml(task) {
+  const setorNome = optionName(SETORES, getCF(task, SETOR_FIELD_ID));
+  const solNome   = solicitanteIdxToName[getCF(task, SOLICITANTE_FIELD_ID)] ?? '—';
+  const operadores = (task.assignees || [])
+    .map(a => a.username || OPERADORES[String(a.id)] || `#${a.id}`)
+    .join(', ') || '—';
+  const atrasado = isAtrasado(task);
+  const prazoTxt = task.due_date ? fmtDate(task.due_date) : '—';
+
+  return `<div class="kanban-card${atrasado ? ' is-atrasado' : ''}" data-task-id="${escHtml(task.id)}">
+    <div class="kanban-card-title" title="${escHtml(task.name || '')}">${escHtml(task.name || '(sem título)')}</div>
+    <div class="kanban-card-tags">
+      ${tipoChipHtml(getCF(task, TIPO_FIELD_ID))}
+      ${priorityHtml(task)}
+    </div>
+    <div class="kanban-card-meta">
+      <span>${escHtml(setorNome)}</span>
+      <span>${escHtml(solNome)}</span>
+      <span>${escHtml(operadores)}</span>
+      <span class="kanban-card-prazo${atrasado ? ' atrasado' : ''}">${escHtml(prazoTxt)}${atrasado ? ' ⚠' : ''}</span>
+    </div>
+  </div>`;
+}
+
+function renderKanban(list) {
+  const byStatus = { aberto: [], 'em atendimento': [], pendente: [], encerrado: [] };
+  for (const task of list) {
+    const key = (task.status?.status || '').toLowerCase();
+    if (byStatus[key]) byStatus[key].push(task);
+    // status fora dos 4 esperados não aparece no quadro (raro — a tabela continua mostrando).
+  }
+
+  for (const [statusKey, idSuffix] of Object.entries(KANBAN_COLUMN_IDS)) {
+    const tasks = byStatus[statusKey];
+    document.getElementById(`kanban-count-${idSuffix}`).textContent = tasks.length;
+    const cardsEl = document.getElementById(`kanban-cards-${idSuffix}`);
+    if (tasks.length === 0) {
+      cardsEl.innerHTML = '<p class="kanban-empty-mini">Nenhum chamado.</p>';
+      continue;
+    }
+    const shown = tasks.slice(0, KANBAN_CARD_LIMIT);
+    cardsEl.innerHTML = shown.map(kanbanCardHtml).join('') +
+      (tasks.length > KANBAN_CARD_LIMIT ? `<p class="kanban-empty-mini">+${tasks.length - KANBAN_CARD_LIMIT} chamado(s) — refine os filtros/busca pra ver todos</p>` : '');
+  }
+}
+
+document.getElementById('kanban-board').addEventListener('click', e => {
+  const card = e.target.closest('.kanban-card');
+  if (!card) return;
+  const task = allTasks.find(t => String(t.id) === card.dataset.taskId);
+  if (task) openTaskModal(task);
+});
+
+function setViewMode(mode) {
+  if (viewMode === mode) return;
+  viewMode = mode;
+  document.getElementById('btn-view-tabela').classList.toggle('active', mode === 'tabela');
+  document.getElementById('btn-view-quadro').classList.toggle('active', mode === 'quadro');
+  applySearchAndRender();
+}
+
+document.getElementById('btn-view-tabela').addEventListener('click', () => setViewMode('tabela'));
+document.getElementById('btn-view-quadro').addEventListener('click', () => setViewMode('quadro'));
+
+document.getElementById('f-busca').addEventListener('input', () => {
+  clearTimeout(window.__buscaDebounce);
+  window.__buscaDebounce = setTimeout(applySearchAndRender, 200);
+});
 
 // ============================================================
 // EXPORTAÇÃO CSV — exporta o conjunto visível (filtros de servidor + busca por
@@ -602,11 +770,13 @@ function taskToCsvRow(task) {
   const operadores = (task.assignees || [])
     .map(a => a.username || OPERADORES[String(a.id)] || `#${a.id}`)
     .join('; ') || '—';
+  const prioridadeNome = PRIORITY_MAP[task.priority?.priority]?.label || '';
 
   return [
     task.id,
     task.name || '',
     info?.label || task.status?.status || '',
+    prioridadeNome,
     tipoNome,
     setorNome,
     solNome,
@@ -622,7 +792,7 @@ function exportCsv() {
     toast('Nada para exportar com os filtros/busca atuais.', 'info');
     return;
   }
-  const headers = ['ID', 'Chamado', 'Status', 'Tipo', 'Setor', 'Solicitante', 'Operador(es)', 'Criado em', 'Prazo', 'Atrasado'];
+  const headers = ['ID', 'Chamado', 'Status', 'Prioridade', 'Tipo', 'Setor', 'Solicitante', 'Operador(es)', 'Criado em', 'Prazo', 'Atrasado'];
   const csv = [headers, ...lastVisibleTasks.map(taskToCsvRow)]
     .map(row => row.map(csvEscape).join(','))
     .join('\r\n');
@@ -657,7 +827,6 @@ async function loadTasks() {
     const qs   = currentFilterParams().toString();
     const data = await adminRequest(`/tasks${qs ? '?' + qs : ''}`);
     allTasks = data.tasks || [];
-    currentPage = 1;
     applySearchAndRender();
     tasksTruncated = !!data.truncated;
     updateTruncatedBanner();

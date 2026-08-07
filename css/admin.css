@@ -223,6 +223,40 @@
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.tasks-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.view-toggle {
+  display: flex;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.view-toggle-btn {
+  padding: 7px 14px;
+  font-size: .82rem;
+  font-weight: 600;
+  background: var(--card);
+  color: var(--text-mid);
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background .15s, color .15s;
+}
+
+.view-toggle-btn:not(.active):hover { background: var(--bg); }
+
+.view-toggle-btn.active {
+  background: var(--primary);
+  color: #fff;
 }
 
 .tasks-header h2 {
@@ -283,26 +317,78 @@
 
 .admin-table .cell-muted { color: var(--text-muted); }
 
+/* Chip colorido de Tipo — mesma cor usada nos gráficos de "Volume por tipo",
+   pra bater com a linguagem visual de tag colorida que a própria ClickUp usa
+   na coluna "Qual o tipo de solicitação?". */
+.tipo-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: .78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 /* ============================================================
-   PAGINAÇÃO
+   GRUPOS POR STATUS (tabela) — mesma ideia da própria ClickUp: cada status é
+   uma seção com ícone+contador, expande/recolhe. Substituiu a paginação global
+   (25/página) — cada grupo já é uma divisão natural, com teto próprio (ver
+   GROUP_TABLE_LIMIT em admin.js) em vez de página 1/2/3.
    ============================================================ */
-.pagination-bar {
+.group-header-row td {
+  padding: 0;
+  border-bottom: none;
+}
+
+.group-toggle-btn {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 16px;
-  padding: 14px 0 4px;
+  gap: 9px;
+  width: 100%;
+  padding: 14px 14px 10px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
 }
 
-.pagination-bar span {
-  font-size: .82rem;
+.group-chevron {
+  font-size: .7rem;
+  color: var(--text-muted);
+  transition: transform .15s;
+  display: inline-block;
+}
+
+.group-chevron.collapsed { transform: rotate(-90deg); }
+
+.group-status-icon { flex-shrink: 0; display: flex; }
+
+.group-status-label {
+  font-size: .78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
   color: var(--text-mid);
-  font-weight: 500;
 }
 
-.pagination-bar .btn-secondary:disabled {
-  opacity: .45;
-  cursor: not-allowed;
+.group-status-count {
+  background: var(--bg);
+  color: var(--text-mid);
+  font-size: .72rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 1px 8px;
+  min-width: 20px;
+  text-align: center;
+}
+
+.group-empty-cell {
+  color: var(--text-muted);
+  font-size: .82rem;
+  font-style: italic;
+  padding: 10px 14px 16px !important;
 }
 
 /* ============================================================
@@ -395,6 +481,117 @@
 .btn-gerenciar:hover { opacity: .85; }
 
 /* ============================================================
+   QUADRO (Kanban) — mesma ideia visual do board da ClickUp, sem lib nenhuma
+   ============================================================ */
+.kanban-board {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.kanban-column {
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 12px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.kanban-column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px 10px;
+}
+
+.kanban-column-title {
+  font-size: .8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: var(--text-mid);
+}
+
+.kanban-column-count {
+  background: var(--card);
+  color: var(--text-mid);
+  font-size: .7rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 2px 8px;
+  min-width: 22px;
+  text-align: center;
+}
+
+.kanban-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  flex: 1;
+  padding-right: 2px;
+}
+
+.kanban-card {
+  background: var(--card);
+  border-radius: var(--radius-sm);
+  border: 1.5px solid rgba(15, 35, 71, .1);
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+}
+
+.kanban-card:hover {
+  border-color: #c8d8f0;
+  box-shadow: 0 2px 8px rgba(0,0,0,.08);
+}
+
+.kanban-card.is-atrasado { border-color: #fca5a5; }
+
+.kanban-card-title {
+  font-size: .85rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.kanban-card-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.kanban-card-tags .prio-dot { font-size: .7rem; }
+
+.kanban-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: .74rem;
+  color: var(--text-muted);
+}
+
+.kanban-card-prazo.atrasado {
+  color: #b91c1c;
+  font-weight: 700;
+}
+
+.kanban-empty-mini {
+  font-size: .78rem;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 16px 0;
+}
+
+/* ============================================================
    RESPONSIVO
    ============================================================ */
 @media (max-width: 640px) {
@@ -402,4 +599,13 @@
   .filter-field, .filter-field-grow { min-width: 0; width: 100%; }
   .filter-actions { margin-left: 0; width: 100%; }
   .filter-actions .btn-primary, .filter-actions .btn-secondary { flex: 1; justify-content: center; }
+}
+
+@media (max-width: 900px) {
+  .kanban-board {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+  .kanban-column { min-width: 240px; flex: 0 0 auto; }
 }
