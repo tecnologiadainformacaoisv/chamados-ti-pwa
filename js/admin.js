@@ -262,6 +262,47 @@ document.getElementById('btn-refresh').addEventListener('click', () => {
 });
 
 // ============================================================
+// SIDEBAR — protótipo de navegação lateral recolhível, base pra um futuro
+// SaaS de CRM completo (ver CLAUDE.md, "Painel de admin"). Só troca qual
+// <div class="admin-section"> fica visível — os dados de ambas as seções
+// já são carregados juntos no boot (loadMetrics + loadTasks em paralelo),
+// trocar de seção não refaz nenhuma chamada ao Worker.
+// ============================================================
+const SECTION_META = {
+  gestao:    { title: 'Gestão',    subtitle: 'Aceite, mudança de status, atribuição de operador e solução dos chamados.' },
+  dashboard: { title: 'Dashboard', subtitle: 'Indicadores e relatórios — volume por tipo/setor, SLA e tempo médio de atendimento.' },
+};
+
+function setActiveSection(section) {
+  document.querySelectorAll('.sidebar-nav-item').forEach(btn => btn.classList.toggle('active', btn.dataset.section === section));
+  document.getElementById('section-gestao').classList.toggle('hidden', section !== 'gestao');
+  document.getElementById('section-dashboard').classList.toggle('hidden', section !== 'dashboard');
+  document.getElementById('page-title').textContent = SECTION_META[section].title;
+  document.getElementById('page-subtitle').textContent = SECTION_META[section].subtitle;
+  store.set('admin_active_section', section);
+}
+
+document.querySelectorAll('.sidebar-nav-item[data-section]').forEach(btn => {
+  btn.addEventListener('click', () => setActiveSection(btn.dataset.section));
+});
+
+document.getElementById('btn-sidebar-toggle').addEventListener('click', () => {
+  const collapsed = document.getElementById('sidebar').classList.toggle('collapsed');
+  store.set('admin_sidebar_collapsed', collapsed ? '1' : '0');
+});
+
+// Restaura a seção/estado da sidebar de uma visita anterior; sem preferência salva,
+// telas estreitas (celular/tablet) já nascem com a sidebar recolhida (só ícones).
+(function restoreSidebarState() {
+  const savedSection = store.get('admin_active_section');
+  if (savedSection && SECTION_META[savedSection]) setActiveSection(savedSection);
+
+  const savedCollapsed = store.get('admin_sidebar_collapsed');
+  const shouldCollapse = savedCollapsed !== null ? savedCollapsed === '1' : window.matchMedia('(max-width: 900px)').matches;
+  document.getElementById('sidebar').classList.toggle('collapsed', shouldCollapse);
+})();
+
+// ============================================================
 // FILTROS
 // ============================================================
 function populateSelect(id, items, placeholder = 'Todos') {

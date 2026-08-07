@@ -35,12 +35,122 @@
 }
 
 /* ============================================================
+   SIDEBAR — protótipo de navegação lateral recolhível (base pra um futuro
+   SaaS de CRM completo; por enquanto só Gestão/Dashboard, ver CLAUDE.md).
+   Mesma cor do header (dark navy), pra ficar como uma extensão dele.
+   ============================================================ */
+.app-shell {
+  display: flex;
+  align-items: stretch;
+  min-height: calc(100vh - var(--header-h));
+}
+
+.sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  background: linear-gradient(180deg, #0f2347 0%, var(--primary) 100%);
+  display: flex;
+  flex-direction: column;
+  padding: 14px 0;
+  position: sticky;
+  top: var(--header-h);
+  height: calc(100vh - var(--header-h));
+  overflow-y: auto;
+  transition: width .18s ease;
+}
+
+.sidebar.collapsed { width: 60px; }
+
+.sidebar-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin: 0 0 10px 16px;
+  background: rgba(255,255,255,.1);
+  border: none;
+  border-radius: 7px;
+  color: rgba(255,255,255,.85);
+  cursor: pointer;
+  transition: background .15s, transform .18s;
+  flex-shrink: 0;
+}
+
+.sidebar-toggle-btn:hover { background: rgba(255,255,255,.2); }
+.sidebar.collapsed .sidebar-toggle-btn { margin-left: 15px; transform: rotate(180deg); }
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 20px;
+  background: none;
+  border: none;
+  border-left: 3px solid transparent;
+  color: rgba(255,255,255,.68);
+  font-size: .88rem;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-align: left;
+  transition: background .15s, color .15s;
+}
+
+.sidebar-nav-item svg { flex-shrink: 0; }
+
+.sidebar-nav-item:hover { background: rgba(255,255,255,.08); color: #fff; }
+
+.sidebar-nav-item.active {
+  background: rgba(255,255,255,.14);
+  color: #fff;
+  font-weight: 600;
+  border-left-color: #fff;
+}
+
+.sidebar.collapsed .sidebar-nav-item { justify-content: center; padding: 11px 0; }
+.sidebar.collapsed .sidebar-nav-item span { display: none; }
+
+.app-content {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ============================================================
+   CABEÇALHO DE PÁGINA — troca de título/subtítulo conforme a seção
+   (Gestão/Dashboard), mesma ideia de breadcrumb+título de painéis de CRM.
+   ============================================================ */
+.page-header { margin-bottom: 18px; }
+
+.page-header h1 {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--text);
+  text-wrap: balance;
+}
+
+.page-header p {
+  font-size: .85rem;
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+
+.admin-section.hidden { display: none; }
+
+/* ============================================================
    LAYOUT GERAL DO PAINEL
    ============================================================ */
 .admin-main {
-  max-width: 1180px;
-  margin: 0 auto;
-  padding: 24px 16px 48px;
+  max-width: 1300px;
+  padding: 24px 28px 48px;
 }
 
 .error-banner {
