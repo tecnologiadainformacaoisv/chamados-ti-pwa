@@ -105,7 +105,11 @@ const STATUS_MAP = {
 };
 
 // VAPID public key (65-byte uncompressed P-256, URL-safe base64)
-const VAPID_PUBLIC_KEY = 'BMgcsTAUEhUr-dau-LaPhTHktmCZ90q4GXFF6CX0p3IvmeB51v68JqZLeuKrO3swUcSXKiNhQ6Ur5I74fm6tp2Q';
+// Par gerado em 2026-08-10 (o anterior foi apagado por engano num deploy do
+// Worker via Wrangler sem `keep_vars` — ver CLAUDE.md e SEGREDOS-LOCAIS.md,
+// este último NUNCA versionado). Quem já tinha notificação ativa precisa
+// abrir o app uma vez pra reinscrever (a inscrição antiga ficou inválida).
+const VAPID_PUBLIC_KEY = 'BDvOHU44JTbhObtRGO-uFU_8wl-9oTlOFkwnf0pXjIqpnv3hhbz0VSW-OD7itFQVBNSEA7xGEQntn6e7QyEBNMY';
 // Segredo compartilhado com o Worker (env SUBSCRIBE_SECRET) — vai no header X-App-Secret de toda
 // chamada a WORKER_URL/api/* e no body de /subscribe. Não dá acesso à ClickUp por si só (só
 // libera o proxy); a chave real da ClickUp fica só no Worker, nunca aqui.
