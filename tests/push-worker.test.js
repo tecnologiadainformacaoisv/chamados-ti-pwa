@@ -522,6 +522,71 @@ async function test(name, fn) {
     }
   });
 
+  console.log('--- validação de tipo/valor (achados do revisor 2026-08-07) ---');
+  await test('solucao com tipo diferente de string dá 400 (não fica ok:true em silêncio)', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks/task-michael-1', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ solucao: 123 })
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('assigneeId não numérico (nem null) dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks/task-michael-1', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ assigneeId: 'nao-e-numero' })
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('atualizar só o status de um chamado com 2 assignees NÃO manda PUT de assignee nenhum (preserva os dois)', async () => {
+    // Este é o cenário do bug crítico encontrado pelo revisor: o front-end só deve mandar
+    // "assigneeId" quando o admin realmente toca o campo — aqui simula exatamente o corpo
+    // que o admin.js corrigido manda (sem a chave assigneeId), e confirma que o Worker não
+    // toca nos assignees existentes (nem faz GET da task pra montar diff, já que a chave
+    // nem está presente no body).
+    const previousFetch = globalThis.fetch;
+    let assigneeTouched = false;
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      if (u.endsWith('/task/task-update-4') && opts?.method === 'PUT') {
+        const payload = JSON.parse(opts.body);
+        if (payload.assignees) assigneeTouched = true;
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      return previousFetch(url, opts);
+    };
+    try {
+      const res = await worker.fetch(req('POST', '/admin/tasks/task-update-4', {
+        headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'pendente' })
+      }), env);
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(assigneeTouched, false, 'sem a chave assigneeId no body, o Worker não deveria nem tentar tocar nos assignees');
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+  await test('falha ao salvar a solução reporta em "updated" o que já tinha sido aplicado antes (status)', async () => {
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      if (u.endsWith('/task/task-update-5') && opts?.method === 'PUT') {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 }); // status aplicado com sucesso
+      }
+      if (u.includes('/task/task-update-5/field/') && opts?.method === 'POST') {
+        return new Response(JSON.stringify({ err: 'campo inválido' }), { status: 500 }); // solução falha
+      }
+      return previousFetch(url, opts);
+    };
+    try {
+      const res = await worker.fetch(req('POST', '/admin/tasks/task-update-5', {
+        headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+        body: JSON.stringify({ status: 'em atendimento', solucao: 'tentativa que vai falhar' })
+      }), env);
+      assert.strictEqual(res.status, 500);
+      const data = await res.json();
+      assert.deepStrictEqual(data.updated, { status: 'em atendimento' }, 'deveria reportar que o status já tinha sido salvo antes da solução falhar');
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+
   console.log('--- lockout de ADMIN_SECRET por IP (mesma proteção do login, mas por IP em vez de nome) ---');
   await test('após 5 tentativas com X-Admin-Secret errado do mesmo IP, o IP fica bloqueado mesmo com o segredo certo depois', async () => {
     const ipHeaders = { 'CF-Connecting-IP': '203.0.113.9' };

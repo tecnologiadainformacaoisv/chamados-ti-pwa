@@ -660,8 +660,17 @@ async function handleAdminUpdateTask(request, env, taskId) {
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
 
+  // Validação de tipo/valor de cada campo antes de tocar em qualquer coisa na ClickUp —
+  // achados do revisor 2026-08-07: "solucao" não-string era ignorado em silêncio (respondia
+  // ok:true sem salvar nada) e "assigneeId" não validava número/NaN.
   if (body.status !== undefined && !VALID_STATUSES.includes(body.status)) {
     return jsonRes({ error: `status inválido — use um de: ${VALID_STATUSES.join(', ')}` }, 400);
+  }
+  if (body.solucao !== undefined && typeof body.solucao !== 'string') {
+    return jsonRes({ error: 'solucao precisa ser uma string' }, 400);
+  }
+  if (body.assigneeId !== undefined && body.assigneeId !== null && !Number.isFinite(Number(body.assigneeId))) {
+    return jsonRes({ error: 'assigneeId precisa ser um número, null (remove atribuição), ou omitido' }, 400);
   }
   if (body.status === undefined && body.solucao === undefined && body.assigneeId === undefined) {
     return jsonRes({ error: 'nada pra atualizar — mande status, solucao e/ou assigneeId' }, 400);
@@ -674,15 +683,23 @@ async function handleAdminUpdateTask(request, env, taskId) {
     const upstream = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
       method: 'PUT', headers, body: JSON.stringify({ status: body.status })
     });
-    if (!upstream.ok) return passthrough(upstream);
+    if (!upstream.ok) return passthrough(upstream); // nada foi aplicado ainda, passthrough puro está ok
     updated.status = body.status;
   }
 
-  if (typeof body.solucao === 'string') {
+  // Da 2ª sub-mutação em diante, uma falha não é mais "nada foi aplicado" — reporta em
+  // `updated` o que já tinha sido salvo antes de falhar, pra quem chamou (admin.js) saber
+  // que a operação ficou parcialmente aplicada, em vez de um erro genérico (achado do
+  // revisor 2026-08-07: não há rollback entre as 3 sub-mutações, cada uma é uma chamada
+  // separada à ClickUp; reportar o que já foi salvo é o possível aqui sem transação real).
+  if (body.solucao !== undefined) {
     const upstream = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/field/${SOLUCAO_FIELD_ID}`, {
       method: 'POST', headers, body: JSON.stringify({ value: body.solucao })
     });
-    if (!upstream.ok) return passthrough(upstream);
+    if (!upstream.ok) {
+      const text = await upstream.text();
+      return jsonRes({ error: `solução não pôde ser salva: ${text}`, updated }, upstream.status || 502);
+    }
     updated.solucao = true;
   }
 
@@ -694,7 +711,7 @@ async function handleAdminUpdateTask(request, env, taskId) {
     // tem "set assignee", só "adicionar"/"remover" em cima do que já existe. Sem isso,
     // "atribuir pro Henrique" um chamado que já era do Everson deixaria os dois atribuídos.
     const taskResp = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, { headers: { Authorization: env.CLICKUP_API_KEY } });
-    if (!taskResp.ok) return passthrough(taskResp);
+    if (!taskResp.ok) return jsonRes({ error: 'não foi possível confirmar quem já estava atribuído', updated }, taskResp.status || 502);
     const task = await taskResp.json();
     const currentIds = (task.assignees || []).map(a => a.id);
     const rem = desiredId === null ? currentIds : currentIds.filter(id => id !== desiredId);
@@ -704,7 +721,10 @@ async function handleAdminUpdateTask(request, env, taskId) {
       const upstream = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
         method: 'PUT', headers, body: JSON.stringify({ assignees: { add, rem } })
       });
-      if (!upstream.ok) return passthrough(upstream);
+      if (!upstream.ok) {
+        const text = await upstream.text();
+        return jsonRes({ error: `operador não pôde ser salvo: ${text}`, updated }, upstream.status || 502);
+      }
     }
     updated.assigneeId = desiredId;
   }

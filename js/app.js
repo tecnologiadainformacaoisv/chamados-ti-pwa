@@ -94,7 +94,11 @@ const OPERADORES = {
 
 // ⚠️ As chaves de status devem ficar sincronizadas com NOTIFY_STATUSES em push-worker.js
 const STATUS_MAP = {
-  'aberto':          { label: 'Aberto',          bg: '#e3f2fd', color: '#1565c0', dot: '#1976d2' },
+  // ⚠️ dot confirmado direto na configuração real da lista na ClickUp (GET /list/:id via
+  // MCP, 2026-08-07) — "aberto" usa a cor padrão do tipo "open" da própria ClickUp (cinza,
+  // var(--cu-status-open), sem hex customizado), não um azul customizado. Mantenha igual
+  // ao STATUS_MAP de js/admin.js.
+  'aberto':          { label: 'Aberto',          bg: '#e3f2fd', color: '#1565c0', dot: '#87909e' },
   'em atendimento':  { label: 'Em Atendimento',  bg: '#e3e0fb', color: '#4527a0', dot: '#5f55ee' },
   'pendente':        { label: 'Pendente',         bg: '#fce4ec', color: '#880e4f', dot: '#b660e0' },
   'encerrado':       { label: 'Encerrado',        bg: '#e8f5e9', color: '#1b5e20', dot: '#008844' }

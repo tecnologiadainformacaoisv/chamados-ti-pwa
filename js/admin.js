@@ -176,13 +176,15 @@ let lastVisibleTasks = [];  // allTasks após a busca por título — é o que a
 // 'quadro' ou 'tabela' — mesma lógica de filtro/busca por trás, só muda como renderiza.
 // Quadro é o padrão (2026-08-07): é a visão que a TI usa pra trabalhar no dia a dia,
 // igual ao board que eles já usavam na ClickUp. A Tabela fica pra quando precisa
-// varrer/exportar muita coisa de uma vez.
-let viewMode = 'quadro';
+// varrer/exportar muita coisa de uma vez. Lembra a última escolha entre sessões,
+// igual a seção da sidebar já faz.
+let viewMode = store.get('admin_view_mode') || 'quadro';
 
 // Tabela agrupada por status (mesma ideia visual da própria ClickUp: seção por status,
 // expande/recolhe) — substitui a paginação global antiga. Lembra estado entre re-renders
-// (filtrar, buscar, atualizar) até a página ser recarregada.
-let groupCollapsed = { aberto: false, 'em atendimento': false, pendente: false, encerrado: false };
+// e agora também entre sessões (localStorage), igual viewMode/sidebar já fazem.
+const DEFAULT_GROUP_COLLAPSED = { aberto: false, 'em atendimento': false, pendente: false, encerrado: false };
+let groupCollapsed = { ...DEFAULT_GROUP_COLLAPSED, ...JSON.parse(store.get('admin_group_collapsed') || '{}') };
 
 // fetchAllTasks (no Worker) tem um teto de páginas — se algum dos dois endpoints bater
 // nele, mostra um aviso (ver LIMITAÇÃO CONHECIDA em push-worker.js). Qualquer um dos dois
@@ -545,16 +547,48 @@ function populateModalOperadores() {
     Object.entries(OPERADORES).map(([id, nome]) => `<option value="${id}">${escHtml(nome)}</option>`).join('');
 }
 
+// Só true depois que o admin de fato interage com o select de operador — usado pra decidir
+// se manda "assigneeId" no POST ou não (ver comentário no listener de #modal-operador abaixo,
+// achado do revisor 2026-08-07: mandar sempre colapsava silenciosamente chamado com 2+
+// assignees pra só 1, mesmo quando o admin só queria mudar status/solução).
+let operadorTouched = false;
+
 function openTaskModal(task) {
   modalTaskId = task.id;
+  operadorTouched = false;
   document.getElementById('task-modal-title').textContent = task.name || '(sem título)';
   // description é texto puro que já vem no payload da ClickUp (passa direto por /admin/tasks,
   // sem custom field nenhum) — text_content é o fallback que a API usa quando description
   // vem vazio em algumas versões da task.
   document.getElementById('modal-descricao').textContent = task.description || task.text_content || '(sem descrição)';
-  document.getElementById('modal-status').value = (task.status?.status || 'aberto').toLowerCase();
-  const currentAssignee = (task.assignees || [])[0]?.id;
-  document.getElementById('modal-operador').value = currentAssignee ? String(currentAssignee) : '';
+
+  // Se o status real não for um dos 4 esperados, não assume "Aberto" em silêncio — avisa,
+  // pra ninguém salvar sem querer e sobrescrever um status que o painel não reconhece.
+  const statusKey = (task.status?.status || '').toLowerCase();
+  const statusWarningEl = document.getElementById('modal-status-warning');
+  if (Object.prototype.hasOwnProperty.call(STATUS_MAP, statusKey)) {
+    document.getElementById('modal-status').value = statusKey;
+    statusWarningEl.classList.add('hidden');
+  } else {
+    document.getElementById('modal-status').value = 'aberto';
+    statusWarningEl.textContent = `⚠ Status real ("${task.status?.status || '—'}") não é reconhecido pelo painel — "Aberto" foi pré-selecionado só como padrão. Confira antes de salvar.`;
+    statusWarningEl.classList.remove('hidden');
+  }
+
+  // Só dá pra pré-preencher UM operador no select (é um select simples, não múltiplo) — se
+  // o chamado já tiver 2+ atribuídos, avisa explicitamente, porque mudar esse campo e salvar
+  // substitui TODOS pelo único escolhido aqui (ver postTaskUpdate/handleAdminUpdateTask).
+  const assignees = task.assignees || [];
+  document.getElementById('modal-operador').value = assignees[0] ? String(assignees[0].id) : '';
+  const operadorHintEl = document.getElementById('modal-operador-hint');
+  if (assignees.length > 1) {
+    const nomes = assignees.map(a => a.username || OPERADORES[String(a.id)] || `#${a.id}`).join(', ');
+    operadorHintEl.textContent = `⚠ ${assignees.length} operadores atribuídos (${nomes}). Deixe como está se não quiser mudar quem está atribuído — mudar aqui substitui todos por só 1.`;
+    operadorHintEl.classList.remove('hidden');
+  } else {
+    operadorHintEl.classList.add('hidden');
+  }
+
   document.getElementById('modal-solucao').value = getCF(task, SOLUCAO_FIELD_ID) || '';
   document.getElementById('task-modal-error').classList.add('hidden');
   document.getElementById('task-modal-overlay').classList.remove('hidden');
@@ -576,6 +610,11 @@ document.getElementById('btn-modal-cancelar').addEventListener('click', closeTas
 document.getElementById('task-modal-overlay').addEventListener('click', e => {
   if (e.target.id === 'task-modal-overlay') closeTaskModal(); // clique fora do card fecha
 });
+
+// Marca que o admin realmente tocou no campo — é isso que decide se "assigneeId" vai no
+// POST (ver handler de #btn-modal-salvar). Sem essa marcação, salvar uma mudança de status
+// num chamado com 2 assignees removeria um deles mesmo sem o admin ter pedido isso.
+document.getElementById('modal-operador').addEventListener('change', () => { operadorTouched = true; });
 
 // POST /admin/tasks/:id compartilhado entre o modal "Gerenciar" e o arrastar-e-soltar do
 // Quadro — os dois mutam chamado do mesmo jeito, só o body que muda (completo vs. só status).
@@ -609,12 +648,17 @@ document.getElementById('btn-modal-salvar').addEventListener('click', async () =
   btn.disabled = true;
 
   try {
-    const operadorVal = document.getElementById('modal-operador').value;
     const body = {
       status: document.getElementById('modal-status').value,
       solucao: document.getElementById('modal-solucao').value,
-      assigneeId: operadorVal ? Number(operadorVal) : null, // null = "Sem atribuição" remove quem estava atribuído
     };
+    // Só manda assigneeId se o admin realmente tocou o campo — senão, um chamado com 2+
+    // operadores atribuídos teria um deles removido só por salvar uma mudança de status
+    // (achado do revisor 2026-08-07). Sem essa chave, o Worker nem toca nos assignees.
+    if (operadorTouched) {
+      const operadorVal = document.getElementById('modal-operador').value;
+      body.assigneeId = operadorVal ? Number(operadorVal) : null; // null = "Sem atribuição" remove quem estava atribuído
+    }
 
     await postTaskUpdate(modalTaskId, body);
 
@@ -738,6 +782,7 @@ document.getElementById('tasks-tbody').addEventListener('click', e => {
   if (toggleBtn) {
     const key = toggleBtn.dataset.groupToggle;
     groupCollapsed[key] = !groupCollapsed[key];
+    store.set('admin_group_collapsed', JSON.stringify(groupCollapsed));
     renderTableGrouped(lastVisibleTasks);
   }
 });
@@ -860,6 +905,7 @@ document.querySelectorAll('.kanban-cards').forEach(coluna => {
 function setViewMode(mode) {
   if (viewMode === mode) return;
   viewMode = mode;
+  store.set('admin_view_mode', mode); // sobrevive a reload, igual a seção da sidebar já faz
   document.getElementById('btn-view-tabela').classList.toggle('active', mode === 'tabela');
   document.getElementById('btn-view-quadro').classList.toggle('active', mode === 'quadro');
   updateFilterVisibility();
@@ -981,7 +1027,11 @@ async function loadTasks() {
 async function initPanelData() {
   populateFilters();
   populateModalOperadores();
-  updateFilterVisibility(); // Quadro é o padrão, então o filtro de Status já nasce escondido
+  // viewMode pode ter sido restaurado do localStorage (sessão anterior) — sincroniza os
+  // botões de toggle com o valor real, já que só setViewMode() faz isso e não é chamado no boot.
+  document.getElementById('btn-view-tabela').classList.toggle('active', viewMode === 'tabela');
+  document.getElementById('btn-view-quadro').classList.toggle('active', viewMode === 'quadro');
+  updateFilterVisibility(); // depende do viewMode já sincronizado acima
   try {
     await loadSolicitanteOptions();
   } catch (err) {
