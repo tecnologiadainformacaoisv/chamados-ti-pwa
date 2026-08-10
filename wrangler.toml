@@ -20,3 +20,12 @@ compatibility_date = "2026-08-07"
 [[kv_namespaces]]
 binding = "SUBSCRIPTIONS"
 id = "68385bb44b774751aa8d7c60d5c710eb"
+
+# Banco D1 criado em 2026-08-10 como infraestrutura temporária/exploratória
+# (ver CLAUDE.md, "Decisões técnicas tomadas") — só provisionado, NENHUMA
+# lógica de chamado usa isto ainda. push-worker.js continua 100% ClickUp
+# como backend real; migrar pra D1 é decisão futura, ainda não tomada.
+[[d1_databases]]
+binding = "CHAMADOS_DB"
+database_name = "chamados-ti-db"
+database_id = "fdba5aac-cc0b-4017-896a-603abd31baa3"
