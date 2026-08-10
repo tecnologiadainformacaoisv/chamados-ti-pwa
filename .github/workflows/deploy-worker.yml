@@ -1,0 +1,25 @@
+name: Deploy Cloudflare Worker
+
+# Roda só quando push-worker.js ou a config do Worker mudam na main — evita
+# redeploy do Worker por causa de mudança só no frontend (admin.html/js/admin.js/
+# etc.), que já publica sozinho via GitHub Pages e não depende disso aqui.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "push-worker.js"
+      - "wrangler.toml"
+      - ".github/workflows/deploy-worker.yml"
+  workflow_dispatch: {} # permite rodar manualmente em Actions → Run workflow, se precisar
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy via Wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

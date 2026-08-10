@@ -1,0 +1,22 @@
+# Config do Cloudflare Worker (push-worker.js) pra deploy via Wrangler CLI,
+# disparado pelo GitHub Actions (.github/workflows/deploy-worker.yml) a cada
+# push na main que toque em push-worker.js — substitui o "colar manualmente
+# no editor do dashboard" que era o processo até 2026-08-07 (ver CLAUDE.md,
+# "Decisões técnicas tomadas").
+#
+# ⚠️ Isso NÃO cria nem toca em secrets (CLICKUP_API_KEY, SUBSCRIBE_SECRET,
+# ADMIN_SECRET, VAPID_PRIVATE_JWK) nem no KV namespace em si — só no CÓDIGO
+# do Worker. Secrets continuam gerenciados manualmente (dashboard ou
+# `wrangler secret put`, uma vez só) — não ficam neste arquivo, que é público
+# no GitHub.
+
+name = "chamados-ti-push"
+main = "push-worker.js"
+compatibility_date = "2026-08-07"
+
+# ID real do namespace SUBSCRIPTIONS já existente na Cloudflare — pega em
+# Workers & Pages → KV → (o namespace) → copiar o ID. SUBSTITUA antes do
+# primeiro deploy via Actions; sem isso o Worker perde acesso ao KV.
+[[kv_namespaces]]
+binding = "SUBSCRIPTIONS"
+id = "68385bb44b774751aa8d7c60d5c710eb"
