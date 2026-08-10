@@ -42,8 +42,19 @@
           <span>Entrar</span>
         </button>
       </form>
+      <p id="gate-checking" class="gate-checking hidden">Verificando sessão salva…</p>
     </div>
   </div>
+  <script>
+    // Roda antes do resto do parser/admin.js — evita o "flash" do formulário
+    // de login completo a cada F5 quando já existe um segredo salvo: some com
+    // o form e mostra "Verificando…" até boot() (admin.js) confirmar de vez
+    // (showApp() ou showGate() decidem o resto a partir daqui).
+    if (localStorage.getItem('admin_secret')) {
+      document.getElementById('gate-form').classList.add('hidden');
+      document.getElementById('gate-checking').classList.remove('hidden');
+    }
+  </script>
 
   <!-- ===================== PAINEL ===================== -->
   <div id="admin-app" class="hidden">

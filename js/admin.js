@@ -199,6 +199,10 @@ function updateTruncatedBanner() {
 function showGate(msg) {
   document.getElementById('admin-app').classList.add('hidden');
   document.getElementById('gate-screen').classList.remove('hidden');
+  // Sai do estado "Verificando sessão salva…" (se estava nele) e mostra o form de
+  // verdade — chegou aqui é porque o boot() desistiu de tentar sozinho.
+  document.getElementById('gate-checking').classList.add('hidden');
+  document.getElementById('gate-form').classList.remove('hidden');
   const errEl = document.getElementById('gate-error');
   if (msg) {
     errEl.textContent = msg;
@@ -249,6 +253,7 @@ document.getElementById('gate-form').addEventListener('submit', async e => {
     store.set('admin_secret', secretInput);
     showApp();
     await initPanelData();
+    setupAdminPolling();
   } catch (err) {
     errEl.textContent = err.message || 'Não foi possível entrar. Verifique sua conexão.';
     errEl.classList.remove('hidden');
@@ -996,6 +1001,55 @@ function exportCsv() {
 
 document.getElementById('btn-export-csv').addEventListener('click', exportCsv);
 
+// ============================================================
+// POLLING (mesmo padrão de "smart polling" do app.js principal: 60s com a aba
+// visível, 5min em background, refresh imediato ao voltar pra aba) — antes disso
+// o painel só atualizava a lista de chamados com F5 manual.
+// ============================================================
+let adminPollingStarted = false;
+
+async function loadTasksSilently() {
+  // Não atropela o admin no meio de um drag-and-drop ou com o modal "Gerenciar"
+  // aberto — um re-render nesse momento reconstruiria o Kanban/Tabela debaixo da
+  // mão de quem está usando, ou fecharia o que estava sendo editado.
+  if (modalTaskId != null) return;
+  if (document.querySelector('.kanban-card.dragging')) return;
+  try {
+    const qs   = currentFilterParams().toString();
+    const data = await adminRequest(`/tasks${qs ? '?' + qs : ''}`);
+    allTasks = data.tasks || [];
+    applySearchAndRender();
+    tasksTruncated = !!data.truncated;
+    updateTruncatedBanner();
+  } catch (err) {
+    // Poll de fundo é silencioso de propósito — não vale popup de erro a cada 60s.
+    // 403 ainda precisa voltar pro gate (segredo pode ter sido revogado nesse meio-tempo).
+    if (err.status === 403) showGate(err.message);
+  }
+}
+
+function setupAdminPolling() {
+  if (adminPollingStarted) return; // boot() e o login pelo form podem chamar isso os dois
+  adminPollingStarted = true;
+  let pollTimer = null;
+
+  function scheduleNext() {
+    clearTimeout(pollTimer);
+    const delay = document.hidden ? 300000 : 60000; // 60s visível, 5min em background
+    pollTimer = setTimeout(async () => {
+      await loadTasksSilently();
+      scheduleNext();
+    }, delay);
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) loadTasksSilently(); // volta pra aba: atualiza na hora
+    scheduleNext();
+  });
+
+  scheduleNext();
+}
+
 async function loadTasks() {
   const loadingEl = document.getElementById('tasks-loading');
   const errEl     = document.getElementById('tasks-error');
@@ -1041,18 +1095,40 @@ async function initPanelData() {
   await Promise.all([loadMetrics(), loadTasks()]);
 }
 
-async function boot() {
-  if (!adminSecret) return; // fica na tela de gate esperando o form
+// Confere o segredo salvo contra /admin/users. Só trata como "segredo inválido de
+// verdade" quando o servidor responde 403 (igual adminRequest() já faz pro resto do
+// painel) — qualquer outra falha (rede, 5xx, deploy em andamento) é transitória e NÃO
+// deve forçar a pessoa a digitar o segredo de novo (bug 2026-08-10: essa função tratava
+// qualquer !res.ok como "inválido" e limpava o localStorage, então uma falha passageira
+// bastava pra pedir o segredo de novo a cada F5). Tenta 1 vez extra antes de desistir.
+async function checkStoredSecret(isRetry = false) {
   try {
     const res = await fetch(`${ADMIN_BASE}/users`, { headers: { 'X-Admin-Secret': adminSecret } });
-    if (!res.ok) throw new Error('segredo salvo não é mais válido');
+    if (res.status === 403) {
+      store.remove('admin_secret');
+      adminSecret = '';
+      showGate('Segredo de admin inválido ou expirado. Entre de novo.');
+      return;
+    }
+    if (!res.ok) throw new Error(`Erro HTTP ${res.status}`);
     showApp();
     await initPanelData();
+    setupAdminPolling();
   } catch (err) {
     console.error(err);
-    store.remove('admin_secret');
-    adminSecret = '';
+    if (!isRetry) {
+      await new Promise(r => setTimeout(r, 1500));
+      return checkStoredSecret(true);
+    }
+    // Falha transitória mesmo depois do retry: mantém o segredo salvo (não é culpa
+    // dele) e só avisa — a pessoa pode recarregar a página pra tentar de novo.
+    showGate('Não foi possível confirmar sua sessão agora (falha de rede ou o servidor está temporariamente indisponível). Seu segredo salvo continua válido — recarregue a página pra tentar de novo, ou entre normalmente abaixo.');
   }
+}
+
+async function boot() {
+  if (!adminSecret) return; // fica na tela de gate esperando o form
+  await checkStoredSecret();
 }
 
 boot();
