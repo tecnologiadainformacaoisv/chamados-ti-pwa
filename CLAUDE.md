@@ -35,7 +35,8 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 ├── index.html          ← UI única (SPA sem roteador)
 ├── admin.html          ← painel de admin (fase 2) — página separada, não faz parte do PWA/manifest
 ├── sw.js               ← service worker (cache offline + interceptação fetch) — escopo raiz
-├── push-worker.js      ← fonte do Cloudflare Worker de push (deploy separado em workers.dev)
+├── push-worker.js      ← fonte do Cloudflare Worker de push (deploy automatizado, ver "Deploy do Worker")
+├── wrangler.toml       ← config do Worker pro Wrangler (nome, entrypoint, binding do KV) — sem secrets
 ├── manifest.json       ← manifesto PWA
 ├── css/
 │   ├── style.css       ← estilos do app principal
@@ -113,6 +114,15 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 
 ---
 
+## Deploy do Worker
+
+- **Automatizado desde 2026-08-10** — substitui o processo antigo (colar `push-worker.js` inteiro no editor do dashboard da Cloudflare, sem CI/CD, que já causou mais de um "colei a versão errada" ao longo do projeto). Agora: `git push` na `main` que toque em `push-worker.js`, `wrangler.toml` ou no próprio workflow dispara `.github/workflows/deploy-worker.yml`, que roda `wrangler deploy` via `cloudflare/wrangler-action@v3`. Também pode ser disparado manualmente em Actions → "Deploy Cloudflare Worker" → Run workflow (`workflow_dispatch`).
+- **Autenticação do pipeline:** `CLOUDFLARE_API_TOKEN` (token com o template "Edit Cloudflare Workers") e `CLOUDFLARE_ACCOUNT_ID`, guardados como secrets do repositório no GitHub (`gh secret set`) — nunca em arquivo versionado.
+- **`wrangler.toml` não declara nenhum secret do Worker** (`CLICKUP_API_KEY`, `SUBSCRIBE_SECRET`, `ADMIN_SECRET`, `VAPID_PRIVATE_JWK`) — só `name`, `main` e o binding do KV `SUBSCRIPTIONS` (com o ID real da conta). Esses secrets continuam geridos manualmente (dashboard da Cloudflare ou `wrangler secret put`, uma vez só) — `wrangler deploy` nunca os toca, então não há risco do deploy automático apagar/sobrescrever nenhum deles.
+- Testado de ponta a ponta em 2026-08-10: push → workflow disparado automaticamente → `wrangler deploy` publicado com sucesso → Worker respondendo em produção com os secrets intactos (confirmado via chamada real a `/admin/users`).
+
+---
+
 ## Fluxo do usuário
 
 1. **Login** — usuário seleciona seu nome (lista buscada em runtime do campo customizado SOLICITANTE na ClickUp) e digita sua senha. Primeira vez pra aquele nome: a senha digitada vira a senha de acesso (sem tela de cadastro separada). Não pede mais código de acesso — a chave da ClickUp nunca chega ao navegador (ver "ClickUp como backend" e "Autenticação").
@@ -158,7 +168,7 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 
 ## Estado atual do desenvolvimento
 
-> Última atualização: 2026-08-07
+> Última atualização: 2026-08-10
 
 - **Versão:** v0.3.0. Branch `main`. Pré-teste de usabilidade (UX já tratada para essa etapa).
 - **PWA funcional** integrado ao ClickUp como backend (lista `901324490220`), sem banco próprio.
@@ -174,12 +184,13 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
   - **Painel de admin** (`admin.html`/`admin.js`) — deixou de ser só leitura: além de consumir `GET /admin/tasks`/`GET /admin/metrics`, agora tem `POST /admin/tasks/:id` pra mudar status, escrever solução e atribuir operador (botão "Gerenciar" por linha) — é onde a TI trabalha, sem precisar mais abrir a ClickUp. Ver "Painel de admin". Segredo de admin nunca fica no código, só no `localStorage` de quem loga na tela de gate.
 - **Tratamento de erros amigável** e suporte offline básico implementados (v0.2.0) — obs: o boot atual (busca da lista de solicitantes) depende de rede mesmo pra quem já tinha configurado o app; ver "Próximos passos".
 - **Testes unitários** em `tests/app.test.js` e `tests/push-worker.test.js` (sem dependências — `node vm`/`fetch` nativo + `assert`; rodar com `node tests/app.test.js` e `node tests/push-worker.test.js`).
+- **Deploy do Worker automatizado** (2026-08-10) — `push-worker.js` deixou de ser colado manualmente no dashboard da Cloudflare; agora publica via Wrangler + GitHub Actions a cada push na `main`. Ver "Deploy do Worker".
 
 ## Decisões técnicas tomadas
 
 - **ClickUp como backend** — cada chamado é uma task; sem banco de dados próprio. A chave da API do ClickUp mora só no Cloudflare Worker (`env.CLICKUP_API_KEY`, secret) — `app.js` nunca a recebe; ele fala com `WORKER_URL/api/*`, autenticado por `APP_SHARED_SECRET` (header `X-App-Secret`), que o Worker valida contra `env.SUBSCRIBE_SECRET` antes de repassar pra ClickUp.
 - **Zero dependências** — HTML/CSS/JS puro, sem framework/bundler (decisão explícita). Os testes usam só `node vm`/`fetch` nativo + `assert`, nada instalado.
-- **Push e proxy da ClickUp desacoplados** no mesmo Cloudflare Worker (`push-worker.js`, deploy separado em workers.dev — colar manualmente no editor do dashboard, sem CI/CD); `VAPID_PUBLIC_KEY`/`APP_SHARED_SECRET` hardcoded em `app.js` por serem identificadores públicos/de baixo risco (não dão acesso à ClickUp por si só).
+- **Push e proxy da ClickUp desacoplados** no mesmo Cloudflare Worker (`push-worker.js`, deploy automatizado via Wrangler + GitHub Actions desde 2026-08-10 — ver "Deploy do Worker"); `VAPID_PUBLIC_KEY`/`APP_SHARED_SECRET` hardcoded em `app.js` por serem identificadores públicos/de baixo risco (não dão acesso à ClickUp por si só).
 - **Contratos de sincronização** que devem permanecer idênticos entre `app.js` e `push-worker.js`: chaves de `STATUS_MAP` ↔ `NOTIFY_STATUSES`, e o field_id de `SOLICITANTE` em `FIELD_IDS`.
 - **Prioridade nunca é manual** — sempre derivada do tipo; não expor seletor de prioridade ao usuário.
 - **Login com senha, sem banco novo** — reaproveita o KV do Worker (`auth_<nome>`, `session_<token>`); senha em PBKDF2-SHA256 com formato autodescritivo (dá pra trocar de algoritmo/migrar de storage no futuro sem invalidar senha de ninguém — decisão tomada em 2026-07-24 pensando em evolução sem perda de acesso). Identidade sempre resolvida no servidor a partir da sessão, nunca do que o cliente manda — é isso que impede um solicitante ver/criar chamado como outro.
