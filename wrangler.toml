@@ -9,6 +9,14 @@
 # do Worker. Secrets continuam gerenciados manualmente (dashboard ou
 # `wrangler secret put`, uma vez só) — não ficam neste arquivo, que é público
 # no GitHub.
+#
+# 🛡️ keep_vars = true (2026-08-10, pós-incidente): SEM isso, `wrangler deploy`
+# apaga qualquer var/secret que exista no Worker mas não esteja declarada
+# aqui. Foi o que aconteceu com VAPID_PRIVATE_JWK/VAPID_PUBLIC_KEY nos dois
+# primeiros deploys via Actions — não eram secret_text, então caíram
+# silenciosamente. keep_vars=true faz o Wrangler preservar tudo que já
+# existe no Worker e não está listado neste arquivo. NÃO REMOVER.
+keep_vars = true
 
 name = "chamados-ti-push"
 main = "push-worker.js"
