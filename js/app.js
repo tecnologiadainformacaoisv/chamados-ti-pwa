@@ -1092,10 +1092,18 @@ function closeSettings() {
 // Não dá mais pra "trocar de nome" aqui — quem você é vem da sessão autenticada por senha,
 // não de uma seleção livre. Pra usar o app como outra pessoa, precisa desconectar e logar
 // de novo com a senha dela (é exatamente isso que impede um solicitante ver chamado de outro).
+// Lista explícita (não localStorage.clear()!) — admin.html mora no mesmo domínio
+// (tecnologiadainformacaoisv.github.io) e por isso compartilha o mesmo localStorage
+// do navegador. Um clear() geral aqui apagava também admin_secret e o resto do
+// estado do painel de admin sempre que ALGUÉM deslogava do app principal no mesmo
+// computador — bug real de 2026-08-10, TI ficava sendo pedida pra digitar o
+// segredo de admin de novo sem nenhuma relação com o que causou.
+const APP_OWN_STORAGE_KEYS = ['session_token', 'user_name', 'user_idx', 'notif_dismissed_at', 'cu_task_statuses'];
+
 async function doLogout() {
   if (!confirm('Desconectar?')) return;
   await logoutFromServer();
-  localStorage.clear();
+  APP_OWN_STORAGE_KEYS.forEach(k => localStorage.removeItem(k));
   location.reload();
 }
 
