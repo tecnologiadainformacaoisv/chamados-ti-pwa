@@ -279,14 +279,18 @@ async function handleCreateTask(request, env) {
   payload.due_date       = Date.now() + (PRIORITY_SLA_MS[prio] ?? PRIORITY_SLA_MS[3]);
   payload.due_date_time  = true;
 
-  // Throttle simples: no máximo 1 chamado a cada 10s por pessoa logada — evita duplo-clique
+  // Throttle simples: no máximo 1 chamado a cada 60s por pessoa logada — evita duplo-clique
   // acidental virando 2 tickets, e freia flood sem precisar de infra nova (reaproveita o
   // mesmo KV já usado pro dedup da automação).
+  // ⚠️ expirationTtl mínimo aceito pelo Cloudflare KV é 60 — qualquer valor menor faz o PUT
+  // falhar com 400, e essa falha não tratada derrubava handleCreateTask inteiro ANTES de
+  // chegar a criar o chamado na ClickUp (incidente 2026-08-10: "Abrir Chamado" não funcionava
+  // pra ninguém, sempre por essa exceção, não por CORS/rede como os erros do navegador sugeriam).
   const throttleKey = `throttle_create_${session.name}`;
   if (await env.SUBSCRIPTIONS.get(throttleKey)) {
     return jsonRes({ error: 'Aguarde alguns segundos antes de abrir outro chamado' }, 429);
   }
-  await env.SUBSCRIPTIONS.put(throttleKey, '1', { expirationTtl: 10 });
+  await env.SUBSCRIPTIONS.put(throttleKey, '1', { expirationTtl: 60 });
 
   const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task`, {
     method: 'POST',

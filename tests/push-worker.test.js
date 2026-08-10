@@ -49,7 +49,16 @@ function makeMockKV() {
   const store = new Map();
   return {
     get: async k => (store.has(k) ? store.get(k) : null),
-    put: async (k, v) => { store.set(k, v); },
+    // O KV real da Cloudflare rejeita expirationTtl < 60 com erro 400 — reproduzido aqui
+    // de propósito (incidente 2026-08-10: um mock que ignorava isso deixou passar sem
+    // nenhum teste falhar um throttle_create_ com expirationTtl:10, que quebrava toda
+    // criação de chamado em produção — o mock antigo nunca teria pego esse bug).
+    put: async (k, v, opts) => {
+      if (opts && opts.expirationTtl !== undefined && opts.expirationTtl < 60) {
+        throw new Error(`KV PUT failed: 400 Invalid expiration_ttl of ${opts.expirationTtl}. Expiration TTL must be at least 60.`);
+      }
+      store.set(k, v);
+    },
     delete: async k => store.delete(k),
     // Mock simplificado do KV.list({prefix}) real da Cloudflare — sem paginação (nosso volume é pequeno).
     list: async ({ prefix = '' } = {}) => ({
