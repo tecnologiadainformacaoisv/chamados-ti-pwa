@@ -751,3 +751,24 @@
   }
   .kanban-column { min-width: 240px; flex: 0 0 auto; }
 }
+
+/* ============================================================
+   RODAPÉ (canto inferior esquerdo, fixo) — fundo próprio (não depende do
+   que está atrás): com a sidebar recolhida (60px) o texto vaza pra fora
+   da área escura dela, então um tom claro-translúcido sem fundo ficava
+   ilegível sobre o conteúdo claro nesse caso.
+   ============================================================ */
+.admin-footer {
+  position: fixed;
+  left: 12px;
+  bottom: 10px;
+  font-size: .7rem;
+  color: rgba(255, 255, 255, .6);
+  letter-spacing: .01em;
+  background: rgba(15, 35, 71, .85);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm, 6px);
+  z-index: 5;
+  pointer-events: none;
+  user-select: none;
+}
