@@ -1,4 +1,4 @@
-const APP_VERSION = '0.3.3';
+const APP_VERSION = '0.3.4';
 const CACHE_NAME = `chamados-ti-${APP_VERSION}`;
 const ASSETS = [
   './index.html',
@@ -62,7 +62,14 @@ self.addEventListener('notificationclick', e => {
 });
 
 self.addEventListener('fetch', e => {
-  if (e.request.url.includes('api.clickup.com')) {
+  // Nunca passar chamada de API (ClickUp direto ou via proxy do Worker) nem
+  // requisição não-GET pelo caches.match() — corpo de POST só pode ser lido
+  // uma vez, e fetch(e.request) de novo depois de um cache-miss quebra com
+  // "Failed to fetch" sem nunca chegar no Worker (bug real, 2026-08-10: isso
+  // travava "Abrir Chamado" porque a checagem antiga só cobria api.clickup.com,
+  // domínio que o app não chama mais direto — hoje é sempre via workers.dev).
+  const isApiCall = e.request.url.includes('api.clickup.com') || e.request.url.includes('workers.dev');
+  if (isApiCall || e.request.method !== 'GET') {
     e.respondWith(fetch(e.request));
     return;
   }
