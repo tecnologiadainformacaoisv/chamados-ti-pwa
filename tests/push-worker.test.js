@@ -3,9 +3,41 @@
 // (o motivo de tudo isso existir: ninguém pode ver/criar chamado como outra pessoa).
 // Sem dependências: usa import() nativo + fetch/Response do Node. Mocka fetch e o KV —
 // NUNCA toca na API real da ClickUp. Rodar com `node tests/push-worker.test.js`.
+const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
 const { pathToFileURL } = require('url');
+const { DatabaseSync } = require('node:sqlite');
+
+// Mesmo adaptador de tests/d1-layer.test.js (imita a interface do binding D1 da
+// Cloudflare por cima de node:sqlite) — usado aqui só nos testes de POST /admin/migrate-d1.
+function makeD1FromSqlite(db) {
+  return {
+    prepare(sql) {
+      let boundParams = [];
+      const stmt = {
+        bind(...params) { boundParams = params; return stmt; },
+        async run() {
+          const info = db.prepare(sql).run(...boundParams);
+          return { success: true, meta: { changes: info.changes, last_row_id: info.lastInsertRowid } };
+        },
+        async first() {
+          const row = db.prepare(sql).get(...boundParams);
+          return row === undefined ? null : row;
+        },
+        async all() {
+          return { results: db.prepare(sql).all(...boundParams), success: true };
+        },
+      };
+      return stmt;
+    },
+  };
+}
+function freshD1() {
+  const db = new DatabaseSync(':memory:');
+  db.exec(fs.readFileSync(path.join(__dirname, '..', 'd1', 'schema.sql'), 'utf8'));
+  return makeD1FromSqlite(db);
+}
 
 const SOLICITANTE_FIELD_ID = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
 const TIPO_FIELD_ID = '47e475fe-e911-40cd-b4a2-23625fbf57f1';
@@ -81,10 +113,11 @@ async function test(name, fn) {
 
 (async () => {
   const workerPath = pathToFileURL(path.join(__dirname, '..', 'push-worker.js')).href;
-  const { default: worker } = await import(workerPath);
+  const { default: worker, d1GetChamado } = await import(workerPath);
 
   let lastCreatePayload = null;
   let taskListCallCount = 0;
+  let migrationTasksOverride = null; // usado só nos testes de POST /admin/migrate-d1
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, opts) => {
     const u = String(url);
@@ -107,12 +140,12 @@ async function test(name, fn) {
         const wantIdx = JSON.parse(cfRaw)[0].value;
         return new Response(JSON.stringify({ tasks: FAKE_TASKS.filter(t => t.custom_fields[0].value.orderindex === wantIdx) }), { status: 200 });
       }
-      return new Response(JSON.stringify({ tasks: FAKE_TASKS }), { status: 200 });
+      return new Response(JSON.stringify({ tasks: migrationTasksOverride || FAKE_TASKS }), { status: 200 });
     }
     return realFetch(url, opts);
   };
 
-  const env = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV() };
+  const env = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
   const SECRET_HEADERS = { 'X-App-Secret': env.SUBSCRIBE_SECRET, 'Content-Type': 'application/json' };
   let brunoToken; // Bruno nunca erra senha nem esbarra em throttle — usado pra testes que precisam de uma sessão "limpa"
 
@@ -628,6 +661,99 @@ async function test(name, fn) {
     await worker.fetch(req('POST', '/auth/logout', { headers: { 'X-Session-Token': token } }), env);
     const res = await worker.fetch(req('GET', '/api/my-tasks', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token } }), env);
     assert.strictEqual(res.status, 401);
+  });
+
+  console.log('--- POST /admin/migrate-d1 (Fase B3 — migração de histórico pro D1) ---');
+  const FAKE_MIGRATION_TASKS = [
+    { // válido — deve migrar
+      id: 'mig-1', name: 'Impressora não imprime',
+      status: { status: 'aberto' }, priority: { priority: 'high' },
+      assignees: [{ id: 170628721, username: 'Everson' }],
+      due_date: 1700000000000, date_created: 1699999000000,
+      custom_fields: [
+        { id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } },
+        { id: TIPO_FIELD_ID, value: 2 },
+        { id: SETOR_FIELD_ID, value: 1 },
+      ],
+    },
+    { // solicitante fora do campo atual — deve virar erro
+      id: 'mig-2', name: 'Chamado órfão',
+      status: { status: 'aberto' }, priority: { priority: 'normal' }, assignees: [],
+      custom_fields: [
+        { id: SOLICITANTE_FIELD_ID, value: { orderindex: 9999 } },
+        { id: TIPO_FIELD_ID, value: 0 },
+        { id: SETOR_FIELD_ID, value: 0 },
+      ],
+    },
+    { // status fora dos 4 esperados — deve virar erro
+      id: 'mig-3', name: 'Chamado com status estranho',
+      status: { status: 'em revisao' }, priority: { priority: 'normal' }, assignees: [],
+      custom_fields: [
+        { id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } },
+        { id: TIPO_FIELD_ID, value: 0 },
+        { id: SETOR_FIELD_ID, value: 0 },
+      ],
+    },
+    { // TIPO ausente — deve virar erro
+      id: 'mig-4', name: 'Chamado sem tipo',
+      status: { status: 'aberto' }, priority: { priority: 'normal' }, assignees: [],
+      custom_fields: [
+        { id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } },
+        { id: SETOR_FIELD_ID, value: 0 },
+      ],
+    },
+  ];
+
+  await test('sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/admin/migrate-d1', { body: '{}' }), env);
+    assert.strictEqual(res.status, 403);
+  });
+
+  await test('dryRun:true reporta as contagens certas sem gravar nada no D1', async () => {
+    migrationTasksOverride = FAKE_MIGRATION_TASKS;
+    const res = await worker.fetch(req('POST', '/admin/migrate-d1', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dryRun: true }),
+    }), env);
+    const data = await res.json();
+    assert.strictEqual(data.dryRun, true);
+    assert.strictEqual(data.total, 4);
+    assert.strictEqual(data.migrated, 1);
+    assert.strictEqual(data.errors.length, 3);
+    const found = await d1GetChamado(env, 'mig-1');
+    assert.strictEqual(found, null, 'dryRun não deveria ter gravado nada de verdade no D1');
+  });
+
+  await test('migração de verdade grava só a task válida, com os campos certos', async () => {
+    const res = await worker.fetch(req('POST', '/admin/migrate-d1', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: '{}',
+    }), env);
+    const data = await res.json();
+    assert.strictEqual(data.migrated, 1);
+    assert.strictEqual(data.skipped, 0);
+    assert.strictEqual(data.errors.length, 3);
+    assert.deepStrictEqual(data.errors.map(e => e.id).sort(), ['mig-2', 'mig-3', 'mig-4']);
+
+    const row = await d1GetChamado(env, 'mig-1');
+    assert.ok(row, 'mig-1 deveria ter sido gravada no D1');
+    assert.strictEqual(row.name, 'Impressora não imprime');
+    assert.strictEqual(row.status, 'aberto');
+    assert.strictEqual(row.priority, 2); // 'high' -> 2
+    assert.strictEqual(row.tipo, 2);
+    assert.strictEqual(row.setor, 1);
+    assert.strictEqual(row.solicitante, 'Michael Vasconcelos');
+    assert.strictEqual(row.assignee_id, 170628721);
+  });
+
+  await test('rodar de novo é idempotente — não duplica, marca como skipped', async () => {
+    const res = await worker.fetch(req('POST', '/admin/migrate-d1', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: '{}',
+    }), env);
+    const data = await res.json();
+    assert.strictEqual(data.migrated, 0, 'já tinha migrado antes, não deveria contar de novo');
+    assert.strictEqual(data.skipped, 1);
   });
 
   console.log(`\n${passed} passaram, ${failed} falharam`);

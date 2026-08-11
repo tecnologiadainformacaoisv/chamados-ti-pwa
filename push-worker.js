@@ -28,13 +28,22 @@
 // =====================================================================
 
 // ⚠️ Mantenha sincronizado com LIST_ID/FIELD_IDS.SOLICITANTE/FIELD_IDS.TIPO/FIELD_IDS.SETOR/
-// FIELD_IDS.SOLUCAO em app.js
+// FIELD_IDS.SOLUCAO/FIELD_IDS.EMAIL em app.js
 const LIST_ID               = '901324490220';
 const SOLICITANTE_FIELD_ID  = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
 const TIPO_FIELD_ID         = '47e475fe-e911-40cd-b4a2-23625fbf57f1';
 const SETOR_FIELD_ID        = 'c1ca88de-4b01-4933-93ff-24494bed59e2';
 const SOLUCAO_FIELD_ID      = '16144175-845e-4e3c-baaa-a2517325cd43';
+// Só usado pela migração pro D1 (Fase B3) — nenhuma rota anterior precisava ler EMAIL.
+const EMAIL_FIELD_ID        = '2d8d4780-1d48-44dc-b605-0b5dd76c9d0f';
 const VAPID_SUBJECT         = 'mailto:henrique.krvalho@gmail.com';
+
+// Nome da prioridade (como a ClickUp devolve em task.priority.priority) -> número usado
+// no schema D1 (mesma escala de CATEGORIA_PRIORIDADE/PRIORITY em app.js: 1 Urgente, 2 Alta,
+// 3 Normal). "low" nunca deveria aparecer (regra de negócio: prioridade "Baixa" não existe
+// nesse fluxo) — mapeado mesmo assim por segurança, caso algum chamado antigo/manual na
+// ClickUp tenha escapado da regra antes dela existir.
+const PRIORITY_NAME_TO_NUM = { urgent: 1, high: 2, normal: 3, low: 3 };
 
 // ⚠️ Mantenha sincronizado com as chaves de STATUS_MAP em app.js (que por sua vez precisam
 // ficar iguais a NOTIFY_STATUSES, ver abaixo) — usado por handleAdminUpdateTask pra validar
@@ -112,6 +121,7 @@ export default {
       if (attachMatch) return handleUploadAttachment(request, env, attachMatch[1]);
       const adminUpdateMatch = pathname.match(/^\/admin\/tasks\/([^/]+)$/);
       if (adminUpdateMatch) return handleAdminUpdateTask(request, env, adminUpdateMatch[1]);
+      if (pathname === '/admin/migrate-d1') return handleAdminMigrateD1(request, env);
     }
 
     if (request.method === 'GET') {
@@ -1255,6 +1265,116 @@ async function d1GetMetrics(env) {
     },
     tempoMedioPorOperador
   };
+}
+
+// =====================================================================
+// POST /admin/migrate-d1 — Fase B3 do roadmap (migração de histórico, 2026-08-11).
+// Só leitura na ClickUp (fetchAllTasks, mesma função que /admin/tasks já usa) + escrita
+// no D1 — não muda NADA em produção, já que nenhuma rota lê do D1 ainda. Protegido por
+// ADMIN_SECRET, mesmo padrão das outras rotas /admin/*.
+//
+// Idempotente: usa INSERT OR IGNORE com o próprio task_id da ClickUp como id no D1 (só
+// pras linhas migradas — chamados criados depois direto no D1, quando existirem, usam
+// UUID via d1CreateChamado) — rodar de novo não duplica nem falha, só marca como
+// "skipped" o que já tinha sido migrado antes.
+//
+// Aceita { "dryRun": true } no corpo pra simular sem gravar nada — mapeia/valida todas as
+// tasks e devolve a mesma contagem que uma migração de verdade daria, sem tocar no D1.
+//
+// Falha por task individual não derruba a migração inteira (mesmo espírito de
+// handleAdminUpdateTask reportando "updated" parcial) — cada erro vai pra "errors",
+// identificado pelo id/nome da task, migração continua pras próximas.
+// =====================================================================
+
+function mapClickUpTaskToD1(task, idxToName) {
+  const statusRaw = (task.status?.status || '').toLowerCase();
+  if (!VALID_STATUSES.includes(statusRaw)) {
+    throw new Error(`status fora do esperado: "${task.status?.status}"`);
+  }
+
+  const solicitanteIdx  = cfValue(task, SOLICITANTE_FIELD_ID);
+  const solicitanteName = solicitanteIdx != null ? idxToName[solicitanteIdx] : null;
+  if (!solicitanteName) {
+    throw new Error('SOLICITANTE não resolvido (nome fora do campo SOLICITANTE atual da ClickUp)');
+  }
+
+  const tipoIdx  = cfValue(task, TIPO_FIELD_ID);
+  const setorIdx = cfValue(task, SETOR_FIELD_ID);
+  if (tipoIdx == null)  throw new Error('campo TIPO ausente na task');
+  if (setorIdx == null) throw new Error('campo SETOR ausente na task');
+
+  const priorityName = task.priority?.priority;
+  const priority = PRIORITY_NAME_TO_NUM[priorityName];
+  if (!priority) throw new Error(`prioridade ausente/desconhecida: "${priorityName}"`);
+
+  return {
+    id:           task.id,
+    name:         task.name,
+    description:  task.description || task.text_content || null,
+    status:       statusRaw,
+    priority,
+    tipo:         Number(tipoIdx),
+    setor:        Number(setorIdx),
+    solicitante:  solicitanteName,
+    email:        cfValue(task, EMAIL_FIELD_ID),
+    solucao:      cfValue(task, SOLUCAO_FIELD_ID),
+    assignee_id:  task.assignees?.[0]?.id ?? null,
+    due_date:     task.due_date    != null ? Number(task.due_date)    : null,
+    date_created: task.date_created != null ? Number(task.date_created) : Date.now(),
+    date_closed:  task.date_closed != null ? Number(task.date_closed)  : null,
+    start_date:   task.start_date  != null ? Number(task.start_date)   : null,
+  };
+}
+
+async function d1MigrateChamado(env, data) {
+  const now = Date.now();
+  const result = await env.CHAMADOS_DB.prepare(
+    `INSERT OR IGNORE INTO chamados
+      (id, name, description, status, priority, tipo, setor, solicitante, email, solucao,
+       assignee_id, due_date, date_created, date_closed, start_date, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    data.id, data.name, data.description, data.status, data.priority, data.tipo, data.setor,
+    data.solicitante, data.email, data.solucao, data.assignee_id, data.due_date, data.date_created,
+    data.date_closed, data.start_date, now, now
+  ).run();
+  return { inserted: (result.meta?.changes ?? 0) > 0 };
+}
+
+async function handleAdminMigrateD1(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+
+  let body = {};
+  const text = await request.text();
+  if (text) {
+    try { body = JSON.parse(text); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  }
+  const dryRun = body.dryRun === true;
+
+  const { tasks, truncated } = await fetchAllTasks(env);
+  const { idxToName } = await getSolicitanteMaps(env);
+
+  let migrated = 0, skipped = 0;
+  const errors = [];
+
+  for (const task of tasks) {
+    let mapped;
+    try {
+      mapped = mapClickUpTaskToD1(task, idxToName);
+    } catch (err) {
+      errors.push({ id: task.id, name: task.name, reason: err.message });
+      continue;
+    }
+    if (dryRun) { migrated++; continue; }
+    try {
+      const result = await d1MigrateChamado(env, mapped);
+      if (result.inserted) migrated++; else skipped++;
+    } catch (err) {
+      errors.push({ id: task.id, name: task.name, reason: err.message });
+    }
+  }
+
+  return jsonRes({ dryRun, total: tasks.length, migrated, skipped, errors, truncated });
 }
 
 export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics };
