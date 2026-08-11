@@ -1,0 +1,8 @@
+{
+  "name": "chamados-ti-pwa",
+  "private": true,
+  "description": "PWA de chamados de TI do Instituto São Vicente — zero dependência de runtime, este arquivo existe só pelo atalho `npm test`.",
+  "scripts": {
+    "test": "node tests/run-all.js"
+  }
+}
