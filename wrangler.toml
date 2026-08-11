@@ -37,3 +37,10 @@ id = "68385bb44b774751aa8d7c60d5c710eb"
 binding = "CHAMADOS_DB"
 database_name = "chamados-ti-db"
 database_id = "fdba5aac-cc0b-4017-896a-603abd31baa3"
+
+# Bucket R2 criado em 2026-08-11 (Fase B4 do roadmap de modernização) — pra
+# onde os anexos devem ir no futuro, em vez de ficarem só na ClickUp.
+# NENHUMA rota usa isto ainda: handleUploadAttachment continua 100% ClickUp.
+[[r2_buckets]]
+binding = "ANEXOS"
+bucket_name = "chamados-ti-anexos"

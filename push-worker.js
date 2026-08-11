@@ -1377,4 +1377,51 @@ async function handleAdminMigrateD1(request, env) {
   return jsonRes({ dryRun, total: tasks.length, migrated, skipped, errors, truncated });
 }
 
-export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics };
+// =====================================================================
+// CAMADA DE ANEXOS — CLOUDFLARE R2 (Fase B4 do roadmap de modernização,
+// 2026-08-11 — ver CLAUDE.md "Decisões técnicas tomadas")
+//
+// ⚠️ NADA nas rotas acima usa isto ainda. handleUploadAttachment continua
+// 100% ClickUp — anexo de chamado real ainda sobe pra lá, não pro R2. Estas
+// funções existem só como preparação (mesmo espírito da camada D1 da Fase B2).
+//
+// Chave do objeto no bucket: chamados/<chamadoId>/<uuid>-<nome sanitizado> —
+// prefixo por chamado facilita listar/limpar todos os anexos de um chamado
+// de uma vez no futuro (R2 permite list({prefix})).
+//
+// Limite de 10MB por anexo continua só client-side (mesmo comportamento já
+// documentado em CLAUDE.md) — B4 não muda essa validação, só prepara onde o
+// arquivo aceito vai ser guardado.
+// =====================================================================
+
+function r2SanitizeFilename(name) {
+  // Remove separador de caminho e ".." — nome vira só o "basename", sem chance
+  // de escrever fora do prefixo do chamado (path traversal via nome de arquivo).
+  const base = String(name || 'arquivo').split(/[\\/]/).pop().replace(/\.\./g, '');
+  return base.slice(0, 200) || 'arquivo'; // limite de tamanho razoável pro nome
+}
+
+async function r2UploadAnexo(env, chamadoId, filename, contentType, body) {
+  const key = `chamados/${chamadoId}/${crypto.randomUUID()}-${r2SanitizeFilename(filename)}`;
+  const obj = await env.ANEXOS.put(key, body, {
+    httpMetadata: { contentType: contentType || 'application/octet-stream' },
+  });
+  return { key, size: obj?.size ?? null, contentType: contentType || 'application/octet-stream' };
+}
+
+async function r2GetAnexo(env, key) {
+  const obj = await env.ANEXOS.get(key);
+  if (!obj) return null;
+  return {
+    key,
+    size: obj.size,
+    contentType: obj.httpMetadata?.contentType ?? null,
+    body: obj.body, // ReadableStream — quem chamar decide se lê tudo ou repassa direto numa Response
+  };
+}
+
+async function r2DeleteAnexo(env, key) {
+  await env.ANEXOS.delete(key);
+}
+
+export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo };
