@@ -1,0 +1,93 @@
+import { MessageCircle } from "lucide-react"
+import { getCF, fmtDate, type Task } from "@/lib/api"
+import { isOverdue, overdueFor, slaProgressInfo, timeAgo, timeUntil, waLinkForTask } from "@/lib/ticket-helpers"
+import { OPERADORES, PRIORITY, SETORES, SETOR_FIELD_ID, SOLUCAO_FIELD_ID, STATUS_MAP, TIPOS, TIPO_FIELD_ID, optionName, type StatusKey } from "@/lib/constants"
+
+// Porta renderDetailCard() de app.js — mesmo cartão: barra de progresso do SLA, banner de
+// atraso, cor de fundo por status, solução em destaque quando encerrado.
+export function TicketCard({ task }: { task: Task }) {
+  const statusKey = (task.status?.status as StatusKey) ?? "aberto"
+  const info = STATUS_MAP[statusKey] ?? STATUS_MAP.aberto
+  const prioId = task.priority?.priority
+  // task.priority aqui vem da ClickUp como nome (urgent/high/normal) em vez do número —
+  // mapeia pro mesmo PRIORITY por label, já que app-api usa PRIORITY indexado por id numérico.
+  const prioEntry = Object.values(PRIORITY).find((p) => p.label.toLowerCase() === String(prioId).toLowerCase())
+  const overdue = isOverdue(task)
+  const oText = overdueFor(task)
+  const sla = slaProgressInfo(task)
+
+  const tipoIdx = Number(getCF(task, TIPO_FIELD_ID))
+  const setorIdx = Number(getCF(task, SETOR_FIELD_ID))
+  const tipoName = TIPOS.find((t) => t.orderindex === tipoIdx)?.name ?? optionName(TIPOS, tipoIdx)
+  const setorName = optionName(SETORES, setorIdx)
+  const solucao = statusKey === "encerrado" ? (getCF(task, SOLUCAO_FIELD_ID) as string | null) : null
+
+  const desc = (task.text_content || task.description || "").trim()
+  const dueFuture = statusKey === "encerrado" || statusKey === "pendente" ? null : timeUntil(task.due_date)
+  const assignees = (task.assignees ?? []).map((a) => a.username || OPERADORES[String(a.id)] || `#${a.id}`).join(", ")
+
+  return (
+    <div
+      className={`relative overflow-hidden rounded-lg border p-4 shadow-sm ${overdue ? "border-destructive/50" : "border-border"}`}
+      style={{ background: statusBg(statusKey) }}
+    >
+      {sla && (
+        <div className="absolute inset-x-0 top-0 h-1 bg-black/10">
+          <div className="h-full transition-all" style={{ width: `${sla.pct}%`, background: sla.color }} />
+        </div>
+      )}
+
+      <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
+        <span>Atualizado {timeAgo(task.date_created)}</span>
+        <span className="inline-flex items-center gap-1.5 font-medium" style={{ color: info.dot }}>
+          <span className="h-1.5 w-1.5 rounded-full" style={{ background: info.dot }} />
+          {info.label}
+        </span>
+      </div>
+
+      {overdue && (
+        <div className="mb-2 rounded-md bg-destructive/10 px-2.5 py-1.5 text-xs font-medium text-destructive">
+          ⚠ {oText}
+        </div>
+      )}
+
+      <p className="mb-1 font-semibold text-foreground">{task.name || "(sem título)"}</p>
+      {desc && <p className="mb-2 text-sm text-muted-foreground">{desc}</p>}
+
+      <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+        <span>{tipoName}</span>
+        <span>{setorName}</span>
+        {prioEntry && <span style={{ color: prioEntry.color }}>{prioEntry.label}</span>}
+        {assignees && <span>Atendente: {assignees}</span>}
+        <span>Aberto em {fmtDate(task.date_created)}</span>
+        {dueFuture && <span>Prazo {dueFuture}</span>}
+      </div>
+
+      {solucao && (
+        <div className="mt-3 rounded-md border border-[#22c55e]/30 bg-[#22c55e]/10 p-2.5 text-sm">
+          <p className="mb-0.5 text-xs font-semibold text-[#166534]">Solução aplicada</p>
+          <p className="text-foreground">{solucao}</p>
+        </div>
+      )}
+
+      <a
+        href={waLinkForTask(task)}
+        target="_blank"
+        rel="noreferrer"
+        className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-[#22c55e] hover:underline"
+      >
+        <MessageCircle className="h-4 w-4" /> Falar no WhatsApp
+      </a>
+    </div>
+  )
+}
+
+function statusBg(status: StatusKey): string {
+  const map: Record<StatusKey, string> = {
+    aberto: "#e3f2fd",
+    "em atendimento": "#e3e0fb",
+    pendente: "#fce4ec",
+    encerrado: "#e8f5e9",
+  }
+  return map[status] ?? "#fff"
+}

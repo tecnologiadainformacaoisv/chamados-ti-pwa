@@ -5,11 +5,17 @@
 export const WORKER_URL = "https://chamados-ti-push.tecnologiadainformacao-isv.workers.dev"
 export const ADMIN_BASE = `${WORKER_URL}/admin`
 export const API_BASE = `${WORKER_URL}/api`
+export const AUTH_BASE = `${WORKER_URL}/auth`
 
 export const SOLICITANTE_FIELD_ID = "9f111ee8-923a-4080-bf8f-1c03eee2f7cb"
 export const TIPO_FIELD_ID = "47e475fe-e911-40cd-b4a2-23625fbf57f1"
 export const SETOR_FIELD_ID = "c1ca88de-4b01-4933-93ff-24494bed59e2"
 export const SOLUCAO_FIELD_ID = "16144175-845e-4e3c-baaa-a2517325cd43"
+export const EMAIL_FIELD_ID = "2d8d4780-1d48-44dc-b605-0b5dd76c9d0f"
+
+// Público por design — só libera o proxy /api/* (ver "ClickUp como backend" no CLAUDE.md),
+// não dá acesso a nada sensível por si só. Mesmo valor de app.js/admin.js.
+export const APP_SHARED_SECRET = "isv-chamados-2k26-9fQ3vM7xZp"
 
 export type Opcao = { orderindex: number; name: string; color: string }
 
@@ -64,3 +70,38 @@ export function optionName(list: Opcao[], orderindex: number | null | undefined)
   if (orderindex === null || orderindex === undefined) return "—"
   return list.find((o) => o.orderindex === Number(orderindex))?.name ?? "—"
 }
+
+// ============================================================
+// App dos solicitantes (Fase F4) — mesmos valores de js/app.js
+// ============================================================
+
+// Não usamos prioridade "Baixa" aqui — nenhuma categoria mapeia pra ela.
+export const PRIORITY: Record<number, { label: string; color: string; slaMs: number; slaLabel: string }> = {
+  1: { label: "Urgente", color: "#ef5350", slaMs: 1 * 3600000, slaLabel: "1 hora" },
+  2: { label: "Alta", color: "#ff9800", slaMs: 4 * 3600000, slaLabel: "4 horas" },
+  3: { label: "Normal", color: "#2196f3", slaMs: 24 * 3600000, slaLabel: "24 horas" },
+}
+
+// categoria (orderindex de TIPOS) -> prioridade (id de PRIORITY) — confirmado com a
+// automação real da ClickUp.
+export const CATEGORIA_PRIORIDADE: Record<number, number> = {
+  0: 1, 1: 1, 2: 1, 3: 2, 4: 3, 5: 2, 6: 3, 7: 2,
+}
+
+// Descrição completa de cada tipo, mostrada no select do formulário de abertura.
+export const TIPOS_FULL: Record<number, string> = {
+  0: "Notebooks (Configuração, Desligamento e Travamento)",
+  1: "Multifuncionais (Tinta, Toner, Obstrução e Falhas nas impressões)",
+  2: "Redes (Sem internet, Sites fora do ar e Lentidão na rede)",
+  3: "Programas (Excel, Word e Adobe)",
+  4: "Design (Criação de artes, Capas e Imagens)",
+  5: "E-mails (Deslogamento, Armazenamento cheio e Falha no envio)",
+  6: "Periféricos (Teclado, Mouse, Pendrive e Webcam)",
+  7: "Plataformas (Google Drive, OMIE, Domínio e ZAPPY)",
+}
+
+export const OPERADOR_WHATSAPP: Record<string, string> = {
+  "170628721": "5585989304648", // Everson
+  "200498355": "5585999419866", // Henrique
+}
+export const WA_NUMBER_PADRAO = "5585999419866"
