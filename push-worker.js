@@ -1066,3 +1066,195 @@ function jsonRes(data, status = 200) {
     headers: { ...CORS, 'Content-Type': 'application/json' }
   });
 }
+
+// =====================================================================
+// CAMADA DE DADOS — CLOUDFLARE D1 (Fase B2 do roadmap de modernização,
+// 2026-08-11 — ver CLAUDE.md "Deploy do Worker"/"Decisões técnicas tomadas")
+//
+// ⚠️ NADA nas rotas acima usa isto ainda. A ClickUp continua sendo 100% a
+// fonte de verdade em produção — estas funções existem só como preparação
+// pra uma migração futura (B3 em diante), testadas isoladamente
+// (tests/d1-layer.test.js) e exportadas pra isso. Schema em d1/schema.sql,
+// já aplicado no banco real (binding CHAMADOS_DB em wrangler.toml).
+//
+// Espelha os mesmos campos que hoje vivem em custom_fields na ClickUp, mas
+// com nomes de coluna diretos (sem a indireção de orderindex que a API da
+// ClickUp exige) — ver FIELD_IDS em app.js pro equivalente do lado ClickUp.
+//
+// Limitação deliberada (documentada, não é bug): só 1 assignee_id por
+// chamado — replica exatamente o que o modal "Gerenciar" do admin.js já
+// suporta hoje (pré-seleciona só 1 operador, mesmo quando a task da ClickUp
+// tem 2+ assignees). Suporte de verdade a múltiplos operadores fica pra uma
+// fase futura, se for decidido — não é regressão em relação ao admin atual.
+//
+// Efeitos colaterais de transição de status (start_date ao virar "em
+// atendimento", date_closed ao virar "encerrado", pausa de SLA em
+// "pendente") ficam pra Fase B5 ("Automação de SLA embutida") — de propósito
+// fora de escopo aqui. d1UpdateChamado só grava os campos que vierem no
+// patch, sem inferir nada.
+// =====================================================================
+
+const D1_VALID_STATUSES = VALID_STATUSES; // mesmos 4 status, mesma constante — sem duplicar a lista
+
+function d1Row(row) {
+  // D1 devolve tudo como veio da coluna (INTEGER vira number, TEXT vira string/null) — só
+  // centraliza o formato de retorno num único lugar, pra createChamado/getChamado/list
+  // devolverem sempre o mesmo shape de objeto.
+  if (!row) return null;
+  return { ...row };
+}
+
+async function d1CreateChamado(env, data) {
+  const id  = crypto.randomUUID();
+  const now = Date.now();
+  const row = {
+    id,
+    name:         data.name,
+    description:  data.description ?? null,
+    status:       data.status ?? 'aberto',
+    priority:     data.priority,
+    tipo:         data.tipo,
+    setor:        data.setor,
+    solicitante:  data.solicitante,
+    email:        data.email ?? null,
+    solucao:      data.solucao ?? null,
+    assignee_id:  data.assignee_id ?? null,
+    due_date:     data.due_date ?? null,
+    date_created: now,
+    date_closed:  null,
+    start_date:   null,
+    created_at:   now,
+    updated_at:   now,
+  };
+  if (!D1_VALID_STATUSES.includes(row.status)) {
+    throw new Error(`status inválido: ${row.status}`);
+  }
+  await env.CHAMADOS_DB.prepare(
+    `INSERT INTO chamados
+      (id, name, description, status, priority, tipo, setor, solicitante, email, solucao,
+       assignee_id, due_date, date_created, date_closed, start_date, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    row.id, row.name, row.description, row.status, row.priority, row.tipo, row.setor,
+    row.solicitante, row.email, row.solucao, row.assignee_id, row.due_date, row.date_created,
+    row.date_closed, row.start_date, row.created_at, row.updated_at
+  ).run();
+  return d1Row(row);
+}
+
+async function d1GetChamado(env, id) {
+  const row = await env.CHAMADOS_DB.prepare('SELECT * FROM chamados WHERE id = ?').bind(id).first();
+  return d1Row(row);
+}
+
+// filters: { status, setor, tipo, assigneeId, solicitante } — todos opcionais, mesmo
+// conjunto que GET /admin/tasks já aceita hoje (ver handleAdminListTasks).
+async function d1ListChamados(env, filters = {}) {
+  const where  = [];
+  const params = [];
+  if (filters.status)      { where.push('status = ?');      params.push(filters.status); }
+  if (filters.setor != null)      { where.push('setor = ?');       params.push(Number(filters.setor)); }
+  if (filters.tipo != null)       { where.push('tipo = ?');        params.push(Number(filters.tipo)); }
+  if (filters.assigneeId != null) { where.push('assignee_id = ?'); params.push(Number(filters.assigneeId)); }
+  if (filters.solicitante) { where.push('solicitante = ?'); params.push(filters.solicitante); }
+
+  const sql = `SELECT * FROM chamados` +
+    (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
+    ` ORDER BY date_created DESC`;
+  const { results } = await env.CHAMADOS_DB.prepare(sql).bind(...params).all();
+  return (results || []).map(d1Row);
+}
+
+// patch: qualquer subconjunto de { status, solucao, assigneeId, description, dueDate,
+// dateClosed, startDate } — só atualiza o que vier, igual handleAdminUpdateTask já faz
+// do lado ClickUp. Não infere efeito colateral nenhum (ver comentário da seção acima).
+async function d1UpdateChamado(env, id, patch) {
+  const fieldMap = {
+    status:      'status',
+    solucao:     'solucao',
+    assigneeId:  'assignee_id',
+    description: 'description',
+    dueDate:     'due_date',
+    dateClosed:  'date_closed',
+    startDate:   'start_date',
+  };
+  const set    = [];
+  const params = [];
+  for (const [key, col] of Object.entries(fieldMap)) {
+    if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
+    if (key === 'status' && !D1_VALID_STATUSES.includes(patch.status)) {
+      throw new Error(`status inválido: ${patch.status}`);
+    }
+    set.push(`${col} = ?`);
+    params.push(patch[key]);
+  }
+  if (!set.length) return d1GetChamado(env, id); // nada pra atualizar — devolve como está
+
+  set.push('updated_at = ?');
+  params.push(Date.now());
+  params.push(id);
+
+  await env.CHAMADOS_DB.prepare(`UPDATE chamados SET ${set.join(', ')} WHERE id = ?`).bind(...params).run();
+  return d1GetChamado(env, id);
+}
+
+// Mesmo shape de resposta de handleAdminMetrics (porStatus/porTipo/porSetor/sla/
+// tempoMedioPorOperador) — de propósito, pra um dia trocar a fonte sem quebrar o
+// contrato que admin.js já consome. nome vem null (D1 não guarda nome do operador,
+// só o id) — o painel já resolve id->nome via OPERADORES no cliente de qualquer forma.
+async function d1GetMetrics(env) {
+  const { results } = await env.CHAMADOS_DB.prepare(
+    'SELECT status, tipo, setor, due_date, date_closed, start_date, assignee_id FROM chamados'
+  ).all();
+  const rows = results || [];
+
+  const porStatus = {};
+  const porTipo    = {};
+  const porSetor   = {};
+  const atendimentoPorOperador = {}; // id -> { somaMs, count }
+  let dentroDoSla = 0;
+  let atrasado    = 0;
+  const agora = Date.now();
+
+  for (const r of rows) {
+    porStatus[r.status] = (porStatus[r.status] || 0) + 1;
+    if (r.tipo != null)  porTipo[r.tipo]   = (porTipo[r.tipo]   || 0) + 1;
+    if (r.setor != null) porSetor[r.setor] = (porSetor[r.setor] || 0) + 1;
+
+    if (r.due_date != null) {
+      const referencia = (r.status === 'encerrado' && r.date_closed != null) ? r.date_closed : agora;
+      if (referencia > r.due_date) atrasado++; else dentroDoSla++;
+    }
+
+    if (r.status === 'encerrado' && r.start_date != null && r.date_closed != null && r.assignee_id != null) {
+      const key = String(r.assignee_id);
+      const duracaoMs = r.date_closed - r.start_date;
+      if (!atendimentoPorOperador[key]) atendimentoPorOperador[key] = { somaMs: 0, count: 0 };
+      atendimentoPorOperador[key].somaMs += duracaoMs;
+      atendimentoPorOperador[key].count  += 1;
+    }
+  }
+
+  const tempoMedioPorOperador = {};
+  for (const [id, dado] of Object.entries(atendimentoPorOperador)) {
+    tempoMedioPorOperador[id] = { nome: null, mediaMs: Math.round(dado.somaMs / dado.count), totalChamados: dado.count };
+  }
+
+  const totalComSla = dentroDoSla + atrasado;
+  return {
+    total: rows.length,
+    truncated: false, // D1 não pagina como fetchAllTasks — não existe teto aqui
+    porStatus,
+    porTipo,
+    porSetor,
+    sla: {
+      dentroDoSla,
+      atrasado,
+      dentroDoSlaPercent: totalComSla ? Math.round((dentroDoSla / totalComSla) * 1000) / 10 : null,
+      atrasadoPercent:    totalComSla ? Math.round((atrasado    / totalComSla) * 1000) / 10 : null,
+    },
+    tempoMedioPorOperador
+  };
+}
+
+export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics };
