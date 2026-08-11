@@ -78,6 +78,11 @@ const DEFAULT_TIME_ESTIMATE_MS = {
   normal: 60 * 60000, // 1h
 };
 
+// Mesmos valores de DEFAULT_TIME_ESTIMATE_MS, mas indexados pelo número de priority do
+// D1 (1/2/3) em vez do nome que só existe do lado ClickUp — usado por d1TransitionStatus
+// (Fase B5). Sem entrada pra "Baixa" pelo mesmo motivo do original.
+const DEFAULT_TIME_ESTIMATE_MS_BY_PRIORITY = { 1: DEFAULT_TIME_ESTIMATE_MS.urgent, 2: DEFAULT_TIME_ESTIMATE_MS.high, 3: DEFAULT_TIME_ESTIMATE_MS.normal };
+
 // Só o app publicado pode chamar o Worker via navegador — '*' permitia qualquer site
 // embutir uma chamada pro proxy usando o navegador de quem estivesse com a aba aberta.
 const ALLOWED_ORIGIN = 'https://tecnologiadainformacaoisv.github.io';
@@ -1424,4 +1429,90 @@ async function r2DeleteAnexo(env, key) {
   await env.ANEXOS.delete(key);
 }
 
-export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo };
+// =====================================================================
+// AUTOMAÇÃO DE SLA/PUSH EMBUTIDA — D1 (Fase B5 do roadmap de modernização,
+// 2026-08-11 — ver CLAUDE.md "Decisões técnicas tomadas")
+//
+// Mesma automação de runStatusAutomation (acima), reescrita pra não depender do
+// webhook da automação da ClickUp — chamar esta função já basta, tudo embutido
+// na própria mudança de status. ⚠️ NADA nas rotas usa isto ainda (mesmo espírito
+// das Fases B2/B4) — é a peça que falta pra um dia (Fase B7) o D1 não precisar
+// mais da automação configurada na ClickUp pra funcionar.
+//
+// Diferenças deliberadas em relação ao original, não são bug:
+// - Sem dedup (processed_<id>_<status> no original): aquele dedup existe só
+//   porque o webhook da ClickUp pode entregar o mesmo evento mais de uma vez.
+//   Aqui não tem webhook nenhum — esta função só roda quando ALGUÉM chama ela
+//   direto (uma vez por mudança de status), então a duplicata que o dedup
+//   evitava não pode acontecer nesse desenho.
+// - "encerrado" sempre grava date_closed, mesmo sem start_date (chamado que
+//   pula "em atendimento" e vai direto pra "encerrado"). O original pulava o
+//   registro de tempo nesse caso porque dependia de start_date pra calcular a
+//   duração pra API de time-tracking da ClickUp — o D1 não tem equivalente
+//   disso (a duração já é só date_closed - start_date, calculada sob demanda
+//   em d1GetMetrics, que já ignora quando start_date falta).
+// - Push embutido na mesma função (não um passo separado) — ainda resolve a
+//   inscrição pelo orderindex da ClickUp (getSolicitanteMaps + sendWebPush, os
+//   dois já existentes), porque é assim que handleSubscribe grava a chave hoje;
+//   isso não muda nesta fase. Falha ao enviar push nunca derruba a mudança de
+//   status (fica num try/catch próprio) — igual ao original, que já mandava a
+//   automação em separado de qualquer jeito.
+// =====================================================================
+async function d1TransitionStatus(env, chamadoId, novoStatus) {
+  if (!VALID_STATUSES.includes(novoStatus)) {
+    throw new Error(`status inválido: ${novoStatus}`);
+  }
+  const chamado = await d1GetChamado(env, chamadoId);
+  if (!chamado) throw new Error('chamado não encontrado no D1');
+
+  const prevStatus     = chamado.status;
+  const saiuDePendente = prevStatus === 'pendente' && novoStatus !== 'pendente';
+  const patch = { status: novoStatus };
+
+  if (novoStatus === 'pendente') {
+    await env.SUBSCRIPTIONS.put(`d1_pending_start_${chamadoId}`, String(Date.now()), { expirationTtl: 2592000 });
+  } else if (saiuDePendente) {
+    const pendingStartStr = await env.SUBSCRIPTIONS.get(`d1_pending_start_${chamadoId}`);
+    if (pendingStartStr && chamado.due_date != null) {
+      patch.dueDate = chamado.due_date + (Date.now() - parseInt(pendingStartStr, 10));
+    }
+    await env.SUBSCRIPTIONS.delete(`d1_pending_start_${chamadoId}`);
+  }
+
+  if (novoStatus === 'em atendimento') {
+    const now = Date.now();
+    patch.startDate = now;
+    const timeEstimate = DEFAULT_TIME_ESTIMATE_MS_BY_PRIORITY[chamado.priority];
+    if (timeEstimate) patch.dueDate = now + timeEstimate;
+  }
+
+  if (novoStatus === 'encerrado') {
+    patch.dateClosed = Date.now();
+  }
+
+  const updated = await d1UpdateChamado(env, chamadoId, patch);
+
+  const label = NOTIFY_STATUSES[novoStatus];
+  if (label) {
+    try {
+      const { nameToIdx } = await getSolicitanteMaps(env);
+      const idx = nameToIdx[chamado.solicitante];
+      if (idx != null) {
+        const subJson = await env.SUBSCRIPTIONS.get(`u_${idx}`);
+        if (subJson) {
+          await sendWebPush(JSON.parse(subJson), JSON.stringify({
+            title: 'Chamados de TI – ISV',
+            body:  `"${chamado.name}" está agora: ${label}`,
+            data:  { task_id: chamadoId, status: novoStatus }
+          }), env);
+        }
+      }
+    } catch (err) {
+      console.error(`d1TransitionStatus: falha ao enviar push pra ${chamadoId}: ${err.message}`);
+    }
+  }
+
+  return updated;
+}
+
+export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus };

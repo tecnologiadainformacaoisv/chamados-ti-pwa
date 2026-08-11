@@ -45,6 +45,24 @@ function freshEnv() {
   return { CHAMADOS_DB: makeD1FromSqlite(db) };
 }
 
+// Mock simples de KV (Map em memória) — só pros testes de d1TransitionStatus (Fase B5),
+// que usa env.SUBSCRIPTIONS pra guardar a pausa de SLA e a inscrição de push.
+function makeMockKV() {
+  const store = new Map();
+  return {
+    get: async k => (store.has(k) ? store.get(k) : null),
+    put: async (k, v) => { store.set(k, v); },
+    delete: async k => store.delete(k),
+  };
+}
+
+const SOLICITANTE_FIELD_ID = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
+const FAKE_SOLICITANTE_OPTIONS = [{ id: 'a27', name: 'Michael Vasconcelos', orderindex: 27 }];
+
+function freshEnvComAutomacao(vapidPrivateJwk) {
+  return { ...freshEnv(), SUBSCRIPTIONS: makeMockKV(), CLICKUP_API_KEY: 'fake', VAPID_PRIVATE_JWK: vapidPrivateJwk };
+}
+
 let passed = 0, failed = 0;
 async function test(name, fn) {
   try { await fn(); passed++; console.log(`  ok  - ${name}`); }
@@ -53,11 +71,34 @@ async function test(name, fn) {
 
 (async () => {
   const workerPath = pathToFileURL(path.join(__dirname, '..', 'push-worker.js')).href;
-  const { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics } = await import(workerPath);
+  const { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, d1TransitionStatus } = await import(workerPath);
 
   const baseChamado = {
     name: 'Notebook não liga', tipo: 0, setor: 1, solicitante: 'Michael Vasconcelos',
     priority: 1, due_date: Date.now() + 3600000,
+  };
+
+  // Par VAPID descartável só pra createVapidJwt (dentro de sendWebPush, chamada por
+  // d1TransitionStatus) não falhar ao assinar — mesma técnica usada nesta sessão pra
+  // gerar o par VAPID real do projeto (crypto.subtle nativo, sem dependência nova).
+  const vapidKeyPair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const vapidPrivateJwk = JSON.stringify(await crypto.subtle.exportKey('jwk', vapidKeyPair.privateKey));
+
+  // Mock de fetch só pro que d1TransitionStatus precisa: getSolicitanteMaps (lista de
+  // campo da ClickUp) e o endpoint de push em si (sendWebPush) — nunca toca rede real.
+  let lastPushCall = null;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.includes('/list/') && u.includes('/field')) {
+      return new Response(JSON.stringify({ fields: [{ id: SOLICITANTE_FIELD_ID, type_config: { options: FAKE_SOLICITANTE_OPTIONS } }] }), { status: 200 });
+    }
+    if (u.startsWith('https://fake-push-endpoint.test/')) {
+      lastPushCall = { url: u, headers: opts.headers, body: opts.body };
+      if (u.endsWith('/falha')) return new Response('endpoint fora do ar', { status: 410 });
+      return new Response('', { status: 201 });
+    }
+    return realFetch(url, opts);
   };
 
   console.log('--- criar / buscar ---');
@@ -214,6 +255,92 @@ async function test(name, fn) {
     await d1CreateChamado(env, { ...baseChamado, status: 'encerrado', assignee_id: 170628721 });
     const m = await d1GetMetrics(env);
     assert.strictEqual(m.tempoMedioPorOperador['170628721'], undefined);
+  });
+
+  console.log('--- automação de SLA embutida (Fase B5) ---');
+  await test('"em atendimento" define start_date e due_date pela prioridade', async () => {
+    const env = freshEnvComAutomacao(vapidPrivateJwk);
+    const created = await d1CreateChamado(env, { ...baseChamado, priority: 2 }); // Alta = 30min padrão
+    const before = Date.now();
+    const updated = await d1TransitionStatus(env, created.id, 'em atendimento');
+    assert.ok(updated.start_date >= before);
+    assert.strictEqual(updated.due_date, updated.start_date + 30 * 60000);
+  });
+
+  await test('"encerrado" define date_closed mesmo sem start_date (pulou "em atendimento")', async () => {
+    const env = freshEnvComAutomacao(vapidPrivateJwk);
+    const created = await d1CreateChamado(env, baseChamado); // status 'aberto', nunca passou por em atendimento
+    const updated = await d1TransitionStatus(env, created.id, 'encerrado');
+    assert.strictEqual(updated.start_date, null);
+    assert.ok(updated.date_closed > 0);
+  });
+
+  await test('"pendente" grava o início da pausa no KV', async () => {
+    const env = freshEnvComAutomacao(vapidPrivateJwk);
+    const created = await d1CreateChamado(env, baseChamado);
+    await d1TransitionStatus(env, created.id, 'pendente');
+    const pending = await env.SUBSCRIPTIONS.get(`d1_pending_start_${created.id}`);
+    assert.ok(pending, 'devia ter gravado o início da pausa');
+  });
+
+  await test('sair de "pendente" adia o due_date pelo tempo pausado e limpa o KV', async () => {
+    const env = freshEnvComAutomacao(vapidPrivateJwk);
+    const created = await d1CreateChamado(env, { ...baseChamado, due_date: 1000000 });
+    // simula que a pausa começou 5min atrás
+    await env.SUBSCRIPTIONS.put(`d1_pending_start_${created.id}`, String(Date.now() - 5 * 60000));
+    await d1UpdateChamado(env, created.id, { status: 'pendente' }); // estado real: já está pendente
+    const updated = await d1TransitionStatus(env, created.id, 'aberto');
+    assert.ok(updated.due_date >= 1000000 + 5 * 60000 - 1000, 'due_date devia ter sido adiado ~5min');
+    const pendingDepois = await env.SUBSCRIPTIONS.get(`d1_pending_start_${created.id}`);
+    assert.strictEqual(pendingDepois, null, 'chave de pausa devia ter sido apagada');
+  });
+
+  await test('status inválido lança erro', async () => {
+    const env = freshEnvComAutomacao(vapidPrivateJwk);
+    const created = await d1CreateChamado(env, baseChamado);
+    await assert.rejects(() => d1TransitionStatus(env, created.id, 'em revisao'));
+  });
+
+  await test('chamado inexistente lança erro', async () => {
+    const env = freshEnvComAutomacao(vapidPrivateJwk);
+    await assert.rejects(() => d1TransitionStatus(env, 'id-que-nao-existe', 'encerrado'));
+  });
+
+  console.log('--- push embutido ---');
+  await test('envia push quando existe inscrição pro solicitante', async () => {
+    const env = freshEnvComAutomacao(vapidPrivateJwk);
+    await env.SUBSCRIPTIONS.put('u_27', JSON.stringify({
+      endpoint: 'https://fake-push-endpoint.test/abc',
+      keys: { p256dh: 'BMgcsTAUEhUr-dau-LaPhTHktmCZ90q4GXFF6CX0p3IvmeB51v68JqZLeuKrO3swUcSXKiNhQ6Ur5I74fm6tp2Q', auth: 'dGVzdC1hdXRoLTE2Yg' },
+    }));
+    lastPushCall = null;
+    const created = await d1CreateChamado(env, baseChamado);
+    await d1TransitionStatus(env, created.id, 'em atendimento'); // tem notificação (NOTIFY_STATUSES)
+    assert.ok(lastPushCall, 'devia ter chamado o endpoint de push');
+    assert.strictEqual(lastPushCall.url, 'https://fake-push-endpoint.test/abc');
+    assert.ok(lastPushCall.headers.Authorization?.startsWith('vapid '), 'devia mandar o header VAPID');
+    // corpo vai criptografado (aes128gcm) — não dá pra ler o payload de volta aqui sem
+    // reimplementar a decriptação; a cifra em si já é código existente, não desta fase.
+  });
+
+  await test('sem inscrição, não tenta enviar push — transição completa normalmente', async () => {
+    const env = freshEnvComAutomacao(vapidPrivateJwk);
+    lastPushCall = null;
+    const created = await d1CreateChamado(env, baseChamado);
+    const updated = await d1TransitionStatus(env, created.id, 'em atendimento');
+    assert.strictEqual(lastPushCall, null);
+    assert.strictEqual(updated.status, 'em atendimento');
+  });
+
+  await test('falha ao enviar push não derruba a transição de status', async () => {
+    const env = freshEnvComAutomacao(vapidPrivateJwk);
+    await env.SUBSCRIPTIONS.put('u_27', JSON.stringify({
+      endpoint: 'https://fake-push-endpoint.test/falha',
+      keys: { p256dh: 'BMgcsTAUEhUr-dau-LaPhTHktmCZ90q4GXFF6CX0p3IvmeB51v68JqZLeuKrO3swUcSXKiNhQ6Ur5I74fm6tp2Q', auth: 'dGVzdC1hdXRoLTE2Yg' },
+    }));
+    const created = await d1CreateChamado(env, baseChamado);
+    const updated = await d1TransitionStatus(env, created.id, 'em atendimento'); // não deve lançar
+    assert.strictEqual(updated.status, 'em atendimento');
   });
 
   console.log(`\n${passed} passaram, ${failed} falharam`);
