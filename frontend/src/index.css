@@ -1,0 +1,154 @@
+@import "tailwindcss";
+@custom-variant dark (&:is(.dark *));
+
+/* ============================================================
+   TOKENS — espelham os mesmos valores reais de css/style.css (app
+   principal) e css/admin.css (painel atual), pra Fase F1 (setup do
+   projeto React) já nascer com a identidade visual certa, não um
+   template genérico do shadcn. Ver CLAUDE.md, roadmap de modernização.
+   ============================================================ */
+:root {
+  --radius: 0.625rem;
+
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.25 0.03 265); /* ~#1e293b */
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.25 0.03 265);
+
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.25 0.03 265);
+
+  --primary: oklch(0.34 0.09 258); /* #1a3a6b */
+  --primary-foreground: oklch(0.98 0 0);
+
+  --secondary: oklch(0.96 0.01 260);
+  --secondary-foreground: oklch(0.34 0.09 258);
+
+  --muted: oklch(0.96 0.01 260);
+  --muted-foreground: oklch(0.66 0.03 258); /* #94a3b8 */
+
+  --accent: oklch(0.79 0.15 75); /* #f59e0b */
+  --accent-foreground: oklch(0.25 0.05 70);
+
+  --destructive: oklch(0.64 0.21 25); /* #ef4444 */
+  --destructive-foreground: oklch(0.98 0 0);
+
+  --success: oklch(0.72 0.19 145); /* #22c55e */
+  --success-foreground: oklch(0.98 0 0);
+
+  --border: oklch(0.92 0.01 260); /* #e2e8f0 */
+  --input: oklch(0.92 0.01 260);
+  --ring: oklch(0.34 0.09 258);
+
+  /* Cores reais de status (confirmadas na config da própria ClickUp — ver
+     STATUS_MAP em app.js/admin.js. Não são um chute visual). */
+  --status-aberto: #87909e;
+  --status-em-atendimento: #5f55ee;
+  --status-pendente: #b660e0;
+  --status-encerrado: #008844;
+
+  /* Sidebar — mesmo gradiente navy do admin.css atual (.sidebar) */
+  --sidebar: oklch(0.22 0.06 258); /* ~#0f2347 */
+  --sidebar-foreground: oklch(0.95 0 0);
+  --sidebar-primary: oklch(0.34 0.09 258);
+  --sidebar-primary-foreground: oklch(0.98 0 0);
+  --sidebar-accent: oklch(0.30 0.07 258);
+  --sidebar-accent-foreground: oklch(0.98 0 0);
+  --sidebar-border: oklch(0.30 0.07 258);
+  --sidebar-ring: oklch(0.6 0.15 75);
+}
+
+.dark {
+  --background: oklch(0.14 0.02 260);
+  --foreground: oklch(0.95 0 0);
+
+  --card: oklch(0.18 0.02 260);
+  --card-foreground: oklch(0.95 0 0);
+
+  --popover: oklch(0.18 0.02 260);
+  --popover-foreground: oklch(0.95 0 0);
+
+  --primary: oklch(0.62 0.1 258);
+  --primary-foreground: oklch(0.14 0.02 260);
+
+  --secondary: oklch(0.24 0.02 260);
+  --secondary-foreground: oklch(0.95 0 0);
+
+  --muted: oklch(0.24 0.02 260);
+  --muted-foreground: oklch(0.66 0.02 260);
+
+  --accent: oklch(0.79 0.15 75);
+  --accent-foreground: oklch(0.2 0.04 70);
+
+  --destructive: oklch(0.7 0.19 25);
+  --destructive-foreground: oklch(0.14 0.02 260);
+
+  --success: oklch(0.75 0.17 145);
+  --success-foreground: oklch(0.14 0.02 260);
+
+  --border: oklch(0.28 0.02 260);
+  --input: oklch(0.28 0.02 260);
+  --ring: oklch(0.62 0.1 258);
+
+  --sidebar: oklch(0.16 0.03 260);
+  --sidebar-foreground: oklch(0.95 0 0);
+  --sidebar-primary: oklch(0.62 0.1 258);
+  --sidebar-primary-foreground: oklch(0.14 0.02 260);
+  --sidebar-accent: oklch(0.24 0.02 260);
+  --sidebar-accent-foreground: oklch(0.95 0 0);
+  --sidebar-border: oklch(0.28 0.02 260);
+  --sidebar-ring: oklch(0.79 0.15 75);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-status-aberto: var(--status-aberto);
+  --color-status-em-atendimento: var(--status-em-atendimento);
+  --color-status-pendente: var(--status-pendente);
+  --color-status-encerrado: var(--status-encerrado);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}

@@ -1,0 +1,39 @@
+import { RefreshCw, LogOut } from "lucide-react"
+import { SidebarTrigger } from "@/components/ui/sidebar"
+import { Button } from "@/components/ui/button"
+import logoIsv from "@/assets/logo-isv.svg"
+
+// Espelha o .app-header de admin.html — mesma marca (logo ISV, "Painel de
+// Admin" / "Chamados de TI") e as mesmas duas ações (atualizar, sair).
+export function AppHeader() {
+  return (
+    <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-primary px-4 text-primary-foreground">
+      <div className="flex items-center gap-3">
+        <SidebarTrigger className="text-primary-foreground hover:bg-white/10 hover:text-primary-foreground" />
+        <img src={logoIsv} alt="Instituto São Vicente" className="h-8 w-8 invert" />
+      </div>
+      <div className="flex flex-col items-center leading-tight">
+        <span className="text-sm font-semibold">Painel de Admin</span>
+        <span className="text-xs text-primary-foreground/70">Chamados de TI</span>
+      </div>
+      <div className="flex items-center gap-1">
+        <Button
+          size="icon"
+          variant="ghost"
+          title="Atualizar"
+          className="text-primary-foreground hover:bg-white/10 hover:text-primary-foreground"
+        >
+          <RefreshCw />
+        </Button>
+        <Button
+          size="icon"
+          variant="ghost"
+          title="Sair"
+          className="text-primary-foreground hover:bg-white/10 hover:text-primary-foreground"
+        >
+          <LogOut />
+        </Button>
+      </div>
+    </header>
+  )
+}
