@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useRegisterSW } from "virtual:pwa-register/react"
 import { LogOut } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
@@ -8,6 +9,7 @@ import { SolicitanteSetup } from "@/components/solicitante-setup"
 import { NovoChamadoForm } from "@/components/novo-chamado-form"
 import { TicketCard } from "@/components/ticket-card"
 import { WaModal } from "@/components/wa-modal"
+import { NotifBanner } from "@/components/notif-banner"
 import { fetchMyTasks, isAuthExpired } from "@/lib/app-api"
 import type { Task } from "@/lib/api"
 import logoIsv from "@/assets/logo-isv.svg"
@@ -16,14 +18,62 @@ import logoIsv from "@/assets/logo-isv.svg"
 // (ver App.tsx), cada um com seu próprio client, igual dois apps de fato separados.
 const queryClient = new QueryClient()
 
+const VALID_TABS = ["novo-chamado", "meus-chamados", "todos-chamados"]
+
+// Porta highlightTask() de app.js — rola até o card e aplica o pulso (.task-highlight,
+// ver index.css) por ~2.5s. Escape hatch de DOM direto igual à versão vanilla; não há
+// como fazer isso via só estado/CSS sem um ref por card.
+function highlightTask(taskId: string | null) {
+  if (!taskId) return
+  setTimeout(() => {
+    const card = document.querySelector(`[data-task-id="${taskId}"]`)
+    if (!card) return
+    card.scrollIntoView({ behavior: "smooth", block: "center" })
+    card.classList.add("task-highlight")
+    setTimeout(() => card.classList.remove("task-highlight"), 2500)
+  }, 350)
+}
+
 // Porta initApp()/renderAll()/switchTab() de app.js — 3 abas (Novo Chamado, Meus
-// Chamados, Histórico), mesmo "smart polling" de 60s. Fora de escopo desta fase (ver
-// relatório da F4): upload de anexo, push notifications, PWA/Service Worker.
+// Chamados, Histórico), mesmo "smart polling" de 60s, mesmo deep-link por hash
+// (#aba:taskId, usado quando se clica numa notificação) e mesmo banner de notificações.
 function SolicitanteShell() {
   const { sessionToken, userName, logout, handleSessionExpired } = useSessionAuth()
   const queryClient = useQueryClient()
   const [tab, setTab] = useState("novo-chamado")
-  const [waTask, setWaTask] = useState<{ task: Task; slaLabel: string } | null>(null)
+  const [waTask, setWaTask] = useState<{ task: Task; slaLabel: string; anexoWarning?: string } | null>(null)
+  const bootedOnce = useRef(false)
+
+  // Deep-link só na entrada: se tiver taskId no hash (clique em notificação com o app
+  // fechado), abre a aba certa e destaca o card; senão sempre cai em "Novo Chamado" —
+  // sem esse "senão", switchTab() gravando a aba no hash faria o login "lembrar" da
+  // última aba visitada, que não é o comportamento da versão vanilla.
+  useEffect(() => {
+    if (bootedOnce.current) return
+    bootedOnce.current = true
+    const [hashTab, hashTaskId] = location.hash.replace("#", "").split(":")
+    if (hashTaskId) {
+      setTab(VALID_TABS.includes(hashTab) ? hashTab : "novo-chamado")
+      highlightTask(hashTaskId)
+    }
+  }, [])
+
+  // Clique em notificação com o app já aberto: o Service Worker manda essa mensagem em
+  // vez de abrir uma nova janela (ver notificationclick em sw.js).
+  useEffect(() => {
+    function onMessage(e: MessageEvent) {
+      if (e.data?.type === "OPEN_TASK") {
+        setTab(VALID_TABS.includes(e.data.tab) ? e.data.tab : "novo-chamado")
+        highlightTask(e.data.task_id ?? null)
+      }
+    }
+    navigator.serviceWorker?.addEventListener("message", onMessage)
+    return () => navigator.serviceWorker?.removeEventListener("message", onMessage)
+  }, [])
+
+  useEffect(() => {
+    location.hash = tab
+  }, [tab])
 
   const tasksQuery = useQuery({
     queryKey: ["my-tasks"],
@@ -61,6 +111,7 @@ function SolicitanteShell() {
       </header>
 
       <main className="mx-auto max-w-2xl p-4">
+        <NotifBanner sessionToken={sessionToken} />
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="w-full">
             <TabsTrigger value="novo-chamado" className="flex-1">Novo Chamado</TabsTrigger>
@@ -74,10 +125,10 @@ function SolicitanteShell() {
 
           <TabsContent value="novo-chamado" className="mt-4">
             <NovoChamadoForm
-              onCreated={(task, slaLabel) => {
+              onCreated={(task, slaLabel, anexoWarning) => {
                 queryClient.invalidateQueries({ queryKey: ["my-tasks"] })
                 setTab("meus-chamados")
-                setWaTask({ task, slaLabel })
+                setWaTask({ task, slaLabel, anexoWarning })
               }}
             />
           </TabsContent>
@@ -100,7 +151,7 @@ function SolicitanteShell() {
         </Tabs>
       </main>
 
-      <WaModal task={waTask?.task ?? null} slaLabel={waTask?.slaLabel ?? ""} onClose={() => setWaTask(null)} />
+      <WaModal task={waTask?.task ?? null} slaLabel={waTask?.slaLabel ?? ""} anexoWarning={waTask?.anexoWarning} onClose={() => setWaTask(null)} />
     </div>
   )
 }
@@ -112,6 +163,11 @@ function SolicitanteBoot() {
 }
 
 export function SolicitanteApp() {
+  // Registra o Service Worker só aqui — admin.html/AdminApp nunca é PWA (ver CLAUDE.md,
+  // "Painel de admin"). autoUpdate (vite.config.ts) já resolve o skipWaiting()/
+  // clients.claim() da versão vanilla sem precisar de prompt de "nova versão disponível".
+  useRegisterSW({ immediate: true })
+
   return (
     <QueryClientProvider client={queryClient}>
       <SessionAuthProvider>

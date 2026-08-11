@@ -100,6 +100,15 @@ export const TIPOS_FULL: Record<number, string> = {
   7: "Plataformas (Google Drive, OMIE, Domínio e ZAPPY)",
 }
 
+// Push notifications (F4.5) — mesmo valor hardcoded de app.js (identificador público,
+// não dá acesso a nada por si só — ver "Notificações push" no CLAUDE.md).
+export const VAPID_PUBLIC_KEY = "BDvOHU44JTbhObtRGO-uFU_8wl-9oTlOFkwnf0pXjIqpnv3hhbz0VSW-OD7itFQVBNSEA7xGEQntn6e7QyEBNMY"
+
+// Anexo (F4.5) — mesmo limite de app.js, validado no cliente antes do upload.
+export const MAX_ANEXO_MB = 10
+export const MAX_ANEXO_BYTES = MAX_ANEXO_MB * 1024 * 1024
+export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]
+
 export const OPERADOR_WHATSAPP: Record<string, string> = {
   "170628721": "5585989304648", // Everson
   "200498355": "5585999419866", // Henrique

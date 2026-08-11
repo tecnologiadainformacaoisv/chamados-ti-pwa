@@ -4,6 +4,7 @@ import { ADMIN_BASE, SOLICITANTE_FIELD_ID } from "@/lib/constants"
 // direto (ver handleAdminListTasks em push-worker.js). Só os campos que o painel usa.
 export type CustomField = { id: string; value: unknown }
 export type Assignee = { id: number; username?: string | null }
+export type Attachment = { url: string; title?: string | null; name?: string | null; extension?: string | null }
 export type Task = {
   id: string
   name: string
@@ -14,9 +15,12 @@ export type Task = {
   assignees?: Assignee[]
   due_date?: string | number | null
   date_created?: string | number | null
+  date_updated?: string | number | null
   date_closed?: string | number | null
   start_date?: string | number | null
   custom_fields?: CustomField[]
+  // Só presente no GET de uma task individual (GET /tasks/:id) — a listagem não devolve.
+  attachments?: Attachment[]
 }
 
 export type Filtros = {

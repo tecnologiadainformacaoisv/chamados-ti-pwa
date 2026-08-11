@@ -1,11 +1,29 @@
-import { MessageCircle } from "lucide-react"
-import { getCF, fmtDate, type Task } from "@/lib/api"
+import { useState } from "react"
+import { useQuery } from "@tanstack/react-query"
+import { MessageCircle, Paperclip } from "lucide-react"
+import { getCF, fmtDate, type Attachment, type Task } from "@/lib/api"
 import { isOverdue, overdueFor, slaProgressInfo, timeAgo, timeUntil, waLinkForTask } from "@/lib/ticket-helpers"
 import { OPERADORES, PRIORITY, SETORES, SETOR_FIELD_ID, SOLUCAO_FIELD_ID, STATUS_MAP, TIPOS, TIPO_FIELD_ID, optionName, type StatusKey } from "@/lib/constants"
+import { useSessionAuth } from "@/hooks/use-session-auth"
+import { fetchTaskDetail } from "@/lib/app-api"
+import { AnexoModal } from "@/components/anexo-modal"
 
 // Porta renderDetailCard() de app.js — mesmo cartão: barra de progresso do SLA, banner de
 // atraso, cor de fundo por status, solução em destaque quando encerrado.
 export function TicketCard({ task }: { task: Task }) {
+  const { sessionToken } = useSessionAuth()
+  const [anexoAberto, setAnexoAberto] = useState<Attachment | null>(null)
+
+  // Porta loadAttachments()/attachmentsCache de app.js — a listagem de /my-tasks não
+  // devolve anexo, só o GET de uma task individual. Keyed por date_updated: o próprio
+  // TanStack Query já vira o cache "por versão da task" que antes era um Map manual.
+  const anexosQuery = useQuery({
+    queryKey: ["task-attachments", task.id, task.date_updated],
+    queryFn: () => fetchTaskDetail(sessionToken, task.id).then((t) => t.attachments ?? []),
+    staleTime: Infinity,
+  })
+  const anexos = anexosQuery.data ?? []
+
   const statusKey = (task.status?.status as StatusKey) ?? "aberto"
   const info = STATUS_MAP[statusKey] ?? STATUS_MAP.aberto
   const prioId = task.priority?.priority
@@ -28,6 +46,7 @@ export function TicketCard({ task }: { task: Task }) {
 
   return (
     <div
+      data-task-id={task.id}
       className={`relative overflow-hidden rounded-lg border p-4 shadow-sm ${overdue ? "border-destructive/50" : "border-border"}`}
       style={{ background: statusBg(statusKey) }}
     >
@@ -63,6 +82,21 @@ export function TicketCard({ task }: { task: Task }) {
         {dueFuture && <span>Prazo {dueFuture}</span>}
       </div>
 
+      {anexos.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {anexos.map((a, i) => (
+            <button
+              key={`${a.url}-${i}`}
+              type="button"
+              onClick={() => setAnexoAberto(a)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
+            >
+              <Paperclip className="h-3 w-3" /> {a.title || a.name || "arquivo"}
+            </button>
+          ))}
+        </div>
+      )}
+
       {solucao && (
         <div className="mt-3 rounded-md border border-[#22c55e]/30 bg-[#22c55e]/10 p-2.5 text-sm">
           <p className="mb-0.5 text-xs font-semibold text-[#166534]">Solução aplicada</p>
@@ -78,6 +112,8 @@ export function TicketCard({ task }: { task: Task }) {
       >
         <MessageCircle className="h-4 w-4" /> Falar no WhatsApp
       </a>
+
+      <AnexoModal anexo={anexoAberto} onClose={() => setAnexoAberto(null)} />
     </div>
   )
 }

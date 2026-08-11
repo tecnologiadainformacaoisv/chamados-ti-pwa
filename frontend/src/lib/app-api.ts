@@ -89,6 +89,25 @@ export async function createTask(sessionToken: string, payload: CreateTaskPayloa
   return apiRequest<Task>(sessionToken, "POST", "/tasks", payload)
 }
 
+// Porta uploadAttachment() de app.js — multipart, sem Content-Type manual (o browser
+// define o boundary sozinho). Chamado depois de createTask, nunca antes (precisa do task.id).
+export async function uploadAttachment(sessionToken: string, taskId: string, file: File): Promise<void> {
+  const formData = new FormData()
+  formData.append("attachment", file, file.name)
+  const res = await fetch(`${API_BASE}/tasks/${taskId}/attachment`, {
+    method: "POST",
+    headers: { "X-App-Secret": APP_SHARED_SECRET, "X-Session-Token": sessionToken },
+    body: formData,
+  })
+  if (res.status === 401) throw new AuthError("Sessão expirada, faça login novamente.", 401)
+  if (!res.ok) throw new AuthError(`Erro HTTP ${res.status}`, res.status)
+}
+
+// GET /tasks/:id — só essa rota devolve `attachments` (a listagem de /my-tasks não).
+export async function fetchTaskDetail(sessionToken: string, taskId: string): Promise<Task> {
+  return apiRequest<Task>(sessionToken, "GET", `/tasks/${taskId}`)
+}
+
 // Lista de solicitantes — mesmo endpoint público (X-App-Secret) que admin.js usa pro
 // filtro, aqui usado pro select de nome na tela de login/cadastro.
 export async function fetchSolicitanteNomes(): Promise<string[]> {
