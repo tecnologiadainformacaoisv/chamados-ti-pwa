@@ -3,12 +3,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar"
 import { AppSidebar, type Secao } from "@/components/app-sidebar"
 import { AppHeader } from "@/components/app-header"
-import { Card, CardContent, CardHeader } from "@/components/ui/card"
-import { Skeleton } from "@/components/ui/skeleton"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { AdminAuthProvider, useAdminAuth } from "@/hooks/use-admin-auth"
 import { GateScreen } from "@/components/gate-screen"
 import { GestaoView } from "@/components/gestao-view"
+import { DashboardView } from "@/components/dashboard-view"
 import { isSessionError } from "@/lib/api"
 
 // Nunca insiste tentando de novo (com backoff) quando o segredo foi revogado — isso só
@@ -49,30 +48,7 @@ function AdminShell() {
               <p className="text-sm text-muted-foreground">{meta.subtitulo}</p>
             </div>
 
-            {secaoAtiva === "gestao" ? (
-              <GestaoView />
-            ) : (
-              <>
-                {/* Dashboard chega na Fase F3 — por ora, mesmo placeholder da Fase F1 */}
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  {["Aberto", "Em atendimento", "Pendente", "Encerrado"].map((status) => (
-                    <Card key={status}>
-                      <CardHeader className="pb-2">
-                        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{status}</span>
-                      </CardHeader>
-                      <CardContent>
-                        <Skeleton className="h-7 w-14" />
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-                <Card>
-                  <CardContent className="flex flex-col items-center justify-center gap-2 py-16 text-center text-muted-foreground">
-                    <p className="text-sm">Dashboard chega na Fase F3.</p>
-                  </CardContent>
-                </Card>
-              </>
-            )}
+            {secaoAtiva === "gestao" ? <GestaoView /> : <DashboardView />}
           </main>
         </SidebarInset>
       </SidebarProvider>

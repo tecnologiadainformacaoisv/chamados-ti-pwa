@@ -130,3 +130,32 @@ export function fmtDate(value: string | number | null | undefined): string {
     d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
   )
 }
+
+// Mesma formatação de fmtMs() em admin.js — min/h/dia, o mais grosso que couber.
+export function fmtMs(ms: number | null | undefined): string | null {
+  if (!ms || ms <= 0) return null
+  const m = Math.round(ms / 60000)
+  if (m < 60) return `${m}min`
+  const h = Math.floor(m / 60)
+  const rm = m % 60
+  if (h < 24) return rm > 0 ? `${h}h ${rm}min` : `${h}h`
+  const d = Math.floor(h / 24)
+  const rh = h % 24
+  return rh > 0 ? `${d}d ${rh}h` : `${d}d`
+}
+
+// Mesmo shape que /admin/metrics já devolve — ver handleAdminMetrics em push-worker.js.
+export type OperadorTempo = { nome: string | null; mediaMs: number; totalChamados: number }
+export type Metrics = {
+  total: number
+  truncated: boolean
+  porStatus: Record<string, number>
+  porTipo: Record<string, number>
+  porSetor: Record<string, number>
+  sla: { dentroDoSla: number; atrasado: number; dentroDoSlaPercent: number | null; atrasadoPercent: number | null }
+  tempoMedioPorOperador: Record<string, OperadorTempo>
+}
+
+export async function fetchMetrics(secret: string): Promise<Metrics> {
+  return adminRequest(secret, "/metrics")
+}
