@@ -1,11 +1,16 @@
 import { RefreshCw, LogOut } from "lucide-react"
+import { useQueryClient } from "@tanstack/react-query"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button"
+import { useAdminAuth } from "@/hooks/use-admin-auth"
 import logoIsv from "@/assets/logo-isv.svg"
 
 // Espelha o .app-header de admin.html — mesma marca (logo ISV, "Painel de
 // Admin" / "Chamados de TI") e as mesmas duas ações (atualizar, sair).
 export function AppHeader() {
+  const { logout } = useAdminAuth()
+  const queryClient = useQueryClient()
+
   return (
     <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-primary px-4 text-primary-foreground">
       <div className="flex items-center gap-3">
@@ -22,6 +27,7 @@ export function AppHeader() {
           variant="ghost"
           title="Atualizar"
           className="text-primary-foreground hover:bg-white/10 hover:text-primary-foreground"
+          onClick={() => queryClient.invalidateQueries()}
         >
           <RefreshCw />
         </Button>
@@ -30,6 +36,9 @@ export function AppHeader() {
           variant="ghost"
           title="Sair"
           className="text-primary-foreground hover:bg-white/10 hover:text-primary-foreground"
+          onClick={() => {
+            if (confirm("Sair do painel?")) logout()
+          }}
         >
           <LogOut />
         </Button>
