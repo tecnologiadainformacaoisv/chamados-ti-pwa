@@ -128,6 +128,7 @@ export default {
       if (adminUpdateMatch) return handleAdminUpdateTask(request, env, adminUpdateMatch[1]);
       if (pathname === '/admin/migrate-d1') return handleAdminMigrateD1(request, env);
       if (pathname === '/admin/migrate-schema-nullable-tipo-setor') return handleAdminMigrateSchemaNullableTipoSetor(request, env);
+      if (pathname === '/admin/migrate-schema-chamado-assignees') return handleAdminMigrateSchemaChamadoAssignees(request, env);
     }
 
     if (request.method === 'GET') {
@@ -760,6 +761,12 @@ async function handleAdminUpdateTask(request, env, taskId) {
       if (updated.solucao !== undefined) d1Patch.solucao = body.solucao;
       if (updated.assigneeId !== undefined) d1Patch.assigneeId = updated.assigneeId;
       await d1UpdateChamado(env, taskId, d1Patch);
+      // Sincroniza a tabela de junção também — este endpoint sempre colapsa pra 0 ou 1
+      // operador (o diff add/rem contra a ClickUp já remove qualquer outro que estivesse
+      // atribuído, ver acima), então é seguro substituir por completo aqui.
+      if (updated.assigneeId !== undefined) {
+        await d1SetAssignees(env, taskId, updated.assigneeId != null ? [updated.assigneeId] : []);
+      }
     } catch (err) {
       console.warn('espelho D1 falhou na atualização (ClickUp já foi atualizada normalmente):', err.message);
     }
@@ -1387,11 +1394,28 @@ function mapClickUpTaskToD1(task, idxToName) {
     email:        cfValue(task, EMAIL_FIELD_ID),
     solucao:      cfValue(task, SOLUCAO_FIELD_ID),
     assignee_id:  task.assignees?.[0]?.id ?? null,
+    // Suporte a múltiplos operadores (B7 parte 2, fase 1) — array completo, não só o
+    // primeiro. `assignee_id` acima continua existindo à parte (coluna já em uso por
+    // GET /api/my-tasks) — este campo alimenta a tabela chamado_assignees.
+    assignee_ids: (task.assignees || []).map(a => a.id),
     due_date:     task.due_date    != null ? Number(task.due_date)    : null,
     date_created: task.date_created != null ? Number(task.date_created) : Date.now(),
     date_closed:  task.date_closed != null ? Number(task.date_closed)  : null,
     start_date:   task.start_date  != null ? Number(task.start_date)   : null,
   };
+}
+
+// Suporte a múltiplos operadores (B7 parte 2, fase 1, 2026-08-12) — substitui por
+// completo quem está atribuído a um chamado na tabela de junção. DELETE+INSERT em vez
+// de tentar calcular um diff (mesmo espírito simples do resto da camada D1 — não é
+// hot path). `assigneeIds` vazio/undefined só limpa (chamado sem ninguém atribuído).
+async function d1SetAssignees(env, chamadoId, assigneeIds) {
+  await env.CHAMADOS_DB.prepare('DELETE FROM chamado_assignees WHERE chamado_id = ?').bind(chamadoId).run();
+  for (const id of (assigneeIds || [])) {
+    await env.CHAMADOS_DB.prepare(
+      'INSERT OR IGNORE INTO chamado_assignees (chamado_id, assignee_id) VALUES (?, ?)'
+    ).bind(chamadoId, id).run();
+  }
 }
 
 async function d1MigrateChamado(env, data) {
@@ -1406,6 +1430,13 @@ async function d1MigrateChamado(env, data) {
     data.solicitante, data.email, data.solucao, data.assignee_id, data.due_date, data.date_created,
     data.date_closed, data.start_date, now, now
   ).run();
+  // Sempre sincroniza os operadores, mesmo quando o INSERT acima foi ignorado (chamado
+  // já existia) — é assim que rodar a migração de novo também BACKFILLA o 2º+ operador
+  // dos chamados que já estavam no D1 antes desta tabela existir (ela só guardava o
+  // primeiro até aqui).
+  if (data.assignee_ids !== undefined) {
+    await d1SetAssignees(env, data.id, data.assignee_ids);
+  }
   return { inserted: (result.meta?.changes ?? 0) > 0 };
 }
 
@@ -1510,6 +1541,34 @@ async function handleAdminMigrateSchemaNullableTipoSetor(request, env) {
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_chamados_date_created ON chamados (date_created)').run();
 
     return jsonRes({ ok: true, linhasCopiadas: after?.n ?? null });
+  } catch (err) {
+    return jsonRes({ error: `migração de schema falhou: ${err.message}` }, 500);
+  }
+}
+
+// =====================================================================
+// POST /admin/migrate-schema-chamado-assignees — migração de schema ÚNICA (B7 parte 2,
+// fase 1 — 2026-08-12), cria a tabela chamado_assignees (suporte a múltiplos
+// operadores). Bem mais simples que a migração anterior: é tabela NOVA, não precisa
+// recriar nada existente — só CREATE TABLE/INDEX IF NOT EXISTS, idempotente de
+// verdade (rodar de novo não faz nada, não só "não quebra nada").
+// =====================================================================
+async function handleAdminMigrateSchemaChamadoAssignees(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  try {
+    // Sem FOREIGN KEY de propósito — ver comentário em d1/schema.sql (foreign_keys
+    // ligado por padrão bloquearia qualquer DROP TABLE chamados futuro).
+    await env.CHAMADOS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS chamado_assignees (
+        chamado_id  TEXT NOT NULL,
+        assignee_id INTEGER NOT NULL,
+        PRIMARY KEY (chamado_id, assignee_id)
+      )
+    `).run();
+    await env.CHAMADOS_DB.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_chamado_assignees_assignee ON chamado_assignees (assignee_id)'
+    ).run();
+    return jsonRes({ ok: true });
   } catch (err) {
     return jsonRes({ error: `migração de schema falhou: ${err.message}` }, 500);
   }
@@ -1648,4 +1707,4 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
   return updated;
 }
 
-export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus };
+export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees };

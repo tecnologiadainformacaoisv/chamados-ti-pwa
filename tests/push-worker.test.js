@@ -907,6 +907,87 @@ async function test(name, fn) {
     assert.ok(aindaLa, 'segunda rodada da migração de schema não deveria ter perdido nenhuma linha');
   });
 
+  console.log('--- suporte a múltiplos operadores (B7 parte 2, fase 1 — 2026-08-12) ---');
+  async function assigneesDoChamado(id) {
+    const { results } = await env.CHAMADOS_DB.prepare(
+      'SELECT assignee_id FROM chamado_assignees WHERE chamado_id = ? ORDER BY assignee_id'
+    ).bind(id).all();
+    return results.map(r => r.assignee_id);
+  }
+
+  await test('sem X-Admin-Secret dá 403 (migração de schema da tabela nova)', async () => {
+    const res = await worker.fetch(req('POST', '/admin/migrate-schema-chamado-assignees', { body: '{}' }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('cria a tabela chamado_assignees, idempotente rodando de novo', async () => {
+    const res = await worker.fetch(req('POST', '/admin/migrate-schema-chamado-assignees', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+    }), env);
+    assert.strictEqual(res.status, 200);
+    const res2 = await worker.fetch(req('POST', '/admin/migrate-schema-chamado-assignees', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+    }), env);
+    assert.strictEqual(res2.status, 200, 'rodar de novo não deveria falhar (CREATE ... IF NOT EXISTS)');
+  });
+
+  await test('migração de um chamado com 2+ operadores grava os dois na tabela de junção', async () => {
+    migrationTasksOverride = [{
+      id: 'multi-op-1', name: 'Chamado com dois operadores',
+      status: { status: 'aberto' }, priority: { priority: 'normal' },
+      assignees: [{ id: 170628721, username: 'Everson' }, { id: 200498355, username: 'Henrique' }],
+      custom_fields: [
+        { id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } },
+        { id: TIPO_FIELD_ID, value: 0 },
+        { id: SETOR_FIELD_ID, value: 0 },
+      ],
+    }];
+    await worker.fetch(req('POST', '/admin/migrate-d1', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
+    }), env);
+
+    const row = await d1GetChamado(env, 'multi-op-1');
+    assert.strictEqual(row.assignee_id, 170628721, 'coluna assignee_id continua guardando só o 1º (compat com /api/my-tasks)');
+    assert.deepStrictEqual(await assigneesDoChamado('multi-op-1'), [170628721, 200498355], 'os DOIS operadores devem estar na tabela de junção');
+  });
+
+  await test('rodar a migração de novo também sincroniza operador de chamado que já existia (backfill)', async () => {
+    // Simula o cenário real de produção: chamado já estava no D1 de antes desta tabela
+    // existir (só com assignee_id, sem nada em chamado_assignees ainda).
+    await worker.fetch(req('POST', '/admin/migrate-schema-chamado-assignees', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    await env.CHAMADOS_DB.prepare('DELETE FROM chamado_assignees WHERE chamado_id = ?').bind('multi-op-1').run();
+    assert.deepStrictEqual(await assigneesDoChamado('multi-op-1'), [], 'pré-condição: tabela de junção limpa pra esse chamado');
+
+    const res = await worker.fetch(req('POST', '/admin/migrate-d1', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
+    }), env);
+    const data = await res.json();
+    assert.strictEqual(data.skipped, 1, 'a linha principal já existia (INSERT OR IGNORE) — só os operadores são re-sincronizados');
+    assert.deepStrictEqual(await assigneesDoChamado('multi-op-1'), [170628721, 200498355], 'rodar a migração de novo backfilla os operadores mesmo pra chamado que já estava no D1');
+  });
+
+  await test('atualização admin com operador único substitui a tabela de junção por completo', async () => {
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      if (u.endsWith('/task/multi-op-1') && (!opts?.method || opts.method === 'GET')) {
+        return new Response(JSON.stringify({ id: 'multi-op-1', assignees: [{ id: 170628721 }, { id: 200498355 }] }), { status: 200 });
+      }
+      if (u.endsWith('/task/multi-op-1') && opts.method === 'PUT') {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      return previousFetch(url, opts);
+    };
+    try {
+      const res = await worker.fetch(req('POST', '/admin/tasks/multi-op-1', {
+        headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ assigneeId: 170628721 }),
+      }), env);
+      assert.strictEqual(res.status, 200);
+      assert.deepStrictEqual(await assigneesDoChamado('multi-op-1'), [170628721], 'painel de admin sempre colapsa pra 1 operador — junção deve refletir isso, sem sobrar o Henrique');
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+
   console.log(`\n${passed} passaram, ${failed} falharam`);
   process.exit(failed > 0 ? 1 : 0);
 })();

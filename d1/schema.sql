@@ -42,3 +42,22 @@ CREATE INDEX IF NOT EXISTS idx_chamados_tipo        ON chamados (tipo);
 CREATE INDEX IF NOT EXISTS idx_chamados_assignee    ON chamados (assignee_id);
 CREATE INDEX IF NOT EXISTS idx_chamados_solicitante ON chamados (solicitante);
 CREATE INDEX IF NOT EXISTS idx_chamados_date_created ON chamados (date_created);
+
+-- Suporte a múltiplos operadores por chamado (B7 parte 2, fase 1 — 2026-08-12).
+-- A coluna chamados.assignee_id continua existindo e sendo mantida (primeiro
+-- operador, usada hoje por GET /api/my-tasks via d1RowToTaskShape) — esta tabela é
+-- a fonte completa, N-pra-N, igual assignees[] da ClickUp. Só ADIÇÃO: nenhuma rota
+-- lê daqui ainda (isso é a fase 2, quando GET /admin/tasks e GET /admin/metrics
+-- cortarem pro D1 — hoje continuam lendo da ClickUp de propósito).
+-- Sem FOREIGN KEY de propósito (chamado_id "se relaciona" com chamados.id só por
+-- convenção, sem constraint de verdade) — node:sqlite e possivelmente o D1 real têm
+-- `foreign_keys` ligado por padrão, e isso bloquearia qualquer migração futura que
+-- precise recriar a tabela `chamados` (ver POST /admin/migrate-schema-nullable-tipo-
+-- setor, que já faz exatamente isso). Sem cascade/delete de chamado no app hoje, então
+-- não há necessidade real de enforcement aqui.
+CREATE TABLE IF NOT EXISTS chamado_assignees (
+  chamado_id  TEXT NOT NULL,
+  assignee_id INTEGER NOT NULL,
+  PRIMARY KEY (chamado_id, assignee_id)
+);
+CREATE INDEX IF NOT EXISTS idx_chamado_assignees_assignee ON chamado_assignees (assignee_id);
