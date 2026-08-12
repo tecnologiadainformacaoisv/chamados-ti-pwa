@@ -1176,8 +1176,6 @@ const PRIORITY_NUM_TO_NAME = { 1: 'urgent', 2: 'high', 3: 'normal' };
 // de sempre e o frontend (React) não precisar mudar nada. Deliberadamente NÃO inclui:
 // - `attachments`: D1 não guarda isso (upload de anexo continua 100% ClickUp, ver B4);
 //   GET /tasks/:id continua lendo da ClickUp só por causa disso.
-// - custom_field de SOLICITANTE: quem chama esta função já sabe de quem é a lista
-//   (é o próprio filtro), não precisa reconstruir esse campo pra nada.
 // - `username` em assignees: o frontend já resolve id->nome sozinho via OPERADORES
 //   (mesmo comentário de handleAdminMetrics logo abaixo).
 //
@@ -1185,6 +1183,19 @@ const PRIORITY_NUM_TO_NAME = { 1: 'urgent', 2: 'high', 3: 'normal' };
 // quando quem chamou d1ListChamados pediu `withAssignees`) quando disponível — é o que
 // preserva o aviso de "múltiplos operadores" no painel de admin. Sem isso, cai pro
 // `assignee_id` de sempre (rotas que não pedem o array, ex. GET /api/my-tasks).
+//
+// 🛡️ Achado real de produção (2026-08-12, mesmo dia): `solicitante` sai como campo
+// próprio (nome já resolvido, D1 nunca guarda orderindex), NÃO como entrada em
+// `custom_fields` — antes desta correção, o comentário aqui dizia "quem chama esta
+// função já sabe de quem é a lista, não precisa reconstruir esse campo" — verdade
+// enquanto só `GET /api/my-tasks` usava esta função (uma lista por pessoa só). Deixou
+// de ser verdade assim que `GET /admin/tasks` também passou a usar (fase 2, mesmo dia)
+// — ali cada linha é de uma pessoa DIFERENTE, e o campo nunca foi adicionado. Resultado:
+// `custom_fields` nunca tinha entrada pra `SOLICITANTE_FIELD_ID`, o frontend fazia
+// `Number(getCF(task, SOLICITANTE_FIELD_ID))` → `Number(null)` → `0` → mostrava quem
+// quer que tivesse `orderindex 0` como solicitante de TODO chamado no Kanban/Tabela do
+// admin — não um "—" gracioso, um nome errado. Corrigido expondo `solicitante` direto
+// (string), sem depender de orderindex/custom_fields pra esse campo específico.
 function d1RowToTaskShape(row) {
   const assigneeIds = row.assignee_ids ?? (row.assignee_id != null ? [row.assignee_id] : []);
   return {
@@ -1195,6 +1206,7 @@ function d1RowToTaskShape(row) {
     status: { status: row.status },
     priority: { priority: PRIORITY_NUM_TO_NAME[row.priority] || 'normal' },
     assignees: assigneeIds.map(id => ({ id })),
+    solicitante: row.solicitante || null,
     due_date: row.due_date != null ? String(row.due_date) : null,
     date_created: String(row.date_created),
     date_updated: String(row.updated_at),

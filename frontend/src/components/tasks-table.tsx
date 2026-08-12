@@ -8,7 +8,6 @@ import {
   STATUS_ORDER,
   TIPOS,
   TIPO_FIELD_ID,
-  SOLICITANTE_FIELD_ID,
   OPERADORES,
   PRIORITY_MAP,
   optionName,
@@ -30,11 +29,9 @@ function loadCollapsed(): Record<string, boolean> {
 // com expandir/recolher (lembrado entre sessões), mesmo padrão visual da ClickUp.
 export function TasksTable({
   tasks,
-  solicitanteIdxToName,
   onOpenTask,
 }: {
   tasks: Task[]
-  solicitanteIdxToName: Record<number, string>
   onOpenTask: (task: Task) => void
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed)
@@ -109,7 +106,7 @@ export function TasksTable({
                   ) : (
                     <>
                       {list.slice(0, GROUP_TABLE_LIMIT).map((task) => (
-                        <TaskRow key={task.id} task={task} solicitanteIdxToName={solicitanteIdxToName} onOpen={() => onOpenTask(task)} />
+                        <TaskRow key={task.id} task={task} onOpen={() => onOpenTask(task)} />
                       ))}
                       {list.length > GROUP_TABLE_LIMIT && (
                         <tr>
@@ -129,12 +126,11 @@ export function TasksTable({
   )
 }
 
-function TaskRow({ task, solicitanteIdxToName, onOpen }: { task: Task; solicitanteIdxToName: Record<number, string>; onOpen: () => void }) {
+function TaskRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
   const setorNome = optionName(SETORES, Number(getCF(task, SETOR_FIELD_ID)))
   const tipoIdx = Number(getCF(task, TIPO_FIELD_ID))
   const tipo = TIPOS.find((t) => t.orderindex === tipoIdx)
-  const solIdx = Number(getCF(task, SOLICITANTE_FIELD_ID))
-  const solNome = solicitanteIdxToName[solIdx] ?? "—"
+  const solNome = task.solicitante || "—"
   const operadores = (task.assignees ?? []).map((a) => a.username || OPERADORES[String(a.id)] || `#${a.id}`).join(", ") || "—"
   const prioridade = task.priority?.priority ? PRIORITY_MAP[task.priority.priority] : null
   const atrasado = isAtrasado(task)

@@ -13,6 +13,11 @@ export type Task = {
   status: { status: string }
   priority?: { priority: string } | null
   assignees?: Assignee[]
+  // Nome já resolvido (não orderindex) — só presente quando a task vem do D1 (achado de
+  // produção 2026-08-12: GET /admin/tasks nunca devolvia isso via custom_fields, e
+  // `Number(getCF(task, SOLICITANTE_FIELD_ID))` virava 0, mostrando o solicitante errado
+  // no Kanban/Tabela do admin). Ler este campo direto, não mais via getCF/idxToName.
+  solicitante?: string | null
   due_date?: string | number | null
   date_created?: string | number | null
   date_updated?: string | number | null

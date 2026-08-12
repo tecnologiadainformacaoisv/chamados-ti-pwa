@@ -7,7 +7,6 @@ import {
   STATUS_ORDER,
   TIPOS,
   TIPO_FIELD_ID,
-  SOLICITANTE_FIELD_ID,
   OPERADORES,
   PRIORITY_MAP,
   optionName,
@@ -21,12 +20,10 @@ const KANBAN_CARD_LIMIT = 100 // mesmo teto por coluna que admin.js já usa
 // onDropStatus) — um drag de verdade não dispara 'click', então os dois convivem.
 export function KanbanBoard({
   tasks,
-  solicitanteIdxToName,
   onOpenTask,
   onDropStatus,
 }: {
   tasks: Task[]
-  solicitanteIdxToName: Record<number, string>
   onOpenTask: (task: Task) => void
   onDropStatus: (taskId: string, status: string) => void
 }) {
@@ -73,7 +70,6 @@ export function KanbanBoard({
                 <KanbanCard
                   key={task.id}
                   task={task}
-                  solicitanteIdxToName={solicitanteIdxToName}
                   isDragging={draggingId === task.id}
                   onDragStart={(e) => {
                     setDraggingId(task.id)
@@ -99,14 +95,12 @@ export function KanbanBoard({
 
 function KanbanCard({
   task,
-  solicitanteIdxToName,
   isDragging,
   onDragStart,
   onDragEnd,
   onClick,
 }: {
   task: Task
-  solicitanteIdxToName: Record<number, string>
   isDragging: boolean
   onDragStart: (e: React.DragEvent) => void
   onDragEnd: () => void
@@ -115,8 +109,7 @@ function KanbanCard({
   const setorNome = optionName(SETORES, Number(getCF(task, SETOR_FIELD_ID)))
   const tipoIdx = Number(getCF(task, TIPO_FIELD_ID))
   const tipo = TIPOS.find((t) => t.orderindex === tipoIdx)
-  const solIdx = Number(getCF(task, SOLICITANTE_FIELD_ID))
-  const solNome = solicitanteIdxToName[solIdx] ?? "—"
+  const solNome = task.solicitante || "—"
   const operadores = (task.assignees ?? []).map((a) => a.username || OPERADORES[String(a.id)] || `#${a.id}`).join(", ") || "—"
   const prioridade = task.priority?.priority ? PRIORITY_MAP[task.priority.priority] : null
   const atrasado = isAtrasado(task)

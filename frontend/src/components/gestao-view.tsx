@@ -128,12 +128,11 @@ export function GestaoView() {
       ) : viewMode === "quadro" ? (
         <KanbanBoard
           tasks={lastVisible}
-          solicitanteIdxToName={solicitantesQuery.data?.idxToName ?? {}}
           onOpenTask={setSelectedTask}
           onDropStatus={(taskId, status) => dropMutation.mutate({ taskId, status })}
         />
       ) : (
-        <TasksTable tasks={lastVisible} solicitanteIdxToName={solicitantesQuery.data?.idxToName ?? {}} onOpenTask={setSelectedTask} />
+        <TasksTable tasks={lastVisible} onOpenTask={setSelectedTask} />
       )}
 
       <TaskModal

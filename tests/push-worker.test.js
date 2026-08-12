@@ -433,6 +433,26 @@ async function test(name, fn) {
     assert.strictEqual(tasks.length, 2);
     assert.strictEqual(truncated, false, 'D1 não pagina como a ClickUp — nunca deveria truncar');
   });
+
+  // 🛡️ Achado real de produção (2026-08-12, mesmo dia): antes deste fix, o nome do
+  // solicitante nunca vinha em `custom_fields` (só tipo/setor/solução) — o frontend
+  // fazia `Number(getCF(task, SOLICITANTE_FIELD_ID))` -&gt; `Number(null)` -&gt; `0` -&gt;
+  // mostrava quem tivesse orderindex 0 como solicitante de TODO chamado no Kanban/
+  // Tabela do admin. Corrigido expondo `solicitante` como campo próprio (nome já
+  // resolvido, não orderindex).
+  await test('cada chamado devolve o nome do solicitante certo, direto (não via custom_fields/orderindex)', async () => {
+    const res = await worker.fetch(req('GET', '/admin/tasks', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
+    const { tasks } = await res.json();
+    const michael = tasks.find(t => t.id === 'task-michael-1');
+    const ariele  = tasks.find(t => t.id === 'task-ariele-1');
+    assert.strictEqual(michael.solicitante, 'Michael Vasconcelos');
+    assert.strictEqual(ariele.solicitante, 'Ariele Santo');
+    // Não deveria mais existir nenhuma entrada de SOLICITANTE_FIELD_ID em custom_fields
+    // — se voltar, é sinal de que alguém reintroduziu a indireção por orderindex.
+    for (const t of tasks) {
+      assert.ok(!(t.custom_fields || []).some(f => f.id === SOLICITANTE_FIELD_ID), `${t.id} não deveria ter custom_field de SOLICITANTE`);
+    }
+  });
   await test('token de sessão válido (sem X-Admin-Secret) NÃO dá acesso — admin é um segredo separado da sessão de usuário', async () => {
     const res = await worker.fetch(req('GET', '/admin/tasks', { headers: { 'X-Session-Token': token } }), adminEnv);
     assert.strictEqual(res.status, 403);
