@@ -127,6 +127,7 @@ export default {
       const adminUpdateMatch = pathname.match(/^\/admin\/tasks\/([^/]+)$/);
       if (adminUpdateMatch) return handleAdminUpdateTask(request, env, adminUpdateMatch[1]);
       if (pathname === '/admin/migrate-d1') return handleAdminMigrateD1(request, env);
+      if (pathname === '/admin/migrate-schema-nullable-tipo-setor') return handleAdminMigrateSchemaNullableTipoSetor(request, env);
     }
 
     if (request.method === 'GET') {
@@ -1221,9 +1222,14 @@ function d1RowToTaskShape(row) {
     date_updated: String(row.updated_at),
     date_closed: row.date_closed != null ? String(row.date_closed) : null,
     start_date: row.start_date != null ? String(row.start_date) : null,
+    // tipo/setor omitidos quando null (12 chamados bem antigos sem esses campos, ver
+    // Fase B7) em vez de mandar `value: null` — o frontend faz `Number(getCF(...))` pra
+    // ler esse campo, e `Number(null)` vira 0 (bateria com o orderindex 0 de verdade),
+    // não `NaN`/"—" como seria o esperado pra "campo ausente". Omitir a entrada faz
+    // getCF() devolver null por *não encontrar* o campo, que é o caso real aqui.
     custom_fields: [
-      { id: TIPO_FIELD_ID, value: row.tipo },
-      { id: SETOR_FIELD_ID, value: row.setor },
+      ...(row.tipo   != null ? [{ id: TIPO_FIELD_ID,   value: row.tipo   }] : []),
+      ...(row.setor  != null ? [{ id: SETOR_FIELD_ID,  value: row.setor  }] : []),
       ...(row.solucao != null ? [{ id: SOLUCAO_FIELD_ID, value: row.solucao }] : []),
     ],
   };
@@ -1355,10 +1361,15 @@ function mapClickUpTaskToD1(task, idxToName) {
   const solicitanteIdx  = cfValue(task, SOLICITANTE_FIELD_ID);
   const solicitanteName = (solicitanteIdx != null ? idxToName[solicitanteIdx] : null) || '';
 
+  // Fase B7 (2026-08-12, mesmo dia): os 12 chamados bem antigos que ainda faltavam
+  // migrar tinham TIPO e SETOR ausentes (nenhum custom_fields preenchido — não é bug,
+  // são tasks de antes desses campos serem obrigatórios no formulário). Mesmo
+  // tratamento do SOLICITANTE acima: migra com null em vez de virar erro, pra ter o
+  // histórico completo — mas aqui pode ser NULL de verdade (não string vazia), porque
+  // a coluna já não tem NOT NULL (ver d1/schema.sql). Investigado antes de mudar: a
+  // prioridade dessas 12 tasks está presente normalmente, só tipo/setor faltam mesmo.
   const tipoIdx  = cfValue(task, TIPO_FIELD_ID);
   const setorIdx = cfValue(task, SETOR_FIELD_ID);
-  if (tipoIdx == null)  throw new Error('campo TIPO ausente na task');
-  if (setorIdx == null) throw new Error('campo SETOR ausente na task');
 
   const priorityName = task.priority?.priority;
   const priority = PRIORITY_NAME_TO_NUM[priorityName];
@@ -1370,8 +1381,8 @@ function mapClickUpTaskToD1(task, idxToName) {
     description:  task.description || task.text_content || null,
     status:       statusRaw,
     priority,
-    tipo:         Number(tipoIdx),
-    setor:        Number(setorIdx),
+    tipo:         tipoIdx  != null ? Number(tipoIdx)  : null,
+    setor:        setorIdx != null ? Number(setorIdx) : null,
     solicitante:  solicitanteName,
     email:        cfValue(task, EMAIL_FIELD_ID),
     solucao:      cfValue(task, SOLUCAO_FIELD_ID),
@@ -1432,6 +1443,76 @@ async function handleAdminMigrateD1(request, env) {
   }
 
   return jsonRes({ dryRun, total: tasks.length, migrated, skipped, errors, truncated });
+}
+
+// =====================================================================
+// POST /admin/migrate-schema-nullable-tipo-setor — migração de schema ÚNICA (Fase B7,
+// 2026-08-12, mesmo dia), pra permitir NULL em tipo/setor. Motivo: 12 chamados bem
+// antigos na ClickUp não têm custom_fields nenhum preenchido (nem TIPO nem SETOR) —
+// o schema original tinha os dois como NOT NULL, então esses 12 nunca migravam (ver
+// mapClickUpTaskToD1). SQLite/D1 não suportam ALTER COLUMN pra remover NOT NULL
+// direto — o padrão é recriar a tabela: cria uma nova com o schema certo, copia os
+// dados, apaga a antiga, renomeia. Protegida por ADMIN_SECRET, idempotente (檢CREATE
+// TABLE IF NOT EXISTS na tabela nova — se já rodou uma vez, a 2ª chamada só recria os
+// índices à toa (IF NOT EXISTS também), sem duplicar nem perder dado.
+// =====================================================================
+async function handleAdminMigrateSchemaNullableTipoSetor(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+
+  const db = env.CHAMADOS_DB;
+  try {
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS chamados_v2 (
+        id            TEXT PRIMARY KEY,
+        name          TEXT NOT NULL,
+        description   TEXT,
+        status        TEXT NOT NULL CHECK (status IN ('aberto', 'em atendimento', 'pendente', 'encerrado')),
+        priority      INTEGER NOT NULL CHECK (priority IN (1, 2, 3)),
+        tipo          INTEGER,
+        setor         INTEGER,
+        solicitante   TEXT NOT NULL,
+        email         TEXT,
+        solucao       TEXT,
+        assignee_id   INTEGER,
+        due_date      INTEGER,
+        date_created  INTEGER NOT NULL,
+        date_closed   INTEGER,
+        start_date    INTEGER,
+        created_at    INTEGER NOT NULL,
+        updated_at    INTEGER NOT NULL
+      )
+    `).run();
+
+    await db.prepare(`
+      INSERT OR IGNORE INTO chamados_v2
+        (id, name, description, status, priority, tipo, setor, solicitante, email, solucao,
+         assignee_id, due_date, date_created, date_closed, start_date, created_at, updated_at)
+      SELECT
+        id, name, description, status, priority, tipo, setor, solicitante, email, solucao,
+        assignee_id, due_date, date_created, date_closed, start_date, created_at, updated_at
+      FROM chamados
+    `).run();
+
+    const before = await db.prepare('SELECT COUNT(*) AS n FROM chamados').first();
+    const after  = await db.prepare('SELECT COUNT(*) AS n FROM chamados_v2').first();
+    if (Number(after?.n) < Number(before?.n)) {
+      return jsonRes({ error: 'copia incompleta — abortado antes de apagar a tabela antiga', before: before?.n, after: after?.n }, 500);
+    }
+
+    await db.prepare('DROP TABLE chamados').run();
+    await db.prepare('ALTER TABLE chamados_v2 RENAME TO chamados').run();
+
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_chamados_status ON chamados (status)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_chamados_setor ON chamados (setor)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_chamados_tipo ON chamados (tipo)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_chamados_assignee ON chamados (assignee_id)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_chamados_solicitante ON chamados (solicitante)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_chamados_date_created ON chamados (date_created)').run();
+
+    return jsonRes({ ok: true, linhasCopiadas: after?.n ?? null });
+  } catch (err) {
+    return jsonRes({ error: `migração de schema falhou: ${err.message}` }, 500);
+  }
 }
 
 // =====================================================================

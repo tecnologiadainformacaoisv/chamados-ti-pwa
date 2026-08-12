@@ -116,6 +116,10 @@ async function test(name, fn) {
   const { default: worker, d1GetChamado } = await import(workerPath);
 
   let lastCreatePayload = null;
+  let createdTaskCounter = 0; // cada POST de criação gera um id novo — evita colisão de
+  // INSERT OR IGNORE no D1 entre testes diferentes que criam chamado (Fase B7: desde que
+  // o mirror parou de exigir TIPO/SETOR, mais testes de criação passaram a espelhar de
+  // verdade, e todos usar o mesmo id fixo fazia o 2º ser silenciosamente ignorado).
   let taskListCallCount = 0;
   let migrationTasksOverride = null; // usado só nos testes de POST /admin/migrate-d1
   const realFetch = globalThis.fetch;
@@ -139,8 +143,9 @@ async function test(name, fn) {
         // espelhar no D1 — um mock ingênuo (só ecoando o payload) já escondeu esse
         // exato tipo de incompatibilidade de shape antes de eu perceber e corrigir aqui.
         const PRIO_NUM_TO_NAME = { 1: 'urgent', 2: 'high', 3: 'normal' };
+        createdTaskCounter++;
         const created = {
-          id: 'new-task-id',
+          id: `new-task-id-${createdTaskCounter}`,
           name: lastCreatePayload.name,
           description: lastCreatePayload.description ?? null,
           text_content: lastCreatePayload.description ?? null,
@@ -364,12 +369,15 @@ async function test(name, fn) {
   });
 
   console.log('--- GET /api/my-tasks lê do D1, não bate na ClickUp (Fase B7, 2026-08-12) ---');
-  await test('pessoa com zero chamados recebe lista vazia sem nenhuma chamada à ClickUp', async () => {
+  await test('devolve o que o D1 tem pro solicitante, sem nenhuma chamada à ClickUp', async () => {
+    // Bruno tem exatamente 1 chamado no D1 nesse ponto — o do teste "forjar priority/
+    // due_date" lá em cima, que agora espelha com sucesso mesmo sem SETOR (Fase B7,
+    // mesmo dia: tipo/setor ausentes viram NULL em vez de bloquear o mirror).
     taskListCallCount = 0;
     const res = await worker.fetch(req('GET', '/api/my-tasks', { headers: { ...SECRET_HEADERS, 'X-Session-Token': brunoToken } }), env);
     assert.strictEqual(res.status, 200);
     const { tasks } = await res.json();
-    assert.strictEqual(tasks.length, 0, 'Bruno realmente não tem nenhum chamado nos dados fake');
+    assert.strictEqual(tasks.length, 1, 'Bruno tem 1 chamado espelhado no D1 (criado num teste anterior)');
     assert.strictEqual(taskListCallCount, 0, 'GET /api/my-tasks não deveria mais chamar a ClickUp nenhuma vez — lê só do D1');
   });
 
@@ -779,7 +787,9 @@ async function test(name, fn) {
         { id: SETOR_FIELD_ID, value: 0 },
       ],
     },
-    { // TIPO ausente — deve virar erro
+    { // TIPO ausente — migra mesmo assim, com tipo = null (Fase B7, mesmo dia: mesmo
+      // tratamento dos 12 chamados reais bem antigos sem custom_fields nenhum
+      // preenchido — não é mais erro, coluna já não é NOT NULL, ver d1/schema.sql).
       id: 'mig-4', name: 'Chamado sem tipo',
       status: { status: 'aberto' }, priority: { priority: 'normal' }, assignees: [],
       custom_fields: [
@@ -803,22 +813,22 @@ async function test(name, fn) {
     const data = await res.json();
     assert.strictEqual(data.dryRun, true);
     assert.strictEqual(data.total, 4);
-    assert.strictEqual(data.migrated, 2, 'mig-1 e mig-2 (solicitante vazio já não é mais erro, Fase B7)');
-    assert.strictEqual(data.errors.length, 2);
+    assert.strictEqual(data.migrated, 3, 'mig-1, mig-2 (solicitante vazio) e mig-4 (tipo nulo) já não são mais erro, Fase B7');
+    assert.strictEqual(data.errors.length, 1);
     const found = await d1GetChamado(env, 'mig-1');
     assert.strictEqual(found, null, 'dryRun não deveria ter gravado nada de verdade no D1');
   });
 
-  await test('migração de verdade grava mig-1 e mig-2 (com solicitante vazio), com os campos certos', async () => {
+  await test('migração de verdade grava mig-1, mig-2 (solicitante vazio) e mig-4 (tipo nulo), com os campos certos', async () => {
     const res = await worker.fetch(req('POST', '/admin/migrate-d1', {
       headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
       body: '{}',
     }), env);
     const data = await res.json();
-    assert.strictEqual(data.migrated, 2);
+    assert.strictEqual(data.migrated, 3);
     assert.strictEqual(data.skipped, 0);
-    assert.strictEqual(data.errors.length, 2);
-    assert.deepStrictEqual(data.errors.map(e => e.id).sort(), ['mig-3', 'mig-4']);
+    assert.strictEqual(data.errors.length, 1);
+    assert.deepStrictEqual(data.errors.map(e => e.id).sort(), ['mig-3']);
 
     const row = await d1GetChamado(env, 'mig-1');
     assert.ok(row, 'mig-1 deveria ter sido gravada no D1');
@@ -833,6 +843,11 @@ async function test(name, fn) {
     const orfao = await d1GetChamado(env, 'mig-2');
     assert.ok(orfao, 'mig-2 (solicitante fora do campo atual) deveria ter sido gravada mesmo assim');
     assert.strictEqual(orfao.solicitante, '', 'solicitante não resolvido vira string vazia, não bloqueia a migração (Fase B7)');
+
+    const semTipo = await d1GetChamado(env, 'mig-4');
+    assert.ok(semTipo, 'mig-4 (sem TIPO) deveria ter sido gravada mesmo assim');
+    assert.strictEqual(semTipo.tipo, null, 'tipo ausente vira NULL de verdade (coluna já não é NOT NULL)');
+    assert.strictEqual(semTipo.setor, 0);
   });
 
   await test('rodar de novo é idempotente — não duplica, marca como skipped', async () => {
@@ -842,7 +857,54 @@ async function test(name, fn) {
     }), env);
     const data = await res.json();
     assert.strictEqual(data.migrated, 0, 'já tinha migrado antes, não deveria contar de novo');
-    assert.strictEqual(data.skipped, 2);
+    assert.strictEqual(data.skipped, 3);
+  });
+
+  console.log('--- POST /admin/migrate-schema-nullable-tipo-setor (Fase B7, mesmo dia — recria a tabela pra permitir NULL em tipo/setor) ---');
+  await test('sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/admin/migrate-schema-nullable-tipo-setor', { body: '{}' }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('migra o schema preservando os dados já gravados, e continua idempotente rodando de novo', async () => {
+    const antes = await d1GetChamado(env, 'mig-1');
+    assert.ok(antes, 'pré-condição: mig-1 já devia estar no D1 antes da migração de schema');
+
+    const res = await worker.fetch(req('POST', '/admin/migrate-schema-nullable-tipo-setor', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+    }), env);
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.strictEqual(data.ok, true);
+
+    const depois = await d1GetChamado(env, 'mig-1');
+    assert.ok(depois, 'mig-1 deveria continuar no D1 depois de recriar a tabela');
+    assert.strictEqual(depois.name, antes.name);
+    assert.strictEqual(depois.tipo, antes.tipo);
+
+    // agora tipo/setor ausentes não devem mais dar erro de constraint na hora de gravar
+    // — mesmo caminho real (POST /admin/migrate-d1), não uma chamada direta às funções
+    // internas, pra testar o fluxo de verdade.
+    migrationTasksOverride = [{
+      id: 'schema-v2-check', name: 'Chamado de teste pós-migração',
+      status: { status: 'aberto' }, priority: { priority: 'normal' }, assignees: [],
+      custom_fields: [{ id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } }],
+    }];
+    const resMig = await worker.fetch(req('POST', '/admin/migrate-d1', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
+    }), env);
+    const dataMig = await resMig.json();
+    assert.strictEqual(dataMig.errors.length, 0, 'sem TIPO nem SETOR não deveria mais dar erro depois da migração de schema');
+    const gravado = await d1GetChamado(env, 'schema-v2-check');
+    assert.strictEqual(gravado.tipo, null);
+    assert.strictEqual(gravado.setor, null);
+
+    // rodar a migração de schema DE NOVO não apaga nem duplica nada
+    const res2 = await worker.fetch(req('POST', '/admin/migrate-schema-nullable-tipo-setor', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+    }), env);
+    assert.strictEqual(res2.status, 200);
+    const aindaLa = await d1GetChamado(env, 'schema-v2-check');
+    assert.ok(aindaLa, 'segunda rodada da migração de schema não deveria ter perdido nenhuma linha');
   });
 
   console.log(`\n${passed} passaram, ${failed} falharam`);

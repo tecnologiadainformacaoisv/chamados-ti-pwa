@@ -18,8 +18,10 @@ CREATE TABLE IF NOT EXISTS chamados (
   description   TEXT,               -- detalhes adicionais (opcional)
   status        TEXT NOT NULL CHECK (status IN ('aberto', 'em atendimento', 'pendente', 'encerrado')),
   priority      INTEGER NOT NULL CHECK (priority IN (1, 2, 3)),  -- 1 Urgente, 2 Alta, 3 Normal — nunca "Baixa" (regra de negócio)
-  tipo          INTEGER NOT NULL,   -- orderindex em TIPOS (app.js)
-  setor         INTEGER NOT NULL,   -- orderindex em SETORES (app.js)
+  tipo          INTEGER,             -- orderindex em TIPOS (app.js); NULL = campo ausente na
+                                      -- ClickUp (12 chamados bem antigos, sem custom_fields
+                                      -- nenhum preenchido — ver CLAUDE.md "Fase B7")
+  setor         INTEGER,             -- orderindex em SETORES (app.js); mesma observação do tipo
   solicitante   TEXT NOT NULL,      -- nome de quem abriu — sempre resolvido da sessão no servidor, nunca do cliente
   email         TEXT,
   solucao       TEXT,
