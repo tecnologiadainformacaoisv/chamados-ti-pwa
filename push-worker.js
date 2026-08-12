@@ -541,13 +541,23 @@ async function fetchAllTasks(env, maxPages = 20) {
 }
 
 // =====================================================================
-// /admin/tasks — todos os chamados da lista, com filtros opcionais via query string
-// (status, setor, tipo, operador, solicitante). Protegido por ADMIN_SECRET, mesmo
-// padrão de /admin/users. "setor"/"tipo" são o orderindex numérico (o mesmo valor
-// gravado no custom field — ver SETORES/TIPOS em app.js pra mapear pra nome);
-// "operador" é o id do assignee na ClickUp (ver OPERADORES em app.js); "solicitante"
-// é o nome (resolvido aqui pro orderindex real via getSolicitanteMaps, igual o resto
-// do arquivo já faz — nunca comparamos nome direto contra o índice guardado na task).
+// /admin/tasks — todos os chamados, com filtros opcionais via query string (status,
+// setor, tipo, operador, solicitante). Protegido por ADMIN_SECRET, mesmo padrão de
+// /admin/users. "setor"/"tipo" são o orderindex numérico (o mesmo valor gravado no
+// custom field da ClickUp — ver SETORES/TIPOS em app.js pra mapear pro nome);
+// "operador" é o id do assignee (ver OPERADORES em app.js); "solicitante" é o nome.
+//
+// 🚀 B7 parte 2, fase 2 (2026-08-12): lê do D1 em vez de paginar a ClickUp inteira a
+// cada chamada — era o bloqueio documentado desde a parte 1 (`chamados.assignee_id`
+// era 1 coluna só, não representava chamado com 2+ operadores; a fase 1 já resolveu
+// isso com `chamado_assignees`, ver CLAUDE.md). `withAssignees: true` pede o array
+// completo — é o que preserva o aviso de "múltiplos operadores atribuídos" no modal
+// "Gerenciar" (ver Fase 4 do painel de admin). `solicitante` filtra direto pelo nome
+// (D1 já guarda o nome resolvido na coluna, não um orderindex — não precisa mais do
+// passo de resolução via getSolicitanteMaps que a versão ClickUp exigia); nome
+// inexistente continua devolvendo lista vazia, só que agora "de graça" (0 linhas
+// batem o WHERE), sem precisar de um caso especial pra isso. `truncated` sempre false
+// — D1 não pagina como fetchAllTasks, não existe teto de páginas aqui.
 // =====================================================================
 async function handleAdminListTasks(request, env) {
   if (!(await isAdmin(request, env))) return unauthorized();
@@ -559,103 +569,32 @@ async function handleAdminListTasks(request, env) {
   const operadorFilter    = searchParams.get('operador');
   const solicitanteFilter = searchParams.get('solicitante');
 
-  let solicitanteIdx = null;
-  if (solicitanteFilter) {
-    const { nameToIdx } = await getSolicitanteMaps(env);
-    solicitanteIdx = nameToIdx[solicitanteFilter];
-    if (solicitanteIdx == null) return jsonRes({ total: 0, tasks: [] });
-  }
-
-  const { tasks, truncated } = await fetchAllTasks(env);
-  const filtered = tasks.filter(t => {
-    if (statusFilter && (t.status?.status || '').toLowerCase() !== statusFilter.toLowerCase()) return false;
-    if (operadorFilter && !(t.assignees || []).some(a => String(a.id) === operadorFilter)) return false;
-    if (setorFilter && String(cfValue(t, SETOR_FIELD_ID)) !== setorFilter) return false;
-    if (tipoFilter && String(cfValue(t, TIPO_FIELD_ID)) !== tipoFilter) return false;
-    if (solicitanteFilter && Number(cfValue(t, SOLICITANTE_FIELD_ID)) !== Number(solicitanteIdx)) return false;
-    return true;
+  const rows = await d1ListChamados(env, {
+    status: statusFilter ? statusFilter.toLowerCase() : undefined,
+    setor: setorFilter ?? undefined,
+    tipo: tipoFilter ?? undefined,
+    assigneeId: operadorFilter ?? undefined,
+    solicitante: solicitanteFilter ?? undefined,
+    withAssignees: true,
   });
+  const tasks = rows.map(d1RowToTaskShape);
 
-  return jsonRes({ total: filtered.length, tasks: filtered, truncated });
+  return jsonRes({ total: tasks.length, tasks, truncated: false });
 }
 
 // =====================================================================
 // /admin/metrics — agregados pro painel de admin: total por status, tempo médio de
-// atendimento por operador (duração real "em atendimento" -> "encerrado", pelos
-// timestamps start_date/date_closed da própria task), % dentro do SLA vs atrasado
-// (comparando due_date com date_closed pra encerrados, ou com "agora" pra tasks
-// ainda abertas — mesma lógica informativa que o app.js já usa no cliente) e volume
-// por tipo/setor (chaves = orderindex, mapear pro nome no painel via TIPOS/SETORES
-// de app.js). Protegido por ADMIN_SECRET, mesmo padrão de /admin/users.
+// atendimento por operador (duração real "em atendimento" -> "encerrado"), % dentro
+// do SLA vs atrasado, volume por tipo/setor (chaves = orderindex, mapear pro nome no
+// painel via TIPOS/SETORES de app.js). Protegido por ADMIN_SECRET.
+//
+// 🚀 B7 parte 2, fase 2 (2026-08-12): lê do D1 (d1GetMetrics, escrita desde a Fase B2
+// mas nunca chamada por nenhuma rota até agora) em vez de paginar a ClickUp inteira.
+// Mesmo motivo/mesma data do corte de /admin/tasks acima — ver comentário lá.
 // =====================================================================
 async function handleAdminMetrics(request, env) {
   if (!(await isAdmin(request, env))) return unauthorized();
-
-  const { tasks, truncated } = await fetchAllTasks(env);
-
-  const porStatus = {};
-  const porTipo   = {};
-  const porSetor  = {};
-  const atendimentoPorOperador = {}; // id -> { nome, somaMs, count }
-  let dentroDoSla = 0;
-  let atrasado    = 0;
-
-  for (const t of tasks) {
-    const status = (t.status?.status || '').toLowerCase();
-    porStatus[status] = (porStatus[status] || 0) + 1;
-
-    const tipoIdx = cfValue(t, TIPO_FIELD_ID);
-    if (tipoIdx != null) porTipo[tipoIdx] = (porTipo[tipoIdx] || 0) + 1;
-
-    const setorIdx = cfValue(t, SETOR_FIELD_ID);
-    if (setorIdx != null) porSetor[setorIdx] = (porSetor[setorIdx] || 0) + 1;
-
-    if (t.due_date) {
-      const dueDate    = Number(t.due_date);
-      const referencia = (status === 'encerrado' && t.date_closed) ? Number(t.date_closed) : Date.now();
-      if (referencia > dueDate) atrasado++; else dentroDoSla++;
-    }
-
-    if (status === 'encerrado' && t.start_date && t.date_closed) {
-      const duracaoMs = Number(t.date_closed) - Number(t.start_date);
-      // Chamado com 2+ assignees: cada um recebe a duração INTEIRA, não uma fração dividida
-      // entre eles — decisão deliberada (cada operador atribuído "esteve no chamado" o tempo
-      // todo, não meio-a-meio), não é bug.
-      for (const a of (t.assignees || [])) {
-        const key = String(a.id);
-        if (!atendimentoPorOperador[key]) {
-          atendimentoPorOperador[key] = { nome: a.username || null, somaMs: 0, count: 0 };
-        }
-        atendimentoPorOperador[key].somaMs += duracaoMs;
-        atendimentoPorOperador[key].count  += 1;
-      }
-    }
-  }
-
-  const tempoMedioPorOperador = {};
-  for (const [id, dado] of Object.entries(atendimentoPorOperador)) {
-    tempoMedioPorOperador[id] = {
-      nome: dado.nome,
-      mediaMs: Math.round(dado.somaMs / dado.count),
-      totalChamados: dado.count
-    };
-  }
-
-  const totalComSla = dentroDoSla + atrasado;
-  return jsonRes({
-    total: tasks.length,
-    truncated,
-    porStatus,
-    porTipo,
-    porSetor,
-    sla: {
-      dentroDoSla,
-      atrasado,
-      dentroDoSlaPercent: totalComSla ? Math.round((dentroDoSla / totalComSla) * 1000) / 10 : null,
-      atrasadoPercent:    totalComSla ? Math.round((atrasado    / totalComSla) * 1000) / 10 : null,
-    },
-    tempoMedioPorOperador
-  });
+  return jsonRes(await d1GetMetrics(env));
 }
 
 // =====================================================================
@@ -1178,6 +1117,13 @@ async function d1CreateChamado(env, data) {
     row.solicitante, row.email, row.solucao, row.assignee_id, row.due_date, row.date_created,
     row.date_closed, row.start_date, row.created_at, row.updated_at
   ).run();
+  // Mantém chamado_assignees em sincronia (B7 parte 2, fase 2, 2026-08-12) — mesmo
+  // padrão de d1MigrateChamado/handleAdminUpdateTask. d1CreateChamado ainda não é
+  // chamada por nenhum handler em produção (ver Fase B2), mas os filtros/métricas que
+  // agora leem do D1 (d1ListChamados/d1GetMetrics) dependem dessa tabela como fonte de
+  // verdade pra "quem está atribuído" — sem isso, qualquer chamado criado por aqui no
+  // futuro ficaria invisível pro filtro "operador" e pro tempo médio de atendimento.
+  await d1SetAssignees(env, row.id, row.assignee_id != null ? [row.assignee_id] : []);
   return d1Row(row);
 }
 
@@ -1186,22 +1132,38 @@ async function d1GetChamado(env, id) {
   return d1Row(row);
 }
 
-// filters: { status, setor, tipo, assigneeId, solicitante } — todos opcionais, mesmo
-// conjunto que GET /admin/tasks já aceita hoje (ver handleAdminListTasks).
+// filters: { status, setor, tipo, assigneeId, solicitante, withAssignees } — todos
+// opcionais, mesmo conjunto que GET /admin/tasks já aceita hoje (ver
+// handleAdminListTasks). `assigneeId` filtra por QUALQUER operador atribuído (via
+// chamado_assignees, B7 parte 2 fase 2 — não só o primeiro/assignee_id).
+// `withAssignees: true` (opt-in, não o padrão) anexa `row.assignee_ids` (array
+// completo) via uma query extra em lote — só as rotas de admin pedem isso
+// (precisam do array pra reconstruir o aviso de "múltiplos operadores"); o poll de
+// /api/my-tasks (rota mais chamada do Worker) NÃO pede, pra não pagar esse custo
+// extra numa rota já sensível a latência — segue devolvendo só `assignee_id`.
 async function d1ListChamados(env, filters = {}) {
   const where  = [];
   const params = [];
   if (filters.status)      { where.push('status = ?');      params.push(filters.status); }
   if (filters.setor != null)      { where.push('setor = ?');       params.push(Number(filters.setor)); }
   if (filters.tipo != null)       { where.push('tipo = ?');        params.push(Number(filters.tipo)); }
-  if (filters.assigneeId != null) { where.push('assignee_id = ?'); params.push(Number(filters.assigneeId)); }
+  if (filters.assigneeId != null) {
+    where.push('id IN (SELECT chamado_id FROM chamado_assignees WHERE assignee_id = ?)');
+    params.push(Number(filters.assigneeId));
+  }
   if (filters.solicitante) { where.push('solicitante = ?'); params.push(filters.solicitante); }
 
   const sql = `SELECT * FROM chamados` +
     (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
     ` ORDER BY date_created DESC`;
   const { results } = await env.CHAMADOS_DB.prepare(sql).bind(...params).all();
-  return (results || []).map(d1Row);
+  const rows = (results || []).map(d1Row);
+
+  if (filters.withAssignees) {
+    const assigneesMap = await d1GetAssigneesMap(env, rows.map(r => r.id));
+    for (const row of rows) row.assignee_ids = assigneesMap.get(row.id) || [];
+  }
+  return rows;
 }
 
 const PRIORITY_NUM_TO_NAME = { 1: 'urgent', 2: 'high', 3: 'normal' };
@@ -1215,7 +1177,13 @@ const PRIORITY_NUM_TO_NAME = { 1: 'urgent', 2: 'high', 3: 'normal' };
 //   (é o próprio filtro), não precisa reconstruir esse campo pra nada.
 // - `username` em assignees: o frontend já resolve id->nome sozinho via OPERADORES
 //   (mesmo comentário de handleAdminMetrics logo abaixo).
+//
+// `assignees` (B7 parte 2, fase 2): usa `row.assignee_ids` (array completo, só presente
+// quando quem chamou d1ListChamados pediu `withAssignees`) quando disponível — é o que
+// preserva o aviso de "múltiplos operadores" no painel de admin. Sem isso, cai pro
+// `assignee_id` de sempre (rotas que não pedem o array, ex. GET /api/my-tasks).
 function d1RowToTaskShape(row) {
+  const assigneeIds = row.assignee_ids ?? (row.assignee_id != null ? [row.assignee_id] : []);
   return {
     id: row.id,
     name: row.name,
@@ -1223,7 +1191,7 @@ function d1RowToTaskShape(row) {
     text_content: row.description,
     status: { status: row.status },
     priority: { priority: PRIORITY_NUM_TO_NAME[row.priority] || 'normal' },
-    assignees: row.assignee_id != null ? [{ id: row.assignee_id }] : [],
+    assignees: assigneeIds.map(id => ({ id })),
     due_date: row.due_date != null ? String(row.due_date) : null,
     date_created: String(row.date_created),
     date_updated: String(row.updated_at),
@@ -1279,19 +1247,27 @@ async function d1UpdateChamado(env, id, patch) {
 // tempoMedioPorOperador) — de propósito, pra um dia trocar a fonte sem quebrar o
 // contrato que admin.js já consome. nome vem null (D1 não guarda nome do operador,
 // só o id) — o painel já resolve id->nome via OPERADORES no cliente de qualquer forma.
+//
+// tempoMedioPorOperador (B7 parte 2, fase 2, 2026-08-12): usa chamado_assignees, não
+// mais só assignee_id — cada operador atribuído a um chamado encerrado recebe a
+// duração INTEIRA, não dividida entre eles (mesma regra de handleAdminMetrics baseado
+// na ClickUp, ver comentário lá — chamado com 2+ assignees não é bug, é o dado real).
 async function d1GetMetrics(env) {
   const { results } = await env.CHAMADOS_DB.prepare(
-    'SELECT status, tipo, setor, due_date, date_closed, start_date, assignee_id FROM chamados'
+    'SELECT id, status, tipo, setor, due_date, date_closed, start_date FROM chamados'
   ).all();
   const rows = results || [];
 
   const porStatus = {};
   const porTipo    = {};
   const porSetor   = {};
-  const atendimentoPorOperador = {}; // id -> { somaMs, count }
   let dentroDoSla = 0;
   let atrasado    = 0;
   const agora = Date.now();
+
+  // chamados encerrados com duração válida (start_date + date_closed) — resolvidos em
+  // lote depois do loop, junto com o(s) assignee(s) real(is) de cada um.
+  const encerradosComDuracao = [];
 
   for (const r of rows) {
     porStatus[r.status] = (porStatus[r.status] || 0) + 1;
@@ -1303,12 +1279,21 @@ async function d1GetMetrics(env) {
       if (referencia > r.due_date) atrasado++; else dentroDoSla++;
     }
 
-    if (r.status === 'encerrado' && r.start_date != null && r.date_closed != null && r.assignee_id != null) {
-      const key = String(r.assignee_id);
-      const duracaoMs = r.date_closed - r.start_date;
-      if (!atendimentoPorOperador[key]) atendimentoPorOperador[key] = { somaMs: 0, count: 0 };
-      atendimentoPorOperador[key].somaMs += duracaoMs;
-      atendimentoPorOperador[key].count  += 1;
+    if (r.status === 'encerrado' && r.start_date != null && r.date_closed != null) {
+      encerradosComDuracao.push({ id: r.id, duracaoMs: r.date_closed - r.start_date });
+    }
+  }
+
+  const atendimentoPorOperador = {}; // id -> { somaMs, count }
+  if (encerradosComDuracao.length) {
+    const assigneesMap = await d1GetAssigneesMap(env, encerradosComDuracao.map(e => e.id));
+    for (const { id, duracaoMs } of encerradosComDuracao) {
+      for (const assigneeId of (assigneesMap.get(id) || [])) {
+        const key = String(assigneeId);
+        if (!atendimentoPorOperador[key]) atendimentoPorOperador[key] = { somaMs: 0, count: 0 };
+        atendimentoPorOperador[key].somaMs += duracaoMs;
+        atendimentoPorOperador[key].count  += 1;
+      }
     }
   }
 
@@ -1431,6 +1416,24 @@ async function d1SetAssignees(env, chamadoId, assigneeIds) {
     );
   }
   await env.CHAMADOS_DB.batch(statements);
+}
+
+// Suporte a múltiplos operadores (B7 parte 2, fase 2, 2026-08-12) — busca os assignees
+// de um lote de chamados de uma vez só (1 query, `IN (...)`) em vez de 1 por chamado,
+// devolve Map<chamado_id, number[]>. Usado por d1ListChamados (quando `withAssignees`)
+// e d1GetMetrics pra reconstruir o array completo, igual `assignees[]` da ClickUp.
+async function d1GetAssigneesMap(env, chamadoIds) {
+  const map = new Map();
+  if (!chamadoIds.length) return map;
+  const placeholders = chamadoIds.map(() => '?').join(',');
+  const { results } = await env.CHAMADOS_DB.prepare(
+    `SELECT chamado_id, assignee_id FROM chamado_assignees WHERE chamado_id IN (${placeholders})`
+  ).bind(...chamadoIds).all();
+  for (const r of (results || [])) {
+    if (!map.has(r.chamado_id)) map.set(r.chamado_id, []);
+    map.get(r.chamado_id).push(r.assignee_id);
+  }
+  return map;
 }
 
 async function d1MigrateChamado(env, data) {

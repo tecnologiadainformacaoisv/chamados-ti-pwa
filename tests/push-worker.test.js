@@ -392,73 +392,92 @@ async function test(name, fn) {
   });
 
   console.log('--- /admin/tasks (todos os chamados, com filtros) ---');
+  // 🚀 B7 parte 2, fase 2 (2026-08-12): /admin/tasks e /admin/metrics passaram a ler do
+  // D1, não mais da ClickUp — env ISOLADO aqui (D1 próprio, não o `env` global) porque a
+  // essa altura do arquivo o `env` compartilhado já acumulou chamados extras de outros
+  // testes que criam/espelham no D1 ao longo do arquivo (dual-write desde a B7 parte 1);
+  // ler do D1 exporia essa contagem, que os testes de ClickUp nunca viam (liam sempre
+  // FAKE_TASKS, fixo). Semeado com a mesma rota real (POST /admin/migrate-d1) que a
+  // produção usa — sem reimplementação paralela.
+  const adminEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
+  await worker.fetch(req('POST', '/admin/migrate-d1', {
+    headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
+  }), adminEnv);
+
   await test('sem X-Admin-Secret dá 403', async () => {
-    const res = await worker.fetch(req('GET', '/admin/tasks'), env);
+    const res = await worker.fetch(req('GET', '/admin/tasks'), adminEnv);
     assert.strictEqual(res.status, 403);
   });
   await test('X-App-Secret (o do app, não o de admin) NÃO dá acesso', async () => {
-    const res = await worker.fetch(req('GET', '/admin/tasks', { headers: SECRET_HEADERS }), env);
+    const res = await worker.fetch(req('GET', '/admin/tasks', { headers: SECRET_HEADERS }), adminEnv);
     assert.strictEqual(res.status, 403);
   });
   await test('sem filtro nenhum, devolve todos os chamados', async () => {
-    const res = await worker.fetch(req('GET', '/admin/tasks', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const res = await worker.fetch(req('GET', '/admin/tasks', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
     assert.strictEqual(res.status, 200);
     const { total, tasks, truncated } = await res.json();
     assert.strictEqual(total, 2);
     assert.strictEqual(tasks.length, 2);
-    assert.strictEqual(truncated, false, 'volume normal não deveria bater no teto de páginas');
+    assert.strictEqual(truncated, false, 'D1 não pagina como a ClickUp — nunca deveria truncar');
   });
   await test('token de sessão válido (sem X-Admin-Secret) NÃO dá acesso — admin é um segredo separado da sessão de usuário', async () => {
-    const res = await worker.fetch(req('GET', '/admin/tasks', { headers: { 'X-Session-Token': token } }), env);
+    const res = await worker.fetch(req('GET', '/admin/tasks', { headers: { 'X-Session-Token': token } }), adminEnv);
     assert.strictEqual(res.status, 403);
   });
   await test('filtro por status devolve só os chamados daquele status', async () => {
-    const res = await worker.fetch(req('GET', '/admin/tasks?status=aberto', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const res = await worker.fetch(req('GET', '/admin/tasks?status=aberto', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
     const { total, tasks } = await res.json();
     assert.strictEqual(total, 1);
     assert.strictEqual(tasks[0].id, 'task-ariele-1');
   });
   await test('filtro por operador (assignee) funciona', async () => {
-    const res = await worker.fetch(req('GET', '/admin/tasks?operador=170628721', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const res = await worker.fetch(req('GET', '/admin/tasks?operador=170628721', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
     const { total, tasks } = await res.json();
     assert.strictEqual(total, 1);
     assert.strictEqual(tasks[0].id, 'task-michael-1');
   });
   await test('filtro por setor (orderindex) funciona', async () => {
-    const res = await worker.fetch(req('GET', '/admin/tasks?setor=0', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const res = await worker.fetch(req('GET', '/admin/tasks?setor=0', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
     const { total, tasks } = await res.json();
     assert.strictEqual(total, 1);
     assert.strictEqual(tasks[0].id, 'task-ariele-1');
   });
   await test('filtro por tipo (orderindex) funciona', async () => {
-    const res = await worker.fetch(req('GET', '/admin/tasks?tipo=0', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const res = await worker.fetch(req('GET', '/admin/tasks?tipo=0', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
     const { total, tasks } = await res.json();
     assert.strictEqual(total, 1);
     assert.strictEqual(tasks[0].id, 'task-michael-1');
   });
-  await test('filtro por solicitante (nome) resolve pro orderindex certo, mesmo padrão anti-forjamento do resto do arquivo', async () => {
-    const res = await worker.fetch(req('GET', '/admin/tasks?solicitante=' + encodeURIComponent('Michael Vasconcelos'), { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+  await test('filtro por solicitante (nome) — D1 já guarda o nome resolvido, filtra direto sem round-trip pra ClickUp', async () => {
+    const res = await worker.fetch(req('GET', '/admin/tasks?solicitante=' + encodeURIComponent('Michael Vasconcelos'), { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
     const { total, tasks } = await res.json();
     assert.strictEqual(total, 1);
     assert.strictEqual(tasks[0].id, 'task-michael-1');
   });
-  await test('solicitante que não existe na ClickUp devolve lista vazia (não erro)', async () => {
-    const res = await worker.fetch(req('GET', '/admin/tasks?solicitante=Ninguém+Assim', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+  await test('solicitante que não existe devolve lista vazia (não erro)', async () => {
+    const res = await worker.fetch(req('GET', '/admin/tasks?solicitante=Ninguém+Assim', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
     assert.strictEqual(res.status, 200);
     const { total } = await res.json();
     assert.strictEqual(total, 0);
   });
   await test('combina múltiplos filtros com AND, não OR', async () => {
-    const noMatch = await worker.fetch(req('GET', '/admin/tasks?status=aberto&setor=1', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const noMatch = await worker.fetch(req('GET', '/admin/tasks?status=aberto&setor=1', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
     assert.strictEqual((await noMatch.json()).total, 0, 'Ariele é aberto+setor 0, Michael é encerrado+setor 1 — aberto+setor1 não deveria bater com nenhum dos dois');
 
-    const bothMatch = await worker.fetch(req('GET', '/admin/tasks?status=aberto&setor=0', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const bothMatch = await worker.fetch(req('GET', '/admin/tasks?status=aberto&setor=0', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
     const data = await bothMatch.json();
     assert.strictEqual(data.total, 1);
     assert.strictEqual(data.tasks[0].id, 'task-ariele-1');
   });
+  await test('devolve o array completo de assignees (não só o primeiro) — preserva o aviso de múltiplos operadores no painel', async () => {
+    const res = await worker.fetch(req('GET', '/admin/tasks?operador=170628721', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
+    const { tasks } = await res.json();
+    assert.deepStrictEqual(tasks[0].assignees.map(a => a.id), [170628721]);
+  });
 
-  console.log('--- fetchAllTasks pagina de verdade e avisa (truncated) quando bate no teto ---');
+  console.log('--- fetchAllTasks pagina de verdade e avisa (truncated) quando bate no teto (via POST /admin/migrate-d1, dryRun) ---');
+  // fetchAllTasks continua sendo usada por /admin/migrate-d1 (leitura da ClickUp pra
+  // migrar histórico) — só /admin/tasks e /admin/metrics deixaram de usá-la nesta fase.
   await test('bate no teto de 20 páginas e devolve truncated:true, sem perder chamado silenciosamente', async () => {
     const previousFetch = globalThis.fetch;
     let pagesRequested = 0;
@@ -481,7 +500,9 @@ async function test(name, fn) {
     };
 
     try {
-      const res = await worker.fetch(req('GET', '/admin/tasks', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+      const res = await worker.fetch(req('POST', '/admin/migrate-d1', {
+        headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ dryRun: true }),
+      }), adminEnv);
       const data = await res.json();
       assert.strictEqual(pagesRequested, 20, 'deveria ter parado exatamente no teto de 20 páginas');
       assert.strictEqual(data.total, 2000, 'deveria ter buscado as 20 páginas x 100 antes de parar');
@@ -493,16 +514,16 @@ async function test(name, fn) {
 
   console.log('--- /admin/metrics (agregados de SLA/volume/tempo de atendimento) ---');
   await test('sem X-Admin-Secret dá 403', async () => {
-    const res = await worker.fetch(req('GET', '/admin/metrics'), env);
+    const res = await worker.fetch(req('GET', '/admin/metrics'), adminEnv);
     assert.strictEqual(res.status, 403);
   });
   await test('agrega total, por status, por tipo/setor, SLA e tempo médio por operador', async () => {
-    const res = await worker.fetch(req('GET', '/admin/metrics', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const res = await worker.fetch(req('GET', '/admin/metrics', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
     assert.strictEqual(res.status, 200);
     const data = await res.json();
 
     assert.strictEqual(data.total, 2);
-    assert.strictEqual(data.truncated, false, 'volume normal não deveria bater no teto de páginas');
+    assert.strictEqual(data.truncated, false, 'D1 não pagina como a ClickUp — nunca deveria truncar');
     assert.deepStrictEqual(data.porStatus, { encerrado: 1, aberto: 1 });
     assert.strictEqual(data.porTipo['0'], 1, 'chamado do Michael é tipo 0 (Notebooks)');
     assert.strictEqual(data.porTipo['2'], 1, 'chamado da Ariele é tipo 2 (Redes)');
@@ -518,7 +539,9 @@ async function test(name, fn) {
     // Só o chamado do Michael tem start_date+date_closed -> só Everson entra na média.
     const everson = data.tempoMedioPorOperador['170628721'];
     assert.ok(everson, 'Everson deveria aparecer no tempo médio de atendimento');
-    assert.strictEqual(everson.nome, 'Everson');
+    // D1 não guarda nome de operador, só o id (diferente da versão ClickUp-based, que
+    // tinha `a.username` de graça) — o painel resolve id->nome via OPERADORES no cliente.
+    assert.strictEqual(everson.nome, null);
     assert.strictEqual(everson.totalChamados, 1);
     assert.ok(everson.mediaMs > 0);
     assert.strictEqual(data.tempoMedioPorOperador['200498355'], undefined, 'chamado da Ariele não foi encerrado, não deveria contar tempo de atendimento pro Henrique');
