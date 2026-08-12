@@ -123,7 +123,7 @@ async function test(name, fn) {
 
 (async () => {
   const workerPath = pathToFileURL(path.join(__dirname, '..', 'push-worker.js')).href;
-  const { default: worker, d1GetChamado } = await import(workerPath);
+  const { default: worker, d1GetChamado, d1SetAssignees } = await import(workerPath);
 
   let lastCreatePayload = null;
   let createdTaskCounter = 0; // cada POST de criação gera um id novo — evita colisão de
@@ -389,6 +389,19 @@ async function test(name, fn) {
     const { tasks } = await res.json();
     assert.strictEqual(tasks.length, 1, 'Bruno tem 1 chamado espelhado no D1 (criado num teste anterior)');
     assert.strictEqual(taskListCallCount, 0, 'GET /api/my-tasks não deveria mais chamar a ClickUp nenhuma vez — lê só do D1');
+  });
+
+  await test('mesmo se o D1 tiver 2+ assignees pra um chamado, GET /api/my-tasks continua devolvendo só 1 (deliberado — evita o custo extra de withAssignees na rota mais chamada do Worker)', async () => {
+    // task-michael-1 já está no D1 (semeado no início do arquivo) — dá 2 operadores
+    // reais na tabela de junção, mas /api/my-tasks nunca passa `withAssignees` pro
+    // d1ListChamados (ver handleGetMyTasks), então a reconstrução de `assignees[]` cai
+    // pro `assignee_id` único de sempre, não o array completo.
+    await d1SetAssignees(env, 'task-michael-1', [170628721, 200498355]);
+    const res = await worker.fetch(req('GET', '/api/my-tasks', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token } }), env);
+    const { tasks } = await res.json();
+    const michael1 = tasks.find(t => t.id === 'task-michael-1');
+    assert.ok(michael1, 'task-michael-1 deveria estar na lista do Michael');
+    assert.strictEqual(michael1.assignees.length, 1, 'sem withAssignees, cai pro assignee_id único — não é bug, é a rota mais chamada do Worker evitando query extra');
   });
 
   console.log('--- /admin/tasks (todos os chamados, com filtros) ---');
@@ -983,6 +996,19 @@ async function test(name, fn) {
     assert.deepStrictEqual(await assigneesDoChamado('multi-op-1'), [170628721, 200498355], 'os DOIS operadores devem estar na tabela de junção');
   });
 
+  // 🛡️ Achado do revisor (2026-08-12): o teste de "array completo de assignees" lá em
+  // cima em /admin/tasks só exercitava um chamado com 1 assignee — nunca provava, pela
+  // rota HTTP de verdade, que 2+ operadores voltam completos (só testes diretos contra
+  // d1GetChamado/a tabela de junção cobriam isso). Fechando essa lacuna aqui, com
+  // multi-op-1 (2 assignees reais) e passando pelo handler real de GET /admin/tasks.
+  await test('GET /admin/tasks devolve os 2+ assignees completos de um chamado real (não só o primeiro) — o motivo de existir a B7 parte 2', async () => {
+    const res = await worker.fetch(req('GET', '/admin/tasks?operador=200498355', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const { tasks } = await res.json();
+    const multiOp = tasks.find(t => t.id === 'multi-op-1');
+    assert.ok(multiOp, 'filtrar pelo 2º operador (Henrique, não o assignee_id "principal") deveria encontrar o chamado mesmo assim');
+    assert.deepStrictEqual(multiOp.assignees.map(a => a.id).sort(), [170628721, 200498355], 'os 2 operadores reais deveriam vir completos, não só o primeiro');
+  });
+
   await test('rodar a migração de novo também sincroniza operador de chamado que já existia (backfill)', async () => {
     // Simula o cenário real de produção: chamado já estava no D1 de antes desta tabela
     // existir (só com assignee_id, sem nada em chamado_assignees ainda).
@@ -1019,6 +1045,67 @@ async function test(name, fn) {
     } finally {
       globalThis.fetch = previousFetch;
     }
+  });
+
+  console.log('--- atomicidade do espelho D1 em atualizações admin (achado do revisor, 2026-08-12) ---');
+  await test('se o .batch() falhar no meio, nem status nem operador mudam no D1 — tudo ou nada, não fica um espelhado e o outro não', async () => {
+    // Env isolado — não quer misturar com o dataset acumulado do resto do arquivo.
+    const atomicEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
+    migrationTasksOverride = [{
+      id: 'atomic-1', name: 'Chamado pra teste de atomicidade',
+      status: { status: 'aberto' }, priority: { priority: 'normal' },
+      assignees: [{ id: 170628721, username: 'Everson' }],
+      custom_fields: [
+        { id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } },
+        { id: TIPO_FIELD_ID, value: 0 },
+        { id: SETOR_FIELD_ID, value: 0 },
+      ],
+    }];
+    await worker.fetch(req('POST', '/admin/migrate-d1', {
+      headers: { 'X-Admin-Secret': atomicEnv.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
+    }), atomicEnv);
+    migrationTasksOverride = null;
+
+    const before = await d1GetChamado(atomicEnv, 'atomic-1');
+    assert.strictEqual(before.status, 'aberto');
+    assert.strictEqual(before.assignee_id, 170628721);
+
+    // Simula um erro transiente do D1 bem no meio da mutação (ex.: rede caiu entre o
+    // request e a resposta do binding) — antes do fix, isso deixava `chamados` e
+    // `chamado_assignees` divergirem silenciosamente (2 chamadas D1 separadas); depois
+    // do fix, os dois vivem no mesmo .batch(), então ou aplicam juntos ou nenhum aplica.
+    const realBatch = atomicEnv.CHAMADOS_DB.batch.bind(atomicEnv.CHAMADOS_DB);
+    atomicEnv.CHAMADOS_DB.batch = async () => { throw new Error('D1 indisponível (simulado)'); };
+
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      if (u.endsWith('/task/atomic-1') && (!opts?.method || opts.method === 'GET')) {
+        return new Response(JSON.stringify({ id: 'atomic-1', assignees: [{ id: 170628721 }] }), { status: 200 });
+      }
+      if (u.endsWith('/task/atomic-1') && opts.method === 'PUT') {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      return previousFetch(url, opts);
+    };
+    try {
+      const res = await worker.fetch(req('POST', '/admin/tasks/atomic-1', {
+        headers: { 'X-Admin-Secret': atomicEnv.ADMIN_SECRET },
+        body: JSON.stringify({ status: 'em atendimento', assigneeId: 200498355 }),
+      }), atomicEnv);
+      // A mutação na ClickUp (mockada) teve sucesso — o endpoint responde 200 mesmo com
+      // o espelho D1 falhando (best-effort, nunca derruba a resposta pro usuário).
+      assert.strictEqual(res.status, 200);
+    } finally {
+      globalThis.fetch = previousFetch;
+      atomicEnv.CHAMADOS_DB.batch = realBatch;
+    }
+
+    const after = await d1GetChamado(atomicEnv, 'atomic-1');
+    assert.strictEqual(after.status, 'aberto', 'status NÃO deveria ter mudado — o batch falhou, nada aplicou');
+    assert.strictEqual(after.assignee_id, 170628721, 'assignee_id também não deveria ter mudado — mesma transação atômica que o status');
+    const { results } = await atomicEnv.CHAMADOS_DB.prepare('SELECT assignee_id FROM chamado_assignees WHERE chamado_id = ?').bind('atomic-1').all();
+    assert.deepStrictEqual(results.map(r => r.assignee_id), [170628721], 'tabela de junção também não deveria ter mudado — sem isso, ficaria mostrando o Henrique enquanto assignee_id ainda diz Everson (ou pior, vazia)');
   });
 
   console.log(`\n${passed} passaram, ${failed} falharam`);

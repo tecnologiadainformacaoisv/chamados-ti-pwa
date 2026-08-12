@@ -85,7 +85,7 @@ async function test(name, fn) {
 
 (async () => {
   const workerPath = pathToFileURL(path.join(__dirname, '..', 'push-worker.js')).href;
-  const { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, d1TransitionStatus } = await import(workerPath);
+  const { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, d1TransitionStatus, d1SetAssignees } = await import(workerPath);
 
   const baseChamado = {
     name: 'Notebook não liga', tipo: 0, setor: 1, solicitante: 'Michael Vasconcelos',
@@ -142,6 +142,20 @@ async function test(name, fn) {
     assert.strictEqual(found.name, baseChamado.name);
     const notFound = await d1GetChamado(env, 'id-que-nao-existe');
     assert.strictEqual(notFound, null);
+  });
+
+  // Achado do revisor (2026-08-12): d1CreateChamado só aceitava 1 assignee_id — quem
+  // um dia ligar essa função a um handler real reintroduziria silenciosamente a mesma
+  // limitação de 1-operador-só que a B7 parte 2 corrigiu em mapClickUpTaskToD1/
+  // d1MigrateChamado. Agora aceita `assignee_ids` (array completo), mesmo padrão.
+  await test('aceita assignee_ids (array completo) e sincroniza a tabela de junção, não só o primeiro', async () => {
+    const env = freshEnv();
+    const created = await d1CreateChamado(env, { ...baseChamado, assignee_ids: [170628721, 200498355] });
+    assert.strictEqual(created.assignee_id, null, 'assignee_id não foi passado — a coluna fica null, só assignee_ids alimenta a junção');
+    const list = await d1ListChamados(env, { assigneeId: 200498355 });
+    assert.strictEqual(list.length, 1, 'deveria achar pelo 2º operador também');
+    const comArray = await d1ListChamados(env, { withAssignees: true });
+    assert.deepStrictEqual(comArray[0].assignee_ids.sort(), [170628721, 200498355]);
   });
 
   console.log('--- listar com filtros ---');
@@ -207,6 +221,41 @@ async function test(name, fn) {
     const list = await d1ListChamados(env, { withAssignees: true });
     assert.strictEqual(list.length, 60);
     assert.ok(list.every(row => Array.isArray(row.assignee_ids) && row.assignee_ids.includes(170628721)), 'todo chamado deveria ter o assignee_ids populado, mesmo fora do 1º pedaço de 50');
+  });
+
+  // Casos de borda do CHUNK=50 em d1GetAssigneesMap — exatamente no limite (não deveria
+  // sobrar um pedaço vazio nem perder a última linha), logo depois do limite (2 pedaços
+  // parelhos), e zero chamados (não deveria nem tentar montar a query).
+  for (const qtd of [0, 50, 51, 100]) {
+    await test(`withAssignees com exatamente ${qtd} chamados não perde nenhum na fronteira do lote`, async () => {
+      const env = freshEnv();
+      for (let i = 0; i < qtd; i++) {
+        await d1CreateChamado(env, { ...baseChamado, name: `Fronteira ${i}`, assignee_id: 170628721 });
+      }
+      const list = await d1ListChamados(env, { withAssignees: true });
+      assert.strictEqual(list.length, qtd);
+      assert.ok(list.every(row => (row.assignee_ids || []).includes(170628721)));
+    });
+  }
+
+  // Cenário exato que motivou a B7 parte 2: um chamado com 2+ operadores atribuídos —
+  // filtrar pelo SEGUNDO (não o primeiro/assignee_id) tem que encontrar o chamado.
+  // `d1CreateChamado` só grava 1 assignee_id (é a coluna única) — d1SetAssignees()
+  // simula o que a migração/atualização real faz pra dar o 2º+ operador de verdade.
+  await test('filtro por operador encontra o chamado mesmo quando ele é o 2º+ atribuído, não o primeiro', async () => {
+    const env = freshEnv();
+    const chamado = await d1CreateChamado(env, { ...baseChamado, name: 'Multi-operador', assignee_id: 170628721 });
+    await d1SetAssignees(env, chamado.id, [170628721, 200498355]); // Everson (1º) + Henrique (2º)
+
+    const porPrimeiro  = await d1ListChamados(env, { assigneeId: 170628721 });
+    const porSegundo   = await d1ListChamados(env, { assigneeId: 200498355 });
+    assert.strictEqual(porPrimeiro.length, 1, 'deveria achar pelo 1º operador (comportamento de sempre)');
+    assert.strictEqual(porSegundo.length, 1, 'deveria achar pelo 2º operador também — é isso que a B7 parte 2 corrigiu');
+    assert.strictEqual(porPrimeiro[0].id, chamado.id);
+    assert.strictEqual(porSegundo[0].id, chamado.id);
+
+    const comAssignees = await d1ListChamados(env, { assigneeId: 200498355, withAssignees: true });
+    assert.deepStrictEqual(comAssignees[0].assignee_ids.sort(), [170628721, 200498355].sort(), 'array completo deveria trazer os 2, não só o filtrado');
   });
 
   console.log('--- atualizar ---');
@@ -285,6 +334,34 @@ async function test(name, fn) {
     await d1CreateChamado(env, { ...baseChamado, status: 'encerrado', assignee_id: 170628721 });
     const m = await d1GetMetrics(env);
     assert.strictEqual(m.tempoMedioPorOperador['170628721'], undefined);
+  });
+
+  // B7 parte 2, fase 2: chamado com 2+ operadores encerrado — cada um recebe a duração
+  // INTEIRA (não dividida entre eles), mesma regra que a versão ClickUp-based sempre teve.
+  await test('tempoMedioPorOperador: chamado com 2 assignees dá a duração inteira pra cada um, não dividida', async () => {
+    const env = freshEnv();
+    const t = await d1CreateChamado(env, { ...baseChamado, status: 'encerrado', assignee_id: 170628721 });
+    await d1SetAssignees(env, t.id, [170628721, 200498355]);
+    await d1UpdateChamado(env, t.id, { startDate: 1000, dateClosed: 1000 + 600000 }); // 10min
+
+    const m = await d1GetMetrics(env);
+    assert.strictEqual(m.tempoMedioPorOperador['170628721'].mediaMs, 600000, 'Everson deveria receber os 10min inteiros');
+    assert.strictEqual(m.tempoMedioPorOperador['200498355'].mediaMs, 600000, 'Henrique também deveria receber os 10min inteiros — não 5min cada');
+    assert.strictEqual(m.tempoMedioPorOperador['170628721'].totalChamados, 1);
+    assert.strictEqual(m.tempoMedioPorOperador['200498355'].totalChamados, 1);
+  });
+
+  // Mesma classe de bug do teste de withAssignees acima (estouro de variáveis bindáveis
+  // do D1), mas pelo caminho de d1GetMetrics — >50 chamados ENCERRADOS com duração
+  // válida é o que dispara a query em lote de d1GetAssigneesMap dentro de d1GetMetrics.
+  await test('tempoMedioPorOperador não quebra com mais de 50 chamados encerrados (chunking em d1GetMetrics)', async () => {
+    const env = freshEnv();
+    for (let i = 0; i < 55; i++) {
+      const t = await d1CreateChamado(env, { ...baseChamado, name: `Encerrado ${i}`, status: 'encerrado', assignee_id: 170628721 });
+      await d1UpdateChamado(env, t.id, { startDate: 1000, dateClosed: 1000 + 60000 });
+    }
+    const m = await d1GetMetrics(env);
+    assert.strictEqual(m.tempoMedioPorOperador['170628721'].totalChamados, 55);
   });
 
   console.log('--- automação de SLA embutida (Fase B5) ---');

@@ -699,13 +699,12 @@ async function handleAdminUpdateTask(request, env, taskId) {
       if (updated.status !== undefined) d1Patch.status = updated.status;
       if (updated.solucao !== undefined) d1Patch.solucao = body.solucao;
       if (updated.assigneeId !== undefined) d1Patch.assigneeId = updated.assigneeId;
-      await d1UpdateChamado(env, taskId, d1Patch);
-      // Sincroniza a tabela de junção também — este endpoint sempre colapsa pra 0 ou 1
-      // operador (o diff add/rem contra a ClickUp já remove qualquer outro que estivesse
-      // atribuído, ver acima), então é seguro substituir por completo aqui.
-      if (updated.assigneeId !== undefined) {
-        await d1SetAssignees(env, taskId, updated.assigneeId != null ? [updated.assigneeId] : []);
-      }
+      // Sincroniza chamados + chamado_assignees no MESMO .batch() (achado do revisor,
+      // 2026-08-12 — ver comentário em d1UpdateChamado) — este endpoint sempre colapsa
+      // pra 0 ou 1 operador (o diff add/rem contra a ClickUp já remove qualquer outro
+      // que estivesse atribuído, ver acima), então é seguro substituir por completo.
+      await d1UpdateChamado(env, taskId, d1Patch,
+        updated.assigneeId !== undefined ? (updated.assigneeId != null ? [updated.assigneeId] : []) : undefined);
     } catch (err) {
       console.warn('espelho D1 falhou na atualização (ClickUp já foi atualizada normalmente):', err.message);
     }
@@ -1107,7 +1106,7 @@ async function d1CreateChamado(env, data) {
   if (!D1_VALID_STATUSES.includes(row.status)) {
     throw new Error(`status inválido: ${row.status}`);
   }
-  await env.CHAMADOS_DB.prepare(
+  const mainStmt = env.CHAMADOS_DB.prepare(
     `INSERT INTO chamados
       (id, name, description, status, priority, tipo, setor, solicitante, email, solucao,
        assignee_id, due_date, date_created, date_closed, start_date, created_at, updated_at)
@@ -1116,14 +1115,18 @@ async function d1CreateChamado(env, data) {
     row.id, row.name, row.description, row.status, row.priority, row.tipo, row.setor,
     row.solicitante, row.email, row.solucao, row.assignee_id, row.due_date, row.date_created,
     row.date_closed, row.start_date, row.created_at, row.updated_at
-  ).run();
-  // Mantém chamado_assignees em sincronia (B7 parte 2, fase 2, 2026-08-12) — mesmo
-  // padrão de d1MigrateChamado/handleAdminUpdateTask. d1CreateChamado ainda não é
-  // chamada por nenhum handler em produção (ver Fase B2), mas os filtros/métricas que
-  // agora leem do D1 (d1ListChamados/d1GetMetrics) dependem dessa tabela como fonte de
-  // verdade pra "quem está atribuído" — sem isso, qualquer chamado criado por aqui no
-  // futuro ficaria invisível pro filtro "operador" e pro tempo médio de atendimento.
-  await d1SetAssignees(env, row.id, row.assignee_id != null ? [row.assignee_id] : []);
+  );
+  // Mantém chamado_assignees em sincronia, no MESMO .batch() da linha principal — atômico
+  // (B7 parte 2, fase 2, 2026-08-12; achado do revisor sobre handleAdminUpdateTask
+  // aplicado aqui também, ver comentário em d1UpdateChamado). Aceita `data.assignee_ids`
+  // (array completo, mesmo padrão de mapClickUpTaskToD1) — cai pro `assignee_id` único
+  // quando não vier, pra quem só passa isso. d1CreateChamado ainda não é chamada por
+  // nenhum handler em produção (ver Fase B2), mas os filtros/métricas que agora leem do
+  // D1 (d1ListChamados/d1GetMetrics) dependem dessa tabela como fonte de verdade pra
+  // "quem está atribuído" — sem isso, qualquer chamado criado por aqui no futuro ficaria
+  // invisível pro filtro "operador" e pro tempo médio de atendimento.
+  const assigneeIds = data.assignee_ids ?? (row.assignee_id != null ? [row.assignee_id] : []);
+  await env.CHAMADOS_DB.batch([mainStmt, ...buildSetAssigneesStatements(env, row.id, assigneeIds)]);
   return d1Row(row);
 }
 
@@ -1213,7 +1216,21 @@ function d1RowToTaskShape(row) {
 // patch: qualquer subconjunto de { status, solucao, assigneeId, description, dueDate,
 // dateClosed, startDate } — só atualiza o que vier, igual handleAdminUpdateTask já faz
 // do lado ClickUp. Não infere efeito colateral nenhum (ver comentário da seção acima).
-async function d1UpdateChamado(env, id, patch) {
+// `assigneeIdsForSync` (B7 parte 2, fase 2 — achado do revisor, 2026-08-12): quando
+// presente (array, mesmo vazio), a atualização de `chamados` e a substituição de
+// `chamado_assignees` viram UM `.batch()` só — atômico, os dois aplicam juntos ou
+// nenhum aplica. Sem isso, eram 2 chamadas D1 separadas dentro do mesmo try/catch
+// best-effort de `handleAdminUpdateTask`: se a 1ª tivesse sucesso e a 2ª falhasse (erro
+// transiente do D1), as duas fontes divergiam **silenciosamente** — e diferente da B7
+// parte 1 (onde uma divergência só afetava `GET /api/my-tasks`, "auto-curada" a cada
+// leitura porque as rotas de admin ainda liam 100% da ClickUp), agora que `GET
+// /admin/tasks`/`GET /admin/metrics` leem exclusivamente de `chamado_assignees` (fase
+// 2), essa divergência ficaria presa até o próximo toque manual no operador — o painel
+// que a TI usa pra decisão (filtro por operador, tempo médio de atendimento) podia
+// ficar errado sem nenhum sinal de erro. `undefined` (padrão) mantém o comportamento de
+// sempre — só atualiza `chamados`, não toca `chamado_assignees` (ex.: `d1TransitionStatus`,
+// que nunca muda operador).
+async function d1UpdateChamado(env, id, patch, assigneeIdsForSync) {
   const fieldMap = {
     status:      'status',
     solucao:     'solucao',
@@ -1239,7 +1256,12 @@ async function d1UpdateChamado(env, id, patch) {
   params.push(Date.now());
   params.push(id);
 
-  await env.CHAMADOS_DB.prepare(`UPDATE chamados SET ${set.join(', ')} WHERE id = ?`).bind(...params).run();
+  const mainStmt = env.CHAMADOS_DB.prepare(`UPDATE chamados SET ${set.join(', ')} WHERE id = ?`).bind(...params);
+  if (assigneeIdsForSync !== undefined) {
+    await env.CHAMADOS_DB.batch([mainStmt, ...buildSetAssigneesStatements(env, id, assigneeIdsForSync)]);
+  } else {
+    await mainStmt.run();
+  }
   return d1GetChamado(env, id);
 }
 
@@ -1404,7 +1426,10 @@ function mapClickUpTaskToD1(task, idxToName) {
 // 1 INSERT OR IGNORE em `chamados` por linha, então de repente virou 1 + até 3 nessa
 // função = 4 subrequests/linha, quadruplicando o total. Corrigido usando `.batch()` do
 // binding D1 (manda todos os statements num round-trip só — 1 subrequest, não N).
-async function d1SetAssignees(env, chamadoId, assigneeIds) {
+// Monta os statements (sem executar) — extraído de d1SetAssignees pra dar pra combinar
+// num .batch() só com OUTRAS mutações no mesmo chamado (ver d1UpdateChamado logo abaixo
+// e o achado de consistência descrito lá).
+function buildSetAssigneesStatements(env, chamadoId, assigneeIds) {
   const statements = [
     env.CHAMADOS_DB.prepare('DELETE FROM chamado_assignees WHERE chamado_id = ?').bind(chamadoId),
   ];
@@ -1415,7 +1440,11 @@ async function d1SetAssignees(env, chamadoId, assigneeIds) {
       ).bind(chamadoId, id)
     );
   }
-  await env.CHAMADOS_DB.batch(statements);
+  return statements;
+}
+
+async function d1SetAssignees(env, chamadoId, assigneeIds) {
+  await env.CHAMADOS_DB.batch(buildSetAssigneesStatements(env, chamadoId, assigneeIds));
 }
 
 // Suporte a múltiplos operadores (B7 parte 2, fase 2, 2026-08-12) — busca os assignees
