@@ -28,8 +28,18 @@ function makeD1FromSqlite(db) {
         async all() {
           return { results: db.prepare(sql).all(...boundParams), success: true };
         },
+        _sql: sql,
+        _params: () => boundParams,
       };
       return stmt;
+    },
+    // Mesmo adaptador de .batch() de tests/d1-layer.test.js — ver comentário lá.
+    async batch(statements) {
+      const results = [];
+      for (const stmt of statements) {
+        results.push(await db.prepare(stmt._sql).run(...stmt._params()));
+      }
+      return results.map(info => ({ success: true, meta: { changes: info.changes, last_row_id: info.lastInsertRowid } }));
     },
   };
 }

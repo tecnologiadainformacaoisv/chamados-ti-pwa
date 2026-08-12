@@ -30,8 +30,22 @@ function makeD1FromSqlite(db) {
           const results = db.prepare(sql).all(...boundParams);
           return { results, success: true };
         },
+        _sql: sql,
+        _params: () => boundParams,
       };
       return stmt;
+    },
+    // Suporte a múltiplos operadores (B7 parte 2, fase 1) — .batch() do binding D1 real
+    // manda N statements num round-trip só (1 subrequest, não N). O achado de produção
+    // que motivou isso: `POST /admin/migrate-d1` estourava o teto de subrequests por
+    // invocação do Worker (~1000 no plano pago) fazendo DELETE+INSERT sequencial por
+    // chamado — ver comentário em d1SetAssignees em push-worker.js.
+    async batch(statements) {
+      const results = [];
+      for (const stmt of statements) {
+        results.push(await db.prepare(stmt._sql).run(...stmt._params()));
+      }
+      return results.map(info => ({ success: true, meta: { changes: info.changes, last_row_id: info.lastInsertRowid } }));
     },
   };
 }

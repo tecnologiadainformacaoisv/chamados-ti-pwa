@@ -1409,13 +1409,28 @@ function mapClickUpTaskToD1(task, idxToName) {
 // completo quem está atribuído a um chamado na tabela de junção. DELETE+INSERT em vez
 // de tentar calcular um diff (mesmo espírito simples do resto da camada D1 — não é
 // hot path). `assigneeIds` vazio/undefined só limpa (chamado sem ninguém atribuído).
+//
+// ⚠️ Achado real rodando o backfill em produção (2026-08-12): a versão original daqui
+// fazia 1 DELETE + N INSERT sequenciais (`.run()` por statement) — cada um conta como
+// um subrequest separado do Worker. Rodando `POST /admin/migrate-d1` pra backfillar os
+// 453 chamados existentes, isso estourou o teto de subrequests por invocação do Worker
+// (erro real da Cloudflare: "Too many API requests by single Worker invocation", ~1000
+// no plano pago) depois de ~332 chamados processados — a migração sempre vinha fazendo
+// 1 INSERT OR IGNORE em `chamados` por linha, então de repente virou 1 + até 3 nessa
+// função = 4 subrequests/linha, quadruplicando o total. Corrigido usando `.batch()` do
+// binding D1 (manda todos os statements num round-trip só — 1 subrequest, não N).
 async function d1SetAssignees(env, chamadoId, assigneeIds) {
-  await env.CHAMADOS_DB.prepare('DELETE FROM chamado_assignees WHERE chamado_id = ?').bind(chamadoId).run();
+  const statements = [
+    env.CHAMADOS_DB.prepare('DELETE FROM chamado_assignees WHERE chamado_id = ?').bind(chamadoId),
+  ];
   for (const id of (assigneeIds || [])) {
-    await env.CHAMADOS_DB.prepare(
-      'INSERT OR IGNORE INTO chamado_assignees (chamado_id, assignee_id) VALUES (?, ?)'
-    ).bind(chamadoId, id).run();
+    statements.push(
+      env.CHAMADOS_DB.prepare(
+        'INSERT OR IGNORE INTO chamado_assignees (chamado_id, assignee_id) VALUES (?, ?)'
+      ).bind(chamadoId, id)
+    );
   }
+  await env.CHAMADOS_DB.batch(statements);
 }
 
 async function d1MigrateChamado(env, data) {
@@ -1433,7 +1448,8 @@ async function d1MigrateChamado(env, data) {
   // Sempre sincroniza os operadores, mesmo quando o INSERT acima foi ignorado (chamado
   // já existia) — é assim que rodar a migração de novo também BACKFILLA o 2º+ operador
   // dos chamados que já estavam no D1 antes desta tabela existir (ela só guardava o
-  // primeiro até aqui).
+  // primeiro até aqui). d1SetAssignees já é 1 subrequest só (.batch()) — total de 2
+  // subrequests/linha nesta função (INSERT + batch), bem abaixo do teto mesmo pros 453.
   if (data.assignee_ids !== undefined) {
     await d1SetAssignees(env, data.id, data.assignee_ids);
   }
