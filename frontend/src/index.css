@@ -162,3 +162,29 @@
 .task-highlight {
   animation: highlight-pulse .75s ease 3;
 }
+
+/* ============================================================
+   TRATAMENTO DE MARCA (gradiente/sombra) — achado real de 2026-08-12: a Fase
+   F1 portou os TOKENS de cor certos (hex batendo com css/style.css/admin.css),
+   mas não os EFEITOS que davam a identidade visual do app antigo (fundo em
+   gradiente diagonal no login/gate, header/sidebar em gradiente, sombra grande
+   no card flutuante, botão primário em gradiente com leve "lift" no hover) —
+   sem isso, a paleta certa renderizava como um shadcn genérico chapado. Valores
+   fixos (não ligados a --primary/oklch nem a .dark) porque o app original nunca
+   teve modo escuro — é a mesma identidade navy sempre. Ver CLAUDE.md.
+   ============================================================ */
+.bg-brand-gradient {
+  background: linear-gradient(135deg, #0f2347 0%, #1a3a6b 50%, #2a5298 100%);
+}
+.bg-sidebar-gradient {
+  background: linear-gradient(180deg, #0f2347 0%, #1a3a6b 100%);
+}
+/* O componente <Sidebar> do shadcn não expõe a div interna que de fato pinta o
+   fundo (data-slot="sidebar-inner") pra className — só a externa. Selector
+   descendente em vez de mexer no primitivo compartilhado. */
+.bg-sidebar-gradient [data-slot="sidebar-inner"] {
+  background: linear-gradient(180deg, #0f2347 0%, #1a3a6b 100%);
+}
+.shadow-brand-card {
+  box-shadow: 0 24px 64px rgba(0, 0, 0, .3);
+}

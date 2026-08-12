@@ -9,7 +9,10 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/80",
+        // Gradiente + "lift" no hover reproduzem .btn-primary de css/style.css
+        // (achado de 2026-08-12: a Fase F1 só tinha portado a cor chapada).
+        default:
+          "bg-gradient-to-br from-[#2a5298] to-primary text-primary-foreground shadow-sm hover:opacity-90 hover:-translate-y-px active:translate-y-0 active:opacity-100",
         outline:
           "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary:

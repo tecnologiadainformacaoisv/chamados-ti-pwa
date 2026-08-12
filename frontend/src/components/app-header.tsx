@@ -12,7 +12,7 @@ export function AppHeader() {
   const queryClient = useQueryClient()
 
   return (
-    <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-primary px-4 text-primary-foreground">
+    <header className="bg-brand-gradient flex h-16 shrink-0 items-center justify-between px-4 text-primary-foreground shadow-[0_2px_12px_rgba(0,0,0,0.2)]">
       <div className="flex items-center gap-3">
         <SidebarTrigger className="text-primary-foreground hover:bg-white/10 hover:text-primary-foreground" />
         <img src={logoIsv} alt="Instituto São Vicente" className="h-8 w-8 invert" />

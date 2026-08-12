@@ -30,7 +30,7 @@ export function AppSidebar({
   return (
     <Sidebar
       collapsible="icon"
-      className="border-sidebar-border bg-sidebar text-sidebar-foreground"
+      className="bg-sidebar-gradient border-sidebar-border text-sidebar-foreground"
     >
       <SidebarHeader className="p-4">
         <div className="flex items-center gap-2 overflow-hidden">

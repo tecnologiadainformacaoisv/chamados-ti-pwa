@@ -31,8 +31,9 @@ export function GateScreen() {
   }
 
   return (
-    <div className="flex min-h-svh items-center justify-center bg-muted p-4">
-      <div className="w-full max-w-sm rounded-lg border border-border bg-card p-8 shadow-lg">
+    <div className="relative flex min-h-svh items-center justify-center p-4">
+      <div className="bg-brand-gradient fixed inset-0 z-0" />
+      <div className="shadow-brand-card relative z-10 w-full max-w-sm rounded-[20px] bg-card p-8">
         <div className="mb-6 flex flex-col items-center gap-2 text-center">
           <img src={logoIsv} alt="" className="h-14 w-14" />
           <h1 className="text-lg font-semibold text-foreground">Painel de Admin</h1>
