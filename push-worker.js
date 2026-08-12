@@ -1419,19 +1419,33 @@ async function d1SetAssignees(env, chamadoId, assigneeIds) {
 }
 
 // Suporte a múltiplos operadores (B7 parte 2, fase 2, 2026-08-12) — busca os assignees
-// de um lote de chamados de uma vez só (1 query, `IN (...)`) em vez de 1 por chamado,
-// devolve Map<chamado_id, number[]>. Usado por d1ListChamados (quando `withAssignees`)
-// e d1GetMetrics pra reconstruir o array completo, igual `assignees[]` da ClickUp.
+// de um lote de chamados de uma vez só (`IN (...)`, em pedaços — ver abaixo) em vez de
+// 1 query por chamado, devolve Map<chamado_id, number[]>. Usado por d1ListChamados
+// (quando `withAssignees`) e d1GetMetrics pra reconstruir o array completo, igual
+// `assignees[]` da ClickUp.
+//
+// ⚠️ Achado real em produção (2026-08-12): a primeira versão mandava TODOS os ids num
+// `IN (...)` só — com os 454 chamados reais (ex.: /admin/metrics, ou /admin/tasks sem
+// filtro/com filtro de status que bate em centenas de linhas, como "encerrado"), isso
+// estourou o limite de variáveis bindáveis por statement do SQLite/D1 (`error code:
+// 1101`, exceção não tratada — 500 puro, sem nem chegar no jsonRes de erro). Corrigido
+// dividindo em pedaços de no máximo CHUNK ids por query — bem abaixo de qualquer teto
+// real (SQLite costuma permitir centenas a ~999; 50 é conservador de propósito, sem
+// motivo pra chegar perto do limite).
 async function d1GetAssigneesMap(env, chamadoIds) {
   const map = new Map();
   if (!chamadoIds.length) return map;
-  const placeholders = chamadoIds.map(() => '?').join(',');
-  const { results } = await env.CHAMADOS_DB.prepare(
-    `SELECT chamado_id, assignee_id FROM chamado_assignees WHERE chamado_id IN (${placeholders})`
-  ).bind(...chamadoIds).all();
-  for (const r of (results || [])) {
-    if (!map.has(r.chamado_id)) map.set(r.chamado_id, []);
-    map.get(r.chamado_id).push(r.assignee_id);
+  const CHUNK = 50;
+  for (let i = 0; i < chamadoIds.length; i += CHUNK) {
+    const chunk = chamadoIds.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => '?').join(',');
+    const { results } = await env.CHAMADOS_DB.prepare(
+      `SELECT chamado_id, assignee_id FROM chamado_assignees WHERE chamado_id IN (${placeholders})`
+    ).bind(...chunk).all();
+    for (const r of (results || [])) {
+      if (!map.has(r.chamado_id)) map.set(r.chamado_id, []);
+      map.get(r.chamado_id).push(r.assignee_id);
+    }
   }
   return map;
 }

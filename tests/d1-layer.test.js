@@ -193,6 +193,22 @@ async function test(name, fn) {
     assert.strictEqual(list[0].name, 'A');
   });
 
+  // 🛡️ Regressão real de produção (2026-08-12, B7 parte 2 fase 2): `withAssignees`
+  // busca os assignees de todos os chamados retornados via `IN (...)` — com volume
+  // real (454 chamados), a versão original mandava todos os ids numa query só e
+  // estourava o limite de variáveis bindáveis do SQLite/D1 ("error code: 1101", 500
+  // puro em produção). Corrigido com paginação em pedaços de 50 — este teste teria
+  // pego isso antes do deploy (60 chamados > qualquer teto razoável de 1 pedaço só).
+  await test('withAssignees não quebra com volume acima do tamanho de 1 lote (60 chamados)', async () => {
+    const env = freshEnv();
+    for (let i = 0; i < 60; i++) {
+      await d1CreateChamado(env, { ...baseChamado, name: `Bulk ${i}`, assignee_id: 170628721 });
+    }
+    const list = await d1ListChamados(env, { withAssignees: true });
+    assert.strictEqual(list.length, 60);
+    assert.ok(list.every(row => Array.isArray(row.assignee_ids) && row.assignee_ids.includes(170628721)), 'todo chamado deveria ter o assignee_ids populado, mesmo fora do 1º pedaço de 50');
+  });
+
   console.log('--- atualizar ---');
   await test('atualiza só o campo enviado (solucao) — não mexe em status/assignee', async () => {
     const env = freshEnv();
