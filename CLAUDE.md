@@ -32,39 +32,43 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 /
 ├── README.md           ← visão geral e instruções
 ├── CLAUDE.md           ← este arquivo
-├── index.html          ← UI única (SPA sem roteador)
-├── admin.html          ← painel de admin (fase 2) — página separada, não faz parte do PWA/manifest
-├── sw.js               ← service worker (cache offline + interceptação fetch) — escopo raiz
+├── index.html          ← ⚠️ RETIRADO da produção desde a Fase F5 (2026-08-12) — ver nota abaixo
+├── admin.html          ← ⚠️ RETIRADO da produção desde a Fase F5 (2026-08-12) — ver nota abaixo
+├── sw.js                ← ⚠️ RETIRADO da produção desde a Fase F5 — ver nota abaixo
 ├── push-worker.js      ← fonte do Cloudflare Worker de push (deploy automatizado, ver "Deploy do Worker")
 ├── wrangler.toml       ← config do Worker pro Wrangler (nome, entrypoint, binding do KV) — sem secrets
-├── manifest.json       ← manifesto PWA
-├── css/
-│   ├── style.css       ← estilos do app principal
-│   └── admin.css       ← estilos exclusivos do painel de admin (reaproveita tokens/componentes de style.css)
-├── js/
-│   ├── app.js          ← toda a lógica do app principal: state, API, render, eventos
-│   └── admin.js        ← lógica do painel de admin: gate de segredo, filtros, métricas, tabela
+├── manifest.json       ← ⚠️ RETIRADO da produção desde a Fase F5 — ver nota abaixo
+├── css/                  ← ⚠️ RETIRADO da produção — mesma nota
+├── js/                   ← ⚠️ RETIRADO da produção — mesma nota
 ├── tests/
-│   ├── app.test.js         ← testes de js/app.js
+│   ├── app.test.js         ← testes de js/app.js (código retirado da produção, mas os testes continuam valendo/passando — ver nota)
 │   ├── push-worker.test.js ← testes do Worker (auth, isolamento entre solicitantes, rotas /admin/*)
 │   ├── d1-layer.test.js    ← testes da camada de dados D1 + automação de SLA (Fases B2/B5, node:sqlite)
 │   ├── r2-layer.test.js    ← testes da camada de anexos R2 (Fase B4, mock em memória)
 │   └── run-all.js          ← roda as 4 suítes de uma vez (`npm test`, Fase B6)
 ├── d1/
 │   └── schema.sql          ← schema do banco D1 (Fase B2) — não usado em produção ainda
-├── frontend/                ← reescrita em React do painel de admin (F1-F3) e do app dos
-│                               solicitantes (F4) — package.json próprio, zero-dependência
-│                               não se aplica aqui (ver "Decisões técnicas")
+├── frontend/                ← ✅ CÓDIGO REAL DE PRODUÇÃO desde a Fase F5 (2026-08-12) — React,
+│                               package.json próprio, zero-dependência não se aplica aqui (ver
+│                               "Decisões técnicas"). Build MPA: `admin.html`+`index.html` como
+│                               entradas de verdade (`vite.config.ts`), publicado via
+│                               `.github/workflows/deploy-frontend.yml`
 ├── package.json             ← só pelo atalho `npm test` (Fase B6) — sem dependência nenhuma
 └── assets/
-    ├── icon.svg            ← ícone principal
-    ├── icon-maskable.svg   ← ícone adaptável (Android)
-    ├── favicon-isv.png     ← ícone da aba do navegador (logo ISV invertido pro fundo escuro)
-    └── logo-isv.svg        ← logo do instituto
+    ├── icon.svg            ← ícone principal (fonte pra frontend/public/, copiado na F4.5)
+    ├── icon-maskable.svg   ← ícone adaptável (Android) (idem)
+    ├── favicon-isv.png     ← ícone da aba do navegador (idem)
+    └── logo-isv.svg        ← logo do instituto (idem, frontend/src/assets/)
 ```
 
-> ⚠️ `index.html`, `sw.js`, `manifest.json` e `push-worker.js` **permanecem na raiz**: o escopo do
-> service worker é a pasta onde o `sw.js` está, e o GitHub Pages serve a partir da raiz.
+> ⚠️ **Fase F5 (2026-08-12): corte de produção do frontend feito — `index.html`/`admin.html`/`js/`/
+> `css/`/`sw.js`/`manifest.json` na raiz do repo NÃO são mais o que está no ar.** O GitHub Pages
+> deste repo foi trocado de "Deploy from a branch" (servia esses arquivos direto) pra "GitHub
+> Actions" (`build_type: workflow`) — agora serve exclusivamente o que
+> `.github/workflows/deploy-frontend.yml` publica a partir de `frontend/dist`. Os arquivos vanilla
+> **continuam no repo de propósito**, intocados, como caminho de rollback rápido (ver "Deploy do
+> Frontend" pra como reverter) — não apague sem decisão explícita separada. Os testes de
+> `js/app.js`/`push-worker.js` continuam rodando e válidos (o Worker não mudou nada).
 
 ---
 
@@ -130,6 +134,17 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 - **`wrangler.toml` não declara nenhum secret do Worker** (`CLICKUP_API_KEY`, `SUBSCRIBE_SECRET`, `ADMIN_SECRET`, `VAPID_PRIVATE_JWK`) — só `name`, `main` e o binding do KV `SUBSCRIPTIONS` (com o ID real da conta). Esses secrets continuam geridos manualmente (dashboard da Cloudflare ou `wrangler secret put`, uma vez só) — `wrangler deploy` nunca os toca, então não há risco do deploy automático apagar/sobrescrever nenhum deles.
 - Testado de ponta a ponta em 2026-08-10: push → workflow disparado automaticamente → `wrangler deploy` publicado com sucesso → Worker respondendo em produção com os secrets intactos (confirmado via chamada real a `/admin/users`).
 
+## Deploy do Frontend
+
+- **Automatizado desde 2026-08-12 (Fase F5)** — `git push` na `main` que toque em `frontend/**` (ou no próprio workflow) dispara `.github/workflows/deploy-frontend.yml`: `npm ci` + `npm run build` (Vite, build MPA — ver abaixo) em `frontend/`, depois publica `frontend/dist` via `actions/upload-pages-artifact` + `actions/deploy-pages`. Também pode ser disparado manualmente em Actions → "Deploy Frontend (GitHub Pages)" → Run workflow.
+- **GitHub Pages deste repo é um project site** (`https://tecnologiadainformacaoisv.github.io/chamados-ti-pwa/`, não um domínio próprio) — os assets do build precisam do prefixo `/chamados-ti-pwa/`, senão pedem na raiz errada e dão 404. `frontend/vite.config.ts` resolve isso com `base` condicional (`'/chamados-ti-pwa/'` só no build de produção; `'/'` em dev/preview local, sem mudar o fluxo de trabalho do dia a dia).
+- **Build MPA (multi-page app)** — `admin.html` e `index.html` são duas entradas HTML de verdade (`build.rollupOptions.input` em `vite.config.ts`), cada uma com seu próprio `main-*.tsx` (`src/main.tsx` monta `SolicitanteApp`, `src/main-admin.tsx` monta `AdminApp`) — produz dois bundles JS separados, como duas páginas de fato independentes (mesma decisão de arquitetura já registrada: "mesma estrutura de hoje, uma página por app"). O switcher de dev por hash (`App.tsx`) foi removido — não precisa mais, cada entrada já roda o app certo nativamente em dev/build/preview.
+- **`admin.html` nunca deve ser PWA** (documentado desde a F4.5) — mas o `vite-plugin-pwa` injeta `<link rel="manifest">` em toda entrada HTML do build MPA sem opção nativa de escopar por página. `frontend/scripts/fix-admin-html.mjs` roda como último passo do `npm run build` e remove essa tag só de `dist/admin.html`.
+- **⚠️ Achado real, não documentado em lugar nenhum antes de acontecer aqui:** rodar `actions/deploy-pages` com sucesso **publica o site imediatamente como conteúdo servido de verdade — independente do `build_type` configurado no repositório.** A expectativa era que isso só aconteceria depois de trocar manualmente o source das Pages de "Deploy from a branch" (`legacy`) pra "GitHub Actions" (`workflow`) via API/dashboard — mas o primeiro push desta fase, feito só pra validar que o build passava no CI, **já cortou produção de verdade** na hora (confirmado via `Last-Modified` do HTML servido e via `<script src>` mudando pro bundle do Vite). A configuração do `build_type` só decide quem tem permissão de *disparar* um build automático (branch vs. workflow) — não qual deployment está *ativo*; um deployment via Actions sempre vence. **Lição pra qualquer corte de produção futuro neste repo (inclui a B7 dentro do Worker, se algum dia usar um mecanismo parecido): tratar "buildar no CI" e "publicar de verdade" como o mesmo evento, não dois passos separados — não existe uma etapa de build "sem risco" quando o deploy final usa `deploy-pages`.**
+- **Corrigido na mesma hora:** trocado o `build_type` das Pages pra `workflow` via `gh api --method PUT .../pages -f build_type=workflow`, deixando a configuração consistente com o que já estava sendo servido — sem isso, um push futuro que só tocasse em outro arquivo (ex.: um fix no Worker) poderia disparar o build legado de novo e reverter o site pro vanilla sem ninguém pedir.
+- **Como reverter (rollback), se algum dia precisar:** os arquivos vanilla (`index.html`/`admin.html`/`js/`/`css/`/`sw.js`/`manifest.json` na raiz) continuam intactos no repo de propósito. Trocar `build_type` de volta pra `legacy` (`gh api --method PUT .../pages -f build_type=legacy`) faz o GitHub voltar a auto-buildar da branch a cada push — um push (mesmo vazio, `--allow-empty`) na `main` depois disso re-publica o vanilla como conteúdo ativo, revertendo o corte.
+- Testado de ponta a ponta em 2026-08-12: push → workflow disparado automaticamente → build MPA publicado com sucesso → site em produção respondendo com dado real (452 chamados reais carregados no Quadro/Tabela/Dashboard do admin, lista real de solicitantes na tela de login) — sem erro de console em nenhuma das duas páginas.
+
 ---
 
 ## Fluxo do usuário
@@ -177,9 +192,9 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 
 ## Estado atual do desenvolvimento
 
-> Última atualização: 2026-08-11
+> Última atualização: 2026-08-12
 
-- **Versão:** v0.3.0. Branch `main`. Pré-teste de usabilidade (UX já tratada para essa etapa).
+- **🚀 Fase F5 concluída (2026-08-12): o frontend em produção agora é o build React** (`frontend/`), publicado via `.github/workflows/deploy-frontend.yml` no GitHub Pages. Os arquivos vanilla (`index.html`/`admin.html`/`js/`/`css/`/`sw.js`/`manifest.json` na raiz) foram **retirados da produção** (continuam no repo como caminho de rollback, ver "Estrutura de arquivos" e "Deploy do Frontend" — não são mais o que roda pro usuário). `<meta name="app-version">`/footer do `index.html` antigo (versionamento `v0.3.x`) não se aplica mais — o frontend novo não tem esquema de versão próprio ainda declarado.
 - **PWA funcional** integrado ao ClickUp como backend (lista `901324490220`), sem banco próprio.
 - **O que funciona hoje:**
   - Abertura de chamado com tipo/setor/descrição e **anexo opcional** (limite 10 MB; suporta colar print via Ctrl+V).
@@ -190,7 +205,7 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
   - **Notificações push** via Cloudflare Worker (`chamados-ti-push.tecnologiadainformacao-isv.workers.dev`), acionadas por automação do ClickUp na mudança de status.
   - **Login com senha** (pedido da diretoria) — identidade decidida pelo Worker via sessão, ninguém vê chamado de outra pessoa mesmo selecionando o nome dela. Ver seção "Autenticação".
   - **Lista de solicitantes buscada em runtime da ClickUp** (`loadSolicitantes()`), com tela de boot/loading antes do login; sem mais array fixo pra manter sincronizado a cada colaborador novo.
-  - **Painel de admin** (`admin.html`/`admin.js`) — deixou de ser só leitura: além de consumir `GET /admin/tasks`/`GET /admin/metrics`, agora tem `POST /admin/tasks/:id` pra mudar status, escrever solução e atribuir operador (botão "Gerenciar" por linha) — é onde a TI trabalha, sem precisar mais abrir a ClickUp. Ver "Painel de admin". Segredo de admin nunca fica no código, só no `localStorage` de quem loga na tela de gate.
+  - **Painel de admin** (React, `frontend/` → `admin.html` em produção desde a F5) — deixou de ser só leitura: além de consumir `GET /admin/tasks`/`GET /admin/metrics`, agora tem `POST /admin/tasks/:id` pra mudar status, escrever solução e atribuir operador (botão "Gerenciar" por linha) — é onde a TI trabalha, sem precisar mais abrir a ClickUp. Ver "Painel de admin". Segredo de admin nunca fica no código, só no `localStorage` de quem loga na tela de gate.
 - **Tratamento de erros amigável** e suporte offline básico implementados (v0.2.0) — obs: o boot atual (busca da lista de solicitantes) depende de rede mesmo pra quem já tinha configurado o app; ver "Próximos passos".
 - **Testes unitários** em `tests/*.test.js` (`app.test.js`, `push-worker.test.js`, `d1-layer.test.js`, `r2-layer.test.js` — 142 testes no total) — sem dependências de runtime: `node vm`/`fetch`/`node:sqlite`/`assert`, todos nativos do Node. Rodar tudo de uma vez com `npm test` (ou `node tests/run-all.js`); `package.json` existe só por causa desse atalho, não declara nenhuma dependência.
 - **Deploy do Worker automatizado** (2026-08-10) — `push-worker.js` deixou de ser colado manualmente no dashboard da Cloudflare; agora publica via Wrangler + GitHub Actions a cada push na `main`. Ver "Deploy do Worker".
@@ -212,6 +227,7 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 - **Versão declarada em três lugares** a manter sincronizados: `<meta name="app-version">` e o `<footer>` no `index.html`, e `APP_VERSION` no `sw.js` (esse último precisa mudar mesmo em fixes só de `app.js`, pra forçar a invalidação do cache do Service Worker). `admin.html`/`admin.js` ficam de fora dessa obrigação — página separada, sem versão própria declarada.
 - **`ADMIN_SECRET` nunca é hardcoded em `admin.js`** — decisão tomada ao construir a Fase 2 (2026-08-06): diferente do `APP_SHARED_SECRET` (público por design, só libera o proxy), o segredo de admin dá acesso a dados de todo mundo, então não pode existir em código publicado no GitHub Pages. `admin.html` pede o segredo numa tela de gate e guarda só no `localStorage` de quem digitou.
 - **Banco Cloudflare D1 provisionado em 2026-08-10, mas ainda não usado** — explorado como alternativa/complemento à ClickUp como backend (avaliado ao lado de Supabase e Turso; D1 escolhido pra esse teste por já ser nativo da mesma conta/plataforma do Worker, sem serviço/conta externa nova). Binding `CHAMADOS_DB` em `wrangler.toml` (banco `chamados-ti-db`). **Nenhuma lógica de chamado usa isso ainda** — `push-worker.js` continua 100% ClickUp como fonte de verdade. Migrar de fato é decisão futura separada, não tomada ainda (ver "Próximos passos").
+- **🚀 Fase F5 concluída (2026-08-12): corte de produção do frontend — o build React (`frontend/`) é o que está no ar.** Build MPA (`admin.html`+`index.html` como entradas reais, `main.tsx`/`main-admin.tsx`), `base` do Vite condicional pro subpath do GitHub Pages (`/chamados-ti-pwa/`), `scripts/fix-admin-html.mjs` removendo o `<link rel="manifest">` que o `vite-plugin-pwa` injetava em `admin.html` sem distinção. Pipeline novo (`deploy-frontend.yml`, mesmo padrão do Worker). **Achado real e documentado em "Deploy do Frontend":** `actions/deploy-pages` publica de verdade assim que roda, independente do `build_type` configurado no repositório — o primeiro push desta fase (só pra validar o build no CI) já cortou produção sozinho, mais cedo do que o planejado. Verificado depois, ao vivo, contra o Worker/ClickUp reais (não mockado): 452 chamados carregando certo no Quadro/Tabela/Dashboard do admin, lista real de solicitantes na tela de login, zero erro de console. `build_type` corrigido pra `workflow` na sequência, deixando a configuração consistente (evita reversão acidental por um push futuro em outro arquivo). Arquivos vanilla continuam no repo como rollback (ver "Estrutura de arquivos"). Decisões de execução já tomadas em 2026-08-11 (mesma estrutura de páginas, corte dos dois apps junto) seguidas à risca.
 - **Fase B2 do roadmap de modernização concluída (2026-08-11): camada de dados D1 escrita, testada, sem nenhuma rota usando ainda.** Schema em `d1/schema.sql` (tabela `chamados`, já aplicado no banco real via API da Cloudflare — confirmado com smoke test de CRUD completo direto no D1 de produção). Funções `d1CreateChamado`/`d1GetChamado`/`d1ListChamados`/`d1UpdateChamado`/`d1GetMetrics` em `push-worker.js`, exportadas mas não chamadas por nenhum handler — a ClickUp continua 100% a fonte de verdade em produção, isso é só preparação pra uma migração futura (B3 em diante). 16 testes novos em `tests/d1-layer.test.js`, usando `node:sqlite` (nativo do Node, zero dependência) rodando o mesmo `d1/schema.sql` real num banco em memória — testa as funções de produção de verdade, não uma reimplementação paralela. 122 testes no total (53+53+16), 0 falhando.
 - **Fase F4.5 concluída (2026-08-11): anexo, push notifications e PWA/Service Worker no app dos solicitantes em React, também só local.** Fecha o gap identificado ao terminar a F4 — pré-requisito decidido pra F5 (os dois apps só trocam juntos, ver "Próximos passos"). Anexo: escolher arquivo ou colar print (Ctrl+V) no formulário (`anexo-helpers.ts`), upload via multipart depois de criar a task (`uploadAttachment` em `app-api.ts`, não derruba a abertura do chamado se falhar — aviso mostrado no modal de WhatsApp, que fica montado independente da aba); chip de anexo existente + modal de preview no `TicketCard`, buscado via `GET /tasks/:id` (única rota que devolve `attachments`), keyed por `task.id`+`date_updated` no TanStack Query (substitui o `Map` manual de cache da versão vanilla pelo cache nativo da lib). Push: `use-push-notifications.tsx` porta `subscribeToPush()`/`setupNotifications()` de `app.js` 1:1 (mesmo `VAPID_PUBLIC_KEY`, mesmo endpoint `/subscribe`, mesma janela de 24h pra reaparecer o banner). PWA: `vite-plugin-pwa` em modo `injectManifest` (não `generateSW`) — o Workbox monta a lista de precache dos assets com hash do Vite automaticamente, eliminando a classe de bug do incidente de 2026-08-10 (lista de nomes fixos escrita à mão desincronizando do build); `sw.ts` porta os handlers de push/notificationclick/fetch-bypass de `sw.js` quase 1:1, registrado via `useRegisterSW()` só quando o `SolicitanteApp` monta — `admin.html`/`AdminApp` continuam nunca sendo PWA. Deep-link por hash (`#aba:taskId`) e mensagem do SW (`OPEN_TASK`) pro clique em notificação abrir a aba/chamado certo, com o pulso visual (`.task-highlight`, agora em `index.css`).
   - 🛡️ **Achado testando esta fase:** uma vez o Service Worker está no controle da página, ele redespacha `fetch()` de dentro do próprio contexto — fora do alcance do `page.route()` do Playwright, que só intercepta no nível da página/frame. Os testes funcionais (login, anexo, banner, deep-link) rodam com o SW bloqueado nesse contexto (`serviceWorkers: 'block'`); o registro do SW em si, o manifest e o precache são verificados num contexto separado, sem mock de API. Não é um bug do app — é uma limitação de como o Playwright intercepta rede quando um SW real está ativo, documentada aqui pra não ser redescoberta.
@@ -241,13 +257,10 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
    - 🛡️ **Auditoria do agente `revisor` (2026-08-07)** sobre a Fase 4 + Quadro/sidebar/drag-and-drop: nada crítico de segurança novo. Achado mais grave (corrigido): o modal "Gerenciar" sempre mandava `assigneeId` no `POST`, então salvar qualquer campo (ex.: só status) num chamado com 2+ operadores atribuídos apagava um deles em silêncio — agora só manda esse campo se o admin realmente tocá-lo (`operadorTouched`), e o modal avisa quando há múltiplos atribuídos. Também corrigido: validação de tipo de `solucao`/`assigneeId` no Worker (antes aceitava valor errado sem avisar), modal não assume mais "Aberto" em silêncio pra status desconhecido (avisa), cor do "Aberto" sincronizada entre `app.js`/`admin.js`, `viewMode`/grupos recolhidos da Tabela agora persistem em `localStorage`. Documentado como limitação aceita (não corrigido): as 3 sub-mutações de `POST /admin/tasks/:id` não são atômicas (sem rollback entre elas, já que cada uma é uma chamada separada à ClickUp) — em caso de falha no meio, a resposta de erro agora inclui `updated` com o que já tinha sido aplicado, pra não mascarar estado parcial.
    - ⏳ **Ainda não implementado:** exportar/reatribuir em lote (várias tasks de uma vez), histórico de quem mudou o quê (a ClickUp guarda isso nativamente, mas o painel não expõe), qualquer validação de transição de status (o painel aceita qualquer um dos 4 status a qualquer momento, igual a própria ClickUp permite pela UI dela), suporte de verdade a múltiplos operadores atribuídos no modal (hoje só pré-seleciona 1 e avisa se houver mais), e testes automatizados pro `admin.js` (busca/paginação por grupo/Kanban/drag-and-drop hoje dependem só de verificação manual via Playwright).
 6. Possíveis melhorias futuras: histórico de notificações, refinamento do fluxo offline.
-7. **Roadmap de modernização (D1/R2 no backend + React no frontend) — as Fases B2-B6 e F1-F4.5 estão todas concluídas, testadas e publicadas, mas nenhuma delas mexeu em produção de verdade.** Faltam só duas fases, e as duas são deliberadamente de corte de produção — ambas **pausadas de propósito**, aguardando um "pode prosseguir" explícito e separado (decisão tomada em 2026-08-11, ao terminar a F4, justamente pra não emendar backend+frontend num único corte de risco):
-   - **B7 (backend):** migrar de fato ClickUp → D1 como fonte de verdade (as funções já existem e estão testadas desde a B2/B5, só não são chamadas por nenhum handler ainda).
-   - **F5 (frontend):** decidir a arquitetura real de publicação do React (uma página por app, como `index.html`/`admin.html` hoje, ou outra coisa) e trocar `admin.html`/`index.html` pelos builds React em produção. O switcher de hash (`#admin`/`#solicitante`) em `frontend/src/App.tsx` é só conveniência de dev local — não é a decisão de arquitetura da F5. **Pré-requisito já cumprido (Fase F4.5, 2026-08-11):** o gap de anexo/push notification/PWA-Service Worker no app dos solicitantes em React foi fechado — ver "Decisões técnicas tomadas". A F5 em si continua pausada, mas não há mais trabalho de frontend pendente antes dela.
-   - 🗳️ **Decisões de execução já tomadas pra quando B7/F5 forem abertas** (perguntado e decidido em 2026-08-11, antes de aplicar — ainda pausadas, aguardando o sinal pra começar de fato):
-     - **B7 — ClickUp após o corte:** espelho temporário (grava nos dois, D1 e ClickUp) durante uma janela de transição/rollback; só desliga a escrita na ClickUp depois de confirmar o D1 estável em produção. Não é corte seco nem espelho permanente.
-     - **B7 — os 269 chamados antigos sem SOLICITANTE:** migram pro D1 mesmo assim (campo solicitante fica vazio) — prioriza ter o histórico completo num lugar só sobre a praticidade de não aparecerem em "meus chamados" de ninguém (não têm dono mesmo).
-     - **F5 — arquitetura de publicação:** mantém a mesma estrutura de hoje — uma página por app (`admin.html`→build do `AdminApp`, `index.html`→build do `SolicitanteApp`), GitHub Pages servindo do jeito que já serve. Descartada a ideia de virar uma SPA única com roteador.
-     - **F5 — ordem do corte:** os dois apps (admin + solicitante) só trocam **juntos**, de uma vez.
+7. **Roadmap de modernização (D1/R2 no backend + React no frontend) — as Fases B2-B6 e F1-F4.5 estão todas concluídas, testadas e publicadas; a F5 (frontend) já foi aplicada de verdade em produção (2026-08-12).** Só falta a **B7 (backend)**, deliberadamente **pausada de propósito**, aguardando um "pode prosseguir" explícito (decisão tomada em 2026-08-11, justamente pra não emendar backend+frontend num único corte de risco):
+   - ✅ **F5 (frontend) concluída (2026-08-12):** `admin.html`/`index.html` em produção agora são os builds React de verdade — ver "Deploy do Frontend" e "Decisões técnicas tomadas" pro que foi feito e o achado real sobre `actions/deploy-pages`.
+   - **B7 (backend):** migrar de fato ClickUp → D1 como fonte de verdade (as funções já existem e estão testadas desde a B2/B5, só não são chamadas por nenhum handler ainda). Decisões de execução já tomadas em 2026-08-11 (perguntado e decidido antes de aplicar — ainda pausada, aguardando o sinal pra começar de fato):
+     - **ClickUp após o corte:** espelho temporário (grava nos dois, D1 e ClickUp) durante uma janela de transição/rollback; só desliga a escrita na ClickUp depois de confirmar o D1 estável em produção. Não é corte seco nem espelho permanente.
+     - **Os 269 chamados antigos sem SOLICITANTE:** migram pro D1 mesmo assim (campo solicitante fica vazio) — prioriza ter o histórico completo num lugar só sobre a praticidade de não aparecerem em "meus chamados" de ninguém (não têm dono mesmo).
 
 > ⚠️ **Regra de commit/versão deste projeto:** nenhuma mudança (visual OU lógica) versiona/commita/pusha sozinha, **exceto durante a janela de prazo pedida pelo usuário em 2026-08-06/07** (projeto precisava estar pronto até 2026-08-07) — nesse período, comitar/publicar direto após verificar (testes + Chromium), sem pausar pra confirmar. Fora dessa janela, volta a valer agrupar em lote e só publicar quando o usuário sinalizar.
