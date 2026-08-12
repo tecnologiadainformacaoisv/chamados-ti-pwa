@@ -1,0 +1,57 @@
+name: Deploy Frontend (GitHub Pages)
+
+# Roda só quando frontend/ ou esta config mudam na main — o deploy do Worker é uma
+# pipeline separada (deploy-worker.yml), disparada só por mudança em push-worker.js/
+# wrangler.toml, pra não redeployar um pelo outro à toa.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/deploy-frontend.yml"
+  workflow_dispatch: {} # permite rodar manualmente em Actions → Run workflow, se precisar
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Evita dois deploys correndo ao mesmo tempo (ex.: dois pushes seguidos) —
+# cancela o anterior que ainda estiver em andamento, mantém só o mais recente.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar dependências
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build (Vite, MPA — admin.html + index.html)
+        working-directory: frontend
+        run: npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

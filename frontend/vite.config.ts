@@ -12,7 +12,13 @@ import { VitePWA } from 'vite-plugin-pwa'
 // tipo de lista fixa que causou o incidente real de cache em 2026-08-10).
 //
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // GitHub Pages deste repo é um "project site" (tecnologiadainformacaoisv.github.io/
+  // chamados-ti-pwa/, não um domínio próprio) — os assets precisam ser referenciados
+  // com esse subcaminho em produção, senão tudo (JS/CSS/manifest/ícones) pede na raiz
+  // errada e 404. Em dev/preview local fica em "/" mesmo, por conveniência (bate com
+  // como os scripts de verificação desta sessão já testam via localhost).
+  base: command === 'build' ? '/chamados-ti-pwa/' : '/',
   plugins: [
     react(),
     tailwindcss(),
@@ -46,4 +52,15 @@ export default defineConfig({
       '@': path.resolve(import.meta.dirname, './src'),
     },
   },
-})
+  // MPA (Fase F5) — admin.html e index.html são entradas de verdade, cada uma com seu
+  // próprio main-*.tsx montando só o app dela. Sem isso o Rollup só empacota o
+  // index.html padrão do Vite.
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(import.meta.dirname, 'index.html'),
+        admin: path.resolve(import.meta.dirname, 'admin.html'),
+      },
+    },
+  },
+}))
