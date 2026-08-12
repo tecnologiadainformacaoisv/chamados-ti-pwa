@@ -53,7 +53,7 @@ const FAKE_DUE_DATE_MICHAEL = 1700000000000;
 const FAKE_TASKS = [
   {
     id: 'task-michael-1', name: 'Chamado do Michael',
-    status: { status: 'encerrado' },
+    status: { status: 'encerrado' }, priority: { priority: 'urgent' },
     assignees: [{ id: 170628721, username: 'Everson' }],
     due_date: FAKE_DUE_DATE_MICHAEL,
     date_closed: FAKE_DUE_DATE_MICHAEL - 60000,   // fechou 1min ANTES do prazo -> dentro do SLA
@@ -66,7 +66,7 @@ const FAKE_TASKS = [
   },
   {
     id: 'task-ariele-1', name: 'Chamado da Ariele',
-    status: { status: 'aberto' },
+    status: { status: 'aberto' }, priority: { priority: 'normal' },
     assignees: [{ id: 200498355, username: 'Henrique' }],
     due_date: Date.now() - 60000, // prazo já vencido e ainda aberta -> atrasado
     custom_fields: [
@@ -132,14 +132,32 @@ async function test(name, fn) {
     if (u.includes('/list/') && /\/task(\?|$)/.test(u)) {
       if (opts?.method === 'POST') {
         lastCreatePayload = JSON.parse(opts.body);
-        return new Response(JSON.stringify({ id: 'new-task-id', ...lastCreatePayload }), { status: 200 });
+        // Devolve no MESMO "shape" que a ClickUp real devolve pra task recém-criada —
+        // status/priority como objeto aninhado, não os valores crus (number/string) que
+        // foram mandados no corpo do POST. Precisa bater com esse shape porque
+        // handleCreateTask (Fase B7) usa mapClickUpTaskToD1() em cima desta resposta pra
+        // espelhar no D1 — um mock ingênuo (só ecoando o payload) já escondeu esse
+        // exato tipo de incompatibilidade de shape antes de eu perceber e corrigir aqui.
+        const PRIO_NUM_TO_NAME = { 1: 'urgent', 2: 'high', 3: 'normal' };
+        const created = {
+          id: 'new-task-id',
+          name: lastCreatePayload.name,
+          description: lastCreatePayload.description ?? null,
+          text_content: lastCreatePayload.description ?? null,
+          status: { status: 'aberto' },
+          priority: { priority: PRIO_NUM_TO_NAME[lastCreatePayload.priority] || 'normal' },
+          assignees: (lastCreatePayload.assignees || []).map(id => ({ id, username: 'Operador' })),
+          due_date: lastCreatePayload.due_date,
+          date_created: Date.now(),
+          custom_fields: lastCreatePayload.custom_fields,
+        };
+        return new Response(JSON.stringify(created), { status: 200 });
       }
+      // Filtro por custom_fields (?custom_fields=...) não é mais usado por nenhuma rota —
+      // GET /api/my-tasks passou a ler do D1 na Fase B7 (2026-08-12), sem round-trip pra
+      // ClickUp nenhum. O que sobra aqui é só fetchAllTasks() (admin/tasks, admin/metrics,
+      // migração), que sempre pede a lista inteira, sem esse filtro.
       taskListCallCount++;
-      const cfRaw = new URL(u).searchParams.get('custom_fields');
-      if (cfRaw) {
-        const wantIdx = JSON.parse(cfRaw)[0].value;
-        return new Response(JSON.stringify({ tasks: FAKE_TASKS.filter(t => t.custom_fields[0].value.orderindex === wantIdx) }), { status: 200 });
-      }
       return new Response(JSON.stringify({ tasks: migrationTasksOverride || FAKE_TASKS }), { status: 200 });
     }
     return realFetch(url, opts);
@@ -148,6 +166,16 @@ async function test(name, fn) {
   const env = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
   const SECRET_HEADERS = { 'X-App-Secret': env.SUBSCRIBE_SECRET, 'Content-Type': 'application/json' };
   let brunoToken; // Bruno nunca erra senha nem esbarra em throttle — usado pra testes que precisam de uma sessão "limpa"
+
+  // Semeia o D1 com os 2 chamados fake (task-michael-1/task-ariele-1) ANTES de qualquer
+  // teste — GET /api/my-tasks passou a ler do D1, não mais da ClickUp direto (Fase B7,
+  // 2026-08-12), então os testes de isolamento logo abaixo precisam encontrar esses
+  // chamados lá. Usa a mesma rota real de migração que a produção usa (POST
+  // /admin/migrate-d1), não uma reimplementação paralela — `migrationTasksOverride`
+  // ainda está null aqui, então pega o FAKE_TASKS default do mock de fetch.
+  await worker.fetch(req('POST', '/admin/migrate-d1', {
+    headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
+  }), env);
 
   console.log('--- registro e login ---');
   let token;
@@ -224,6 +252,29 @@ async function test(name, fn) {
   await test('criação sem sessão dá 401', async () => {
     const res = await worker.fetch(req('POST', '/api/tasks', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'x' }) }), env);
     assert.strictEqual(res.status, 401);
+  });
+  await test('chamado criado é espelhado no D1 (Fase B7, dual-write) — ClickUp continua sendo quem cria de verdade', async () => {
+    await env.SUBSCRIPTIONS.delete('throttle_create_Michael Vasconcelos'); // testes anteriores já usaram o throttle de 60s do Michael
+    lastCreatePayload = null;
+    const res = await worker.fetch(req('POST', '/api/tasks', {
+      headers: { ...SECRET_HEADERS, 'X-Session-Token': token },
+      body: JSON.stringify({
+        name: 'Chamado pra testar o espelho no D1',
+        custom_fields: [
+          { id: TIPO_FIELD_ID, value: 0 },
+          { id: SETOR_FIELD_ID, value: 1 },
+        ],
+      })
+    }), env);
+    assert.strictEqual(res.status, 200);
+    const created = await res.json();
+    const mirrored = await d1GetChamado(env, created.id);
+    assert.ok(mirrored, 'chamado criado na ClickUp deveria ter sido espelhado no D1 também');
+    assert.strictEqual(mirrored.name, 'Chamado pra testar o espelho no D1');
+    assert.strictEqual(mirrored.solicitante, 'Michael Vasconcelos', 'espelho deve usar o solicitante da sessão, igual a ClickUp');
+    assert.strictEqual(mirrored.tipo, 0);
+    assert.strictEqual(mirrored.setor, 1);
+    assert.strictEqual(mirrored.status, 'aberto');
   });
   await test('forjar priority/due_date ao criar é ignorado — servidor recalcula pelo TIPO', async () => {
     // Usa uma sessão do Bruno (recém-registrado aqui), não a do Michael — ele acabou de criar
@@ -312,14 +363,14 @@ async function test(name, fn) {
     assert.ok(after > before, 'lastLoginAt deveria ter avançado após novo login');
   });
 
-  console.log('--- fallback de /api/my-tasks só dispara quando o nome não é encontrado, não em "zero chamados" ---');
-  await test('pessoa com nome encontrado e zero chamados NÃO aciona a busca completa da lista (rate limit)', async () => {
+  console.log('--- GET /api/my-tasks lê do D1, não bate na ClickUp (Fase B7, 2026-08-12) ---');
+  await test('pessoa com zero chamados recebe lista vazia sem nenhuma chamada à ClickUp', async () => {
     taskListCallCount = 0;
     const res = await worker.fetch(req('GET', '/api/my-tasks', { headers: { ...SECRET_HEADERS, 'X-Session-Token': brunoToken } }), env);
     assert.strictEqual(res.status, 200);
     const { tasks } = await res.json();
     assert.strictEqual(tasks.length, 0, 'Bruno realmente não tem nenhum chamado nos dados fake');
-    assert.strictEqual(taskListCallCount, 1, 'nome encontrado deveria fazer só 1 chamada de listagem (a filtrada), sem cair no fallback de buscar tudo');
+    assert.strictEqual(taskListCallCount, 0, 'GET /api/my-tasks não deveria mais chamar a ClickUp nenhuma vez — lê só do D1');
   });
 
   console.log('--- /admin/tasks (todos os chamados, com filtros) ---');
@@ -514,6 +565,38 @@ async function test(name, fn) {
       globalThis.fetch = previousFetch;
     }
   });
+  await test('atualização admin espelha status/solução/operador no D1 (Fase B7, dual-write)', async () => {
+    // task-michael-1 já está no D1 (semeado no início do arquivo) — diferente do
+    // task-update-1 do teste acima, que nunca existiu lá (o mirror seria um no-op
+    // silencioso nesse caso, sem linha nenhuma pra atualizar).
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      if (u.endsWith('/task/task-michael-1') && (!opts?.method || opts.method === 'GET')) {
+        return new Response(JSON.stringify({ id: 'task-michael-1', assignees: [{ id: 170628721, username: 'Everson' }] }), { status: 200 });
+      }
+      if (u.endsWith('/task/task-michael-1') && opts.method === 'PUT') {
+        return new Response(JSON.stringify({ id: 'task-michael-1', ok: true }), { status: 200 });
+      }
+      if (u.includes('/task/task-michael-1/field/') && opts.method === 'POST') {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      return previousFetch(url, opts);
+    };
+    try {
+      const res = await worker.fetch(req('POST', '/admin/tasks/task-michael-1', {
+        headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+        body: JSON.stringify({ status: 'pendente', solucao: 'Aguardando peça de reposição.', assigneeId: 170628721 })
+      }), env);
+      assert.strictEqual(res.status, 200);
+      const mirrored = await d1GetChamado(env, 'task-michael-1');
+      assert.strictEqual(mirrored.status, 'pendente');
+      assert.strictEqual(mirrored.solucao, 'Aguardando peça de reposição.');
+      assert.strictEqual(mirrored.assignee_id, 170628721);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
   await test('reatribuir pra quem já é o assignee não dispara PUT nenhum (nada pra mudar)', async () => {
     const previousFetch = globalThis.fetch;
     let putCalled = false;
@@ -676,7 +759,9 @@ async function test(name, fn) {
         { id: SETOR_FIELD_ID, value: 1 },
       ],
     },
-    { // solicitante fora do campo atual — deve virar erro
+    { // solicitante fora do campo atual — migra mesmo assim, com solicitante = '' (Fase
+      // B7, 2026-08-12: mesmo tratamento dos 269 chamados de antes do app existir, ver
+      // CLAUDE.md "Fase B3"/"Fase B7" — não é mais erro, prioriza ter o histórico completo).
       id: 'mig-2', name: 'Chamado órfão',
       status: { status: 'aberto' }, priority: { priority: 'normal' }, assignees: [],
       custom_fields: [
@@ -718,22 +803,22 @@ async function test(name, fn) {
     const data = await res.json();
     assert.strictEqual(data.dryRun, true);
     assert.strictEqual(data.total, 4);
-    assert.strictEqual(data.migrated, 1);
-    assert.strictEqual(data.errors.length, 3);
+    assert.strictEqual(data.migrated, 2, 'mig-1 e mig-2 (solicitante vazio já não é mais erro, Fase B7)');
+    assert.strictEqual(data.errors.length, 2);
     const found = await d1GetChamado(env, 'mig-1');
     assert.strictEqual(found, null, 'dryRun não deveria ter gravado nada de verdade no D1');
   });
 
-  await test('migração de verdade grava só a task válida, com os campos certos', async () => {
+  await test('migração de verdade grava mig-1 e mig-2 (com solicitante vazio), com os campos certos', async () => {
     const res = await worker.fetch(req('POST', '/admin/migrate-d1', {
       headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
       body: '{}',
     }), env);
     const data = await res.json();
-    assert.strictEqual(data.migrated, 1);
+    assert.strictEqual(data.migrated, 2);
     assert.strictEqual(data.skipped, 0);
-    assert.strictEqual(data.errors.length, 3);
-    assert.deepStrictEqual(data.errors.map(e => e.id).sort(), ['mig-2', 'mig-3', 'mig-4']);
+    assert.strictEqual(data.errors.length, 2);
+    assert.deepStrictEqual(data.errors.map(e => e.id).sort(), ['mig-3', 'mig-4']);
 
     const row = await d1GetChamado(env, 'mig-1');
     assert.ok(row, 'mig-1 deveria ter sido gravada no D1');
@@ -744,6 +829,10 @@ async function test(name, fn) {
     assert.strictEqual(row.setor, 1);
     assert.strictEqual(row.solicitante, 'Michael Vasconcelos');
     assert.strictEqual(row.assignee_id, 170628721);
+
+    const orfao = await d1GetChamado(env, 'mig-2');
+    assert.ok(orfao, 'mig-2 (solicitante fora do campo atual) deveria ter sido gravada mesmo assim');
+    assert.strictEqual(orfao.solicitante, '', 'solicitante não resolvido vira string vazia, não bloqueia a migração (Fase B7)');
   });
 
   await test('rodar de novo é idempotente — não duplica, marca como skipped', async () => {
@@ -753,7 +842,7 @@ async function test(name, fn) {
     }), env);
     const data = await res.json();
     assert.strictEqual(data.migrated, 0, 'já tinha migrado antes, não deveria contar de novo');
-    assert.strictEqual(data.skipped, 1);
+    assert.strictEqual(data.skipped, 2);
   });
 
   console.log(`\n${passed} passaram, ${failed} falharam`);

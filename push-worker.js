@@ -206,42 +206,19 @@ async function handleGetField(request, env) {
   return passthrough(upstream);
 }
 
-// Substitui o antigo GET /api/tasks (sem filtro nenhum, que devolvia TODO MUNDO pra
-// qualquer um com o secret do app). Agora sempre escopado pra quem está logado — o
-// filtro é decidido aqui dentro, o cliente não escolhe mais de quem são os chamados.
+// Fase B7 (2026-08-12): lê do D1 em vez de paginar a ClickUp — é a rota mais chamada
+// do Worker (poll de 60s de cada solicitante logado), então é onde o corte pro D1
+// rende mais (sem round-trip pra API externa a cada poll). D1 guarda `solicitante`
+// como o nome já resolvido (não um orderindex), então nem precisa mais do fallback
+// que existia aqui pra quando o nome não resolvia no campo customizado atual da
+// ClickUp — essa ambiguidade simplesmente não existe mais neste caminho.
+// GET /tasks/:id (não esta rota) continua na ClickUp — é lá que mora `attachments`.
 async function handleGetMyTasks(request, env) {
   const session = await requireSession(request, env);
   if (!session) return sessionInvalid();
 
-  const { nameToIdx, idxToName } = await getSolicitanteMaps(env);
-  const cuIdx = nameToIdx[session.name];
-
-  // Só cai no fallback (buscar TODA a lista e filtrar aqui dentro) quando o nome da sessão
-  // nem existe no campo SOLICITANTE agora — isso sim é divergência de verdade. Zero chamados
-  // filtrados NÃO entra mais nessa condição: é o caso normal de colaborador novo sem nenhum
-  // chamado ainda, e isso ia disparar 2 chamadas extra à API da ClickUp a cada poll de 60s
-  // pra cada pessoa nessa situação — pesado justo na semana de rollout, quando é a maioria.
-  if (cuIdx == null) {
-    const params = new URLSearchParams({ order_by: 'created', reverse: 'true', include_closed: 'true', page: '0' });
-    const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task?${params}`, {
-      headers: { Authorization: env.CLICKUP_API_KEY }
-    });
-    const data = await upstream.json();
-    const tasks = (data.tasks || []).filter(t => {
-      const cf = t.custom_fields?.find(f => f.id === SOLICITANTE_FIELD_ID);
-      const v  = cf?.value?.orderindex ?? cf?.value;
-      return idxToName[v] === session.name;
-    });
-    return jsonRes({ tasks });
-  }
-
-  const cf     = JSON.stringify([{ field_id: SOLICITANTE_FIELD_ID, operator: '=', value: cuIdx }]);
-  const params = new URLSearchParams({ order_by: 'created', reverse: 'true', include_closed: 'true', page: '0', custom_fields: cf });
-  const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task?${params}`, {
-    headers: { Authorization: env.CLICKUP_API_KEY }
-  });
-  const data = await upstream.json();
-  return jsonRes({ tasks: data.tasks || [] });
+  const rows = await d1ListChamados(env, { solicitante: session.name });
+  return jsonRes({ tasks: rows.map(d1RowToTaskShape) });
 }
 
 async function handleGetTask(request, env, taskId) {
@@ -276,7 +253,7 @@ async function handleCreateTask(request, env) {
 
   // Nunca confia no valor de SOLICITANTE que o cliente mandou — troca pelo da sessão
   // autenticada. É isso que impede alguém de abrir um chamado "como" outra pessoa.
-  const { nameToIdx } = await getSolicitanteMaps(env);
+  const { nameToIdx, idxToName } = await getSolicitanteMaps(env);
   const cuIdx = nameToIdx[session.name];
   if (cuIdx == null) return jsonRes({ error: 'não foi possível confirmar seu cadastro na ClickUp' }, 400);
 
@@ -312,7 +289,27 @@ async function handleCreateTask(request, env) {
     headers: { Authorization: env.CLICKUP_API_KEY, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
-  return passthrough(upstream);
+  const text = await upstream.text();
+  const res = new Response(text, {
+    status: upstream.status,
+    headers: { ...CORS, 'Content-Type': upstream.headers.get('Content-Type') || 'application/json' }
+  });
+
+  // Espelho no D1 (Fase B7, 2026-08-12) — ClickUp continua sendo quem cria de verdade
+  // (é ela quem gera o task_id, e o anexo/attachment ainda sobe só pra lá); o D1 só
+  // espelha o resultado, best-effort. Uma falha aqui NUNCA derruba a resposta pro
+  // usuário — o chamado já foi criado na ClickUp de qualquer forma, e a próxima
+  // migração completa (POST /admin/migrate-d1) fecha qualquer lacuna que sobrar.
+  if (upstream.ok) {
+    try {
+      const created = JSON.parse(text);
+      await d1MigrateChamado(env, mapClickUpTaskToD1(created, idxToName));
+    } catch (err) {
+      console.warn('espelho D1 falhou na criação (chamado já existe na ClickUp normalmente):', err.message);
+    }
+  }
+
+  return res;
 }
 
 async function handleUploadAttachment(request, env, taskId) {
@@ -748,6 +745,25 @@ async function handleAdminUpdateTask(request, env, taskId) {
     updated.assigneeId = desiredId;
   }
 
+  // Espelho no D1 (Fase B7, 2026-08-12) — só chega aqui se TODAS as sub-mutações acima
+  // já tiverem sido aplicadas com sucesso na ClickUp (qualquer falha no meio retorna
+  // antes, mais acima). Best-effort, nunca derruba a resposta: a ClickUp já é a fonte
+  // de verdade da mutação em si, o D1 só está copiando o resultado. Só espelha os
+  // campos literais (status/solução/operador) — não recalcula start_date/due_date/
+  // date_closed aqui (isso continua vindo só da automação da ClickUp via webhook,
+  // ver runStatusAutomation); uma migração completa fecha essa lacuna se acumular.
+  if (Object.keys(updated).length > 0) {
+    try {
+      const d1Patch = {};
+      if (updated.status !== undefined) d1Patch.status = updated.status;
+      if (updated.solucao !== undefined) d1Patch.solucao = body.solucao;
+      if (updated.assigneeId !== undefined) d1Patch.assigneeId = updated.assigneeId;
+      await d1UpdateChamado(env, taskId, d1Patch);
+    } catch (err) {
+      console.warn('espelho D1 falhou na atualização (ClickUp já foi atualizada normalmente):', err.message);
+    }
+  }
+
   return jsonRes({ ok: true, updated });
 }
 
@@ -1180,6 +1196,39 @@ async function d1ListChamados(env, filters = {}) {
   return (results || []).map(d1Row);
 }
 
+const PRIORITY_NUM_TO_NAME = { 1: 'urgent', 2: 'high', 3: 'normal' };
+
+// Fase B7 (2026-08-12) — reconstrói o "shape" de task da ClickUp a partir de uma linha
+// do D1, pra rota que já lê do D1 (GET /my-tasks) devolver exatamente o mesmo contrato
+// de sempre e o frontend (React) não precisar mudar nada. Deliberadamente NÃO inclui:
+// - `attachments`: D1 não guarda isso (upload de anexo continua 100% ClickUp, ver B4);
+//   GET /tasks/:id continua lendo da ClickUp só por causa disso.
+// - custom_field de SOLICITANTE: quem chama esta função já sabe de quem é a lista
+//   (é o próprio filtro), não precisa reconstruir esse campo pra nada.
+// - `username` em assignees: o frontend já resolve id->nome sozinho via OPERADORES
+//   (mesmo comentário de handleAdminMetrics logo abaixo).
+function d1RowToTaskShape(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    text_content: row.description,
+    status: { status: row.status },
+    priority: { priority: PRIORITY_NUM_TO_NAME[row.priority] || 'normal' },
+    assignees: row.assignee_id != null ? [{ id: row.assignee_id }] : [],
+    due_date: row.due_date != null ? String(row.due_date) : null,
+    date_created: String(row.date_created),
+    date_updated: String(row.updated_at),
+    date_closed: row.date_closed != null ? String(row.date_closed) : null,
+    start_date: row.start_date != null ? String(row.start_date) : null,
+    custom_fields: [
+      { id: TIPO_FIELD_ID, value: row.tipo },
+      { id: SETOR_FIELD_ID, value: row.setor },
+      ...(row.solucao != null ? [{ id: SOLUCAO_FIELD_ID, value: row.solucao }] : []),
+    ],
+  };
+}
+
 // patch: qualquer subconjunto de { status, solucao, assigneeId, description, dueDate,
 // dateClosed, startDate } — só atualiza o que vier, igual handleAdminUpdateTask já faz
 // do lado ClickUp. Não infere efeito colateral nenhum (ver comentário da seção acima).
@@ -1297,11 +1346,14 @@ function mapClickUpTaskToD1(task, idxToName) {
     throw new Error(`status fora do esperado: "${task.status?.status}"`);
   }
 
+  // Fase B7 (2026-08-12): os 269 chamados de antes do app existir (2026-01 a metade de
+  // 2026-05, quando o campo SOLICITANTE nem existia/não era preenchido — ver CLAUDE.md,
+  // "Fase B3") agora migram mesmo assim, com solicitante = '' (string vazia, não NULL —
+  // a coluna é NOT NULL no schema). Decisão tomada em 2026-08-11: prioriza ter o
+  // histórico completo num lugar só sobre a praticidade de não aparecerem em "meus
+  // chamados" de ninguém (não têm dono mesmo, não é bug perder essa associação).
   const solicitanteIdx  = cfValue(task, SOLICITANTE_FIELD_ID);
-  const solicitanteName = solicitanteIdx != null ? idxToName[solicitanteIdx] : null;
-  if (!solicitanteName) {
-    throw new Error('SOLICITANTE não resolvido (nome fora do campo SOLICITANTE atual da ClickUp)');
-  }
+  const solicitanteName = (solicitanteIdx != null ? idxToName[solicitanteIdx] : null) || '';
 
   const tipoIdx  = cfValue(task, TIPO_FIELD_ID);
   const setorIdx = cfValue(task, SETOR_FIELD_ID);
