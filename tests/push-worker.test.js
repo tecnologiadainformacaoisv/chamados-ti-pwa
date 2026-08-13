@@ -53,39 +53,14 @@ const SOLICITANTE_FIELD_ID = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
 const TIPO_FIELD_ID = '47e475fe-e911-40cd-b4a2-23625fbf57f1';
 const SETOR_FIELD_ID = 'c1ca88de-4b01-4933-93ff-24494bed59e2';
 const MAX_ANEXO_BYTES = 10 * 1024 * 1024; // mesmo valor de push-worker.js (Fase M2)
-const FAKE_OPTIONS = [
-  { id: 'a1', name: 'Ariele Santo', orderindex: 1 },
-  { id: 'a27', name: 'Michael Vasconcelos', orderindex: 27 },
-  { id: 'a4', name: 'Bruno Guilherme', orderindex: 4 }, // existe na ClickUp, mas nunca abriu chamado (pra testar o fallback)
-];
-// Datas fixas (não Date.now()) pra métricas/SLA ficarem determinísticas nos testes de /admin/metrics.
+// Data fixa (não Date.now()) pra métricas/SLA ficarem determinísticas nos testes de
+// /admin/metrics — usada por seedChamadoComId('task-michael-1', ...) mais abaixo. Fase
+// M5 (2026-08-13): até aqui isso vivia num FAKE_TASKS/FAKE_OPTIONS no formato bruto da
+// ClickUp, usado como resposta de um mock de fetch — removido junto com
+// fetchAllTasks/getSolicitanteMaps/as rotas de migração (produção não lê mais nada da
+// ClickUp). Os valores de task-michael-1/task-ariele-1 continuam os mesmos de sempre,
+// só que gravados direto no D1 agora (ver seedChamadoComId, dentro do IIFE abaixo).
 const FAKE_DUE_DATE_MICHAEL = 1700000000000;
-const FAKE_TASKS = [
-  {
-    id: 'task-michael-1', name: 'Chamado do Michael',
-    status: { status: 'encerrado' }, priority: { priority: 'urgent' },
-    assignees: [{ id: 170628721, username: 'Everson' }],
-    due_date: FAKE_DUE_DATE_MICHAEL,
-    date_closed: FAKE_DUE_DATE_MICHAEL - 60000,   // fechou 1min ANTES do prazo -> dentro do SLA
-    start_date: FAKE_DUE_DATE_MICHAEL - 3600000,  // ~59min de atendimento até fechar
-    custom_fields: [
-      { id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } },
-      { id: TIPO_FIELD_ID, value: 0 },
-      { id: SETOR_FIELD_ID, value: 1 },
-    ],
-  },
-  {
-    id: 'task-ariele-1', name: 'Chamado da Ariele',
-    status: { status: 'aberto' }, priority: { priority: 'normal' },
-    assignees: [{ id: 200498355, username: 'Henrique' }],
-    due_date: Date.now() - 60000, // prazo já vencido e ainda aberta -> atrasado
-    custom_fields: [
-      { id: SOLICITANTE_FIELD_ID, value: { orderindex: 1 } },
-      { id: TIPO_FIELD_ID, value: 2 },
-      { id: SETOR_FIELD_ID, value: 0 },
-    ],
-  },
-];
 
 function makeMockKV() {
   const store = new Map();
@@ -166,44 +141,57 @@ async function test(name, fn) {
   const workerPath = pathToFileURL(path.join(__dirname, '..', 'push-worker.js')).href;
   const { default: worker, d1GetChamado, d1SetAssignees, d1CreateSolicitante, d1ListAnexos, d1CreateChamado } = await import(workerPath);
 
-  let taskListCallCount = 0;
-  let migrationTasksOverride = null; // usado só nos testes de POST /admin/migrate-d1
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = async (url, opts) => {
-    const u = String(url);
-    if (u.includes('/list/') && u.includes('/field')) {
-      return new Response(JSON.stringify({ fields: [{ id: SOLICITANTE_FIELD_ID, type_config: { options: FAKE_OPTIONS } }] }), { status: 200 });
-    }
-    if (u.endsWith('/task/task-michael-1/attachment') || u.endsWith('/task/task-ariele-1/attachment')) {
-      return new Response(JSON.stringify({ id: 'fake-attachment-id' }), { status: 200 });
-    }
-    if (u.endsWith('/task/task-michael-1')) return new Response(JSON.stringify(FAKE_TASKS[0]), { status: 200 });
-    if (u.endsWith('/task/task-ariele-1'))  return new Response(JSON.stringify(FAKE_TASKS[1]), { status: 200 });
-    // Fase M3 (2026-08-13): handleCreateTask parou de chamar `POST /list/:id/task` —
-    // grava direto no D1 agora (ver handleCreateTask). O que sobra deste padrão de URL é
-    // só o GET de listagem, usado por fetchAllTasks() (admin/tasks, admin/metrics,
-    // migração) — filtro por custom_fields (?custom_fields=...) não é usado por
-    // nenhuma rota há tempos (GET /api/my-tasks já lê do D1 desde a Fase B7).
-    if (u.includes('/list/') && /\/task(\?|$)/.test(u) && (!opts?.method || opts.method === 'GET')) {
-      taskListCallCount++;
-      return new Response(JSON.stringify({ tasks: migrationTasksOverride || FAKE_TASKS }), { status: 200 });
-    }
-    return realFetch(url, opts);
+  // Fase M5 (2026-08-13, migração de saída da ClickUp): push-worker.js não chama mais
+  // `fetch()` pra `api.clickup.com` em NENHUMA rota — este mock vira um guarda-costas
+  // que quebra alto (em vez de silenciosamente bater na rede real) se algum código
+  // algum dia voltar a tentar. Antes disso, esta função simulava `GET /list/:id/field`,
+  // `GET /task/:id` e `GET /list/:id/task` pra alimentar getSolicitanteMaps/
+  // fetchAllTasks/handleGetTask/as rotas de migração — todas removidas nesta fase.
+  globalThis.fetch = async (url) => {
+    throw new Error(`teste tentou chamar fetch('${url}') de verdade — push-worker.js não deveria mais fazer nenhuma chamada à ClickUp`);
   };
 
   const env = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1(), ANEXOS: makeMockR2() };
   const SECRET_HEADERS = { 'X-App-Secret': env.SUBSCRIBE_SECRET, 'Content-Type': 'application/json' };
   let brunoToken; // Bruno nunca erra senha nem esbarra em throttle — usado pra testes que precisam de uma sessão "limpa"
 
+  // Fase M5: `d1MigrateChamado` (que a produção usava pra gravar com um id específico,
+  // o task_id da ClickUp) foi removida do push-worker.js — produção sempre usa
+  // `d1CreateChamado` agora (UUID próprio). Este arquivo, porém, ainda referencia ids
+  // fixos e conhecidos (task-michael-1, etc.) em dezenas de asserts — helper local só
+  // pra popular fixtures com id escolhido, sem reescrever o arquivo inteiro.
+  async function seedChamadoComId(targetEnv, id, data) {
+    const now = Date.now();
+    await targetEnv.CHAMADOS_DB.prepare(
+      `INSERT INTO chamados
+        (id, name, description, status, priority, tipo, setor, solicitante, email, solucao,
+         assignee_id, due_date, date_created, date_closed, start_date, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      id, data.name, data.description ?? null, data.status ?? 'aberto', data.priority,
+      data.tipo ?? null, data.setor ?? null, data.solicitante ?? null, data.email ?? null,
+      data.solucao ?? null, data.assignee_id ?? null, data.due_date ?? null,
+      data.date_created ?? now, data.date_closed ?? null, data.start_date ?? null, now, now
+    ).run();
+    if (data.assignee_ids !== undefined) await d1SetAssignees(targetEnv, id, data.assignee_ids);
+  }
+
   // Semeia o D1 com os 2 chamados fake (task-michael-1/task-ariele-1) ANTES de qualquer
-  // teste — GET /api/my-tasks passou a ler do D1, não mais da ClickUp direto (Fase B7,
-  // 2026-08-12), então os testes de isolamento logo abaixo precisam encontrar esses
-  // chamados lá. Usa a mesma rota real de migração que a produção usa (POST
-  // /admin/migrate-d1), não uma reimplementação paralela — `migrationTasksOverride`
-  // ainda está null aqui, então pega o FAKE_TASKS default do mock de fetch.
-  await worker.fetch(req('POST', '/admin/migrate-d1', {
-    headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
-  }), env);
+  // teste — GET /api/my-tasks lê do D1, não mais da ClickUp (Fase B7, 2026-08-12), então
+  // os testes de isolamento logo abaixo precisam encontrar esses chamados lá. Mesmos
+  // valores que FAKE_TASKS sempre teve (ver topo do arquivo) — antes chegavam ao D1 via
+  // `POST /admin/migrate-d1` (removida nesta fase), agora vão direto por aqui.
+  await seedChamadoComId(env, 'task-michael-1', {
+    name: 'Chamado do Michael', status: 'encerrado', priority: 1, tipo: 0, setor: 1,
+    solicitante: 'Michael Vasconcelos', assignee_id: 170628721, assignee_ids: [170628721],
+    due_date: FAKE_DUE_DATE_MICHAEL, date_closed: FAKE_DUE_DATE_MICHAEL - 60000,
+    start_date: FAKE_DUE_DATE_MICHAEL - 3600000,
+  });
+  await seedChamadoComId(env, 'task-ariele-1', {
+    name: 'Chamado da Ariele', status: 'aberto', priority: 3, tipo: 2, setor: 0,
+    solicitante: 'Ariele Santo', assignee_id: 200498355, assignee_ids: [200498355],
+    due_date: Date.now() - 60000, // prazo já vencido e ainda aberta -> atrasado
+  });
 
   // Fase M1 (2026-08-13): /auth/register agora exige que o nome esteja cadastrado e
   // ativo na tabela `solicitantes` do D1 antes de deixar criar senha — semeia os nomes
@@ -421,8 +409,8 @@ async function test(name, fn) {
     }
   });
 
-  console.log('--- POST /admin/migrate-schema-anexos e /admin/migrate-anexos (Fase M2, 2026-08-13) ---');
-  await test('POST /admin/migrate-schema-anexos sem X-Admin-Secret dá 403', async () => {
+  console.log('--- POST /admin/migrate-schema-anexos (Fase M2, 2026-08-13) ---');
+  await test('sem X-Admin-Secret dá 403', async () => {
     const res = await worker.fetch(req('POST', '/admin/migrate-schema-anexos', { body: '{}' }), env);
     assert.strictEqual(res.status, 403);
   });
@@ -432,108 +420,13 @@ async function test(name, fn) {
     const res2 = await worker.fetch(req('POST', '/admin/migrate-schema-anexos', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
     assert.strictEqual(res2.status, 200, 'rodar de novo não deveria falhar (CREATE ... IF NOT EXISTS)');
   });
-  await test('POST /admin/migrate-anexos sem X-Admin-Secret dá 403', async () => {
-    const res = await worker.fetch(req('POST', '/admin/migrate-anexos', { body: '{}' }), env);
-    assert.strictEqual(res.status, 403);
-  });
-  await test('migra os anexos de chamados reais da ClickUp pro R2, pula tasks sem anexo, é idempotente e paginado', async () => {
-    const anexosEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1(), ANEXOS: makeMockR2() };
-    await worker.fetch(req('POST', '/admin/migrate-schema-anexos', { headers: { 'X-Admin-Secret': anexosEnv.ADMIN_SECRET } }), anexosEnv);
-
-    const previousFetch = globalThis.fetch;
-    let downloadCalls = 0;
-    globalThis.fetch = async (url, opts) => {
-      const u = String(url);
-      if (u.includes('/list/') && /\/task\?/.test(u) && opts?.method !== 'POST') {
-        return new Response(JSON.stringify({
-          tasks: [
-            { id: 'com-anexo-1', name: 'Chamado com anexo' },
-            { id: 'sem-anexo-1', name: 'Chamado sem anexo' },
-          ],
-        }), { status: 200 });
-      }
-      if (u.endsWith('/task/com-anexo-1')) {
-        return new Response(JSON.stringify({
-          id: 'com-anexo-1',
-          attachments: [{ title: 'print-erro.png', url: 'https://fake-clickup-cdn.example/print-erro.png' }],
-        }), { status: 200 });
-      }
-      if (u.endsWith('/task/sem-anexo-1')) {
-        return new Response(JSON.stringify({ id: 'sem-anexo-1', attachments: [] }), { status: 200 });
-      }
-      if (u === 'https://fake-clickup-cdn.example/print-erro.png') {
-        downloadCalls++;
-        return new Response('bytes-do-print-de-erro', { status: 200, headers: { 'Content-Type': 'image/png' } });
-      }
-      return previousFetch(url, opts);
-    };
-    try {
-      const res = await worker.fetch(req('POST', '/admin/migrate-anexos', {
-        headers: { 'X-Admin-Secret': anexosEnv.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
-      }), anexosEnv);
-      assert.strictEqual(res.status, 200);
-      const data = await res.json();
-      assert.strictEqual(data.totalTasks, 2);
-      assert.strictEqual(data.processedTasks, 2);
-      assert.strictEqual(data.tasksComAnexo, 1);
-      assert.strictEqual(data.migrated, 1);
-      assert.strictEqual(data.errors.length, 0);
-      assert.strictEqual(data.hasMore, false);
-      assert.strictEqual(downloadCalls, 1);
-
-      const anexos = await d1ListAnexos(anexosEnv, 'com-anexo-1');
-      assert.strictEqual(anexos.length, 1);
-      assert.strictEqual(anexos[0].filename, 'print-erro.png');
-      assert.ok(anexos[0].r2_key.startsWith('chamados/com-anexo-1/'));
-      const semAnexo = await d1ListAnexos(anexosEnv, 'sem-anexo-1');
-      assert.strictEqual(semAnexo.length, 0);
-
-      // Idempotência: rodar de novo não baixa o arquivo de novo, marca como skipped.
-      const res2 = await worker.fetch(req('POST', '/admin/migrate-anexos', {
-        headers: { 'X-Admin-Secret': anexosEnv.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
-      }), anexosEnv);
-      const data2 = await res2.json();
-      assert.strictEqual(data2.migrated, 0, 'rodar de novo não deveria migrar de novo');
-      assert.strictEqual(data2.skipped, 1);
-      assert.strictEqual(downloadCalls, 1, 'não deveria ter baixado o arquivo de novo na 2ª rodada');
-    } finally {
-      globalThis.fetch = previousFetch;
-    }
-  });
-  await test('paginação (offset/limit) processa só a fatia pedida e reporta hasMore/nextOffset', async () => {
-    const pagEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1(), ANEXOS: makeMockR2() };
-    await worker.fetch(req('POST', '/admin/migrate-schema-anexos', { headers: { 'X-Admin-Secret': pagEnv.ADMIN_SECRET } }), pagEnv);
-
-    const previousFetch = globalThis.fetch;
-    globalThis.fetch = async (url, opts) => {
-      const u = String(url);
-      if (u.includes('/list/') && /\/task\?/.test(u) && opts?.method !== 'POST') {
-        return new Response(JSON.stringify({
-          tasks: [{ id: 'pag-1', name: 'A' }, { id: 'pag-2', name: 'B' }, { id: 'pag-3', name: 'C' }],
-        }), { status: 200 });
-      }
-      if (/\/task\/pag-\d$/.test(u)) {
-        return new Response(JSON.stringify({ id: u.split('/').pop(), attachments: [] }), { status: 200 });
-      }
-      return previousFetch(url, opts);
-    };
-    try {
-      const res = await worker.fetch(req('POST', '/admin/migrate-anexos', {
-        headers: { 'X-Admin-Secret': pagEnv.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ offset: 0, limit: 2 }),
-      }), pagEnv);
-      const data = await res.json();
-      assert.strictEqual(data.processedTasks, 2);
-      assert.strictEqual(data.hasMore, true);
-      assert.strictEqual(data.nextOffset, 2);
-    } finally {
-      globalThis.fetch = previousFetch;
-    }
-  });
+  // Fase M5 (2026-08-13): POST /admin/migrate-anexos removida (já rodou em produção —
+  // 46 anexos/41 chamados migrados, ver CLAUDE.md) — sem rota, sem teste.
 
   console.log('--- falha fechada se o Worker não tiver SUBSCRIBE_SECRET configurado ---');
-  await test('sem SUBSCRIBE_SECRET no ambiente, /api/field fica bloqueado (não aberto)', async () => {
+  await test('sem SUBSCRIBE_SECRET no ambiente, /api/solicitantes fica bloqueado (não aberto)', async () => {
     const envSemSecret = { ...env, SUBSCRIBE_SECRET: undefined };
-    const res = await worker.fetch(req('GET', '/api/field'), envSemSecret);
+    const res = await worker.fetch(req('GET', '/api/solicitantes'), envSemSecret);
     assert.strictEqual(res.status, 403);
   });
 
@@ -673,33 +566,20 @@ async function test(name, fn) {
     const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Carlos Eduardo', password: 'senhaboa123' }) }), env);
     assert.strictEqual(res.status, 403);
   });
-  await test('POST /admin/migrate-solicitantes copia a lista da ClickUp pro D1, idempotente', async () => {
-    const solicitantesEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
-    const res = await worker.fetch(req('POST', '/admin/migrate-solicitantes', { headers: { 'X-Admin-Secret': solicitantesEnv.ADMIN_SECRET } }), solicitantesEnv);
-    assert.strictEqual(res.status, 200);
-    const data = await res.json();
-    // FAKE_OPTIONS no topo do arquivo tem 3 nomes (Ariele Santo, Michael Vasconcelos, Bruno Guilherme)
-    assert.strictEqual(data.total, 3);
-    assert.strictEqual(data.migrated, 3);
-    assert.strictEqual(data.skipped, 0);
-
-    const res2 = await worker.fetch(req('POST', '/admin/migrate-solicitantes', { headers: { 'X-Admin-Secret': solicitantesEnv.ADMIN_SECRET } }), solicitantesEnv);
-    const data2 = await res2.json();
-    assert.strictEqual(data2.migrated, 0, 'rodar de novo não deveria migrar de novo');
-    assert.strictEqual(data2.skipped, 3, 'rodar de novo deveria marcar os 3 como já migrados');
-  });
+  // Fase M5 (2026-08-13): POST /admin/migrate-solicitantes removida (já rodou em
+  // produção, ver CLAUDE.md) — sem rota, sem teste.
 
   console.log('--- GET /api/my-tasks lê do D1, não bate na ClickUp (Fase B7, 2026-08-12) ---');
   await test('devolve o que o D1 tem pro solicitante, sem nenhuma chamada à ClickUp', async () => {
     // Bruno tem exatamente 1 chamado no D1 nesse ponto — o do teste "forjar priority/
     // due_date" lá em cima, que agora espelha com sucesso mesmo sem SETOR (Fase B7,
-    // mesmo dia: tipo/setor ausentes viram NULL em vez de bloquear o mirror).
-    taskListCallCount = 0;
+    // mesmo dia: tipo/setor ausentes viram NULL em vez de bloquear o mirror). Fase M5:
+    // "sem nenhuma chamada à ClickUp" agora é garantido pelo mock de fetch global (lança
+    // se alguém tentar) — não precisa mais de um contador dedicado só pra essa checagem.
     const res = await worker.fetch(req('GET', '/api/my-tasks', { headers: { ...SECRET_HEADERS, 'X-Session-Token': brunoToken } }), env);
     assert.strictEqual(res.status, 200);
     const { tasks } = await res.json();
     assert.strictEqual(tasks.length, 1, 'Bruno tem 1 chamado espelhado no D1 (criado num teste anterior)');
-    assert.strictEqual(taskListCallCount, 0, 'GET /api/my-tasks não deveria mais chamar a ClickUp nenhuma vez — lê só do D1');
   });
 
   await test('mesmo se o D1 tiver 2+ assignees pra um chamado, GET /api/my-tasks continua devolvendo só 1 (deliberado — evita o custo extra de withAssignees na rota mais chamada do Worker)', async () => {
@@ -716,17 +596,25 @@ async function test(name, fn) {
   });
 
   console.log('--- /admin/tasks (todos os chamados, com filtros) ---');
-  // 🚀 B7 parte 2, fase 2 (2026-08-12): /admin/tasks e /admin/metrics passaram a ler do
-  // D1, não mais da ClickUp — env ISOLADO aqui (D1 próprio, não o `env` global) porque a
-  // essa altura do arquivo o `env` compartilhado já acumulou chamados extras de outros
-  // testes que criam/espelham no D1 ao longo do arquivo (dual-write desde a B7 parte 1);
-  // ler do D1 exporia essa contagem, que os testes de ClickUp nunca viam (liam sempre
-  // FAKE_TASKS, fixo). Semeado com a mesma rota real (POST /admin/migrate-d1) que a
-  // produção usa — sem reimplementação paralela.
+  // /admin/tasks e /admin/metrics leem do D1 (B7 parte 2, fase 2) — env ISOLADO aqui (D1
+  // próprio, não o `env` global) porque a essa altura do arquivo o `env` compartilhado já
+  // acumulou chamados extras de outros testes (dual-write desde a B7 parte 1); um dataset
+  // isolado com só os 2 fixtures conhecidos mantém as contagens abaixo determinísticas.
+  // Mesmos 2 chamados/mesmos valores de sempre (task-michael-1/task-ariele-1) — antes
+  // chegavam aqui via `POST /admin/migrate-d1` (removida na Fase M5), direto por
+  // seedChamadoComId agora.
   const adminEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
-  await worker.fetch(req('POST', '/admin/migrate-d1', {
-    headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
-  }), adminEnv);
+  await seedChamadoComId(adminEnv, 'task-michael-1', {
+    name: 'Chamado do Michael', status: 'encerrado', priority: 1, tipo: 0, setor: 1,
+    solicitante: 'Michael Vasconcelos', assignee_id: 170628721, assignee_ids: [170628721],
+    due_date: FAKE_DUE_DATE_MICHAEL, date_closed: FAKE_DUE_DATE_MICHAEL - 60000,
+    start_date: FAKE_DUE_DATE_MICHAEL - 3600000,
+  });
+  await seedChamadoComId(adminEnv, 'task-ariele-1', {
+    name: 'Chamado da Ariele', status: 'aberto', priority: 3, tipo: 2, setor: 0,
+    solicitante: 'Ariele Santo', assignee_id: 200498355, assignee_ids: [200498355],
+    due_date: Date.now() - 60000,
+  });
 
   await test('sem X-Admin-Secret dá 403', async () => {
     const res = await worker.fetch(req('GET', '/admin/tasks'), adminEnv);
@@ -819,42 +707,10 @@ async function test(name, fn) {
     assert.deepStrictEqual(tasks[0].assignees.map(a => a.id), [170628721]);
   });
 
-  console.log('--- fetchAllTasks pagina de verdade e avisa (truncated) quando bate no teto (via POST /admin/migrate-d1, dryRun) ---');
-  // fetchAllTasks continua sendo usada por /admin/migrate-d1 (leitura da ClickUp pra
-  // migrar histórico) — só /admin/tasks e /admin/metrics deixaram de usá-la nesta fase.
-  await test('bate no teto de 20 páginas e devolve truncated:true, sem perder chamado silenciosamente', async () => {
-    const previousFetch = globalThis.fetch;
-    let pagesRequested = 0;
-    globalThis.fetch = async (url, opts) => {
-      const u = String(url);
-      if (u.includes('/list/') && /\/task\?/.test(u) && opts?.method !== 'POST') {
-        pagesRequested++;
-        // Sempre devolve 100 itens cheios, sem last_page — simula volume maior que o teto
-        // de fetchAllTasks (20 páginas x 100 = 2000), forçando o loop a esgotar as páginas.
-        const batch = Array.from({ length: 100 }, (_, i) => ({
-          id: `bulk-${pagesRequested}-${i}`,
-          name: 'chamado em massa (teste de paginação)',
-          status: { status: 'aberto' },
-          assignees: [],
-          custom_fields: [{ id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } }],
-        }));
-        return new Response(JSON.stringify({ tasks: batch }), { status: 200 });
-      }
-      return previousFetch(url, opts);
-    };
-
-    try {
-      const res = await worker.fetch(req('POST', '/admin/migrate-d1', {
-        headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ dryRun: true }),
-      }), adminEnv);
-      const data = await res.json();
-      assert.strictEqual(pagesRequested, 20, 'deveria ter parado exatamente no teto de 20 páginas');
-      assert.strictEqual(data.total, 2000, 'deveria ter buscado as 20 páginas x 100 antes de parar');
-      assert.strictEqual(data.truncated, true, 'deveria avisar que bateu no teto — sem esse aviso, chamado sumiria em silêncio');
-    } finally {
-      globalThis.fetch = previousFetch;
-    }
-  });
+  // Fase M5 (2026-08-13): fetchAllTasks (e o teste de paginação/truncated que existia
+  // aqui) foi removida junto com /admin/migrate-d1 — era a única rota que ainda usava.
+  // `truncated` continua no contrato de /admin/tasks/-metrics (sempre `false`, D1 não
+  // pagina) — coberto nos testes dessas duas rotas, abaixo.
 
   console.log('--- /admin/metrics (agregados de SLA/volume/tempo de atendimento) ---');
   await test('sem X-Admin-Secret dá 403', async () => {
@@ -1091,7 +947,7 @@ async function test(name, fn) {
 
   console.log('--- CORS e logout ---');
   await test('CORS restrito à origem do GitHub Pages, não mais "*"', async () => {
-    const res = await worker.fetch(req('OPTIONS', '/api/field'), env);
+    const res = await worker.fetch(req('OPTIONS', '/api/solicitantes'), env);
     assert.strictEqual(res.headers.get('Access-Control-Allow-Origin'), 'https://tecnologiadainformacaoisv.github.io');
   });
   await test('logout invalida a sessão', async () => {
@@ -1100,111 +956,10 @@ async function test(name, fn) {
     assert.strictEqual(res.status, 401);
   });
 
-  console.log('--- POST /admin/migrate-d1 (Fase B3 — migração de histórico pro D1) ---');
-  const FAKE_MIGRATION_TASKS = [
-    { // válido — deve migrar
-      id: 'mig-1', name: 'Impressora não imprime',
-      status: { status: 'aberto' }, priority: { priority: 'high' },
-      assignees: [{ id: 170628721, username: 'Everson' }],
-      due_date: 1700000000000, date_created: 1699999000000,
-      custom_fields: [
-        { id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } },
-        { id: TIPO_FIELD_ID, value: 2 },
-        { id: SETOR_FIELD_ID, value: 1 },
-      ],
-    },
-    { // solicitante fora do campo atual — migra mesmo assim, com solicitante = '' (Fase
-      // B7, 2026-08-12: mesmo tratamento dos 269 chamados de antes do app existir, ver
-      // CLAUDE.md "Fase B3"/"Fase B7" — não é mais erro, prioriza ter o histórico completo).
-      id: 'mig-2', name: 'Chamado órfão',
-      status: { status: 'aberto' }, priority: { priority: 'normal' }, assignees: [],
-      custom_fields: [
-        { id: SOLICITANTE_FIELD_ID, value: { orderindex: 9999 } },
-        { id: TIPO_FIELD_ID, value: 0 },
-        { id: SETOR_FIELD_ID, value: 0 },
-      ],
-    },
-    { // status fora dos 4 esperados — deve virar erro
-      id: 'mig-3', name: 'Chamado com status estranho',
-      status: { status: 'em revisao' }, priority: { priority: 'normal' }, assignees: [],
-      custom_fields: [
-        { id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } },
-        { id: TIPO_FIELD_ID, value: 0 },
-        { id: SETOR_FIELD_ID, value: 0 },
-      ],
-    },
-    { // TIPO ausente — migra mesmo assim, com tipo = null (Fase B7, mesmo dia: mesmo
-      // tratamento dos 12 chamados reais bem antigos sem custom_fields nenhum
-      // preenchido — não é mais erro, coluna já não é NOT NULL, ver d1/schema.sql).
-      id: 'mig-4', name: 'Chamado sem tipo',
-      status: { status: 'aberto' }, priority: { priority: 'normal' }, assignees: [],
-      custom_fields: [
-        { id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } },
-        { id: SETOR_FIELD_ID, value: 0 },
-      ],
-    },
-  ];
-
-  await test('sem X-Admin-Secret dá 403', async () => {
-    const res = await worker.fetch(req('POST', '/admin/migrate-d1', { body: '{}' }), env);
-    assert.strictEqual(res.status, 403);
-  });
-
-  await test('dryRun:true reporta as contagens certas sem gravar nada no D1', async () => {
-    migrationTasksOverride = FAKE_MIGRATION_TASKS;
-    const res = await worker.fetch(req('POST', '/admin/migrate-d1', {
-      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dryRun: true }),
-    }), env);
-    const data = await res.json();
-    assert.strictEqual(data.dryRun, true);
-    assert.strictEqual(data.total, 4);
-    assert.strictEqual(data.migrated, 3, 'mig-1, mig-2 (solicitante vazio) e mig-4 (tipo nulo) já não são mais erro, Fase B7');
-    assert.strictEqual(data.errors.length, 1);
-    const found = await d1GetChamado(env, 'mig-1');
-    assert.strictEqual(found, null, 'dryRun não deveria ter gravado nada de verdade no D1');
-  });
-
-  await test('migração de verdade grava mig-1, mig-2 (solicitante vazio) e mig-4 (tipo nulo), com os campos certos', async () => {
-    const res = await worker.fetch(req('POST', '/admin/migrate-d1', {
-      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
-      body: '{}',
-    }), env);
-    const data = await res.json();
-    assert.strictEqual(data.migrated, 3);
-    assert.strictEqual(data.skipped, 0);
-    assert.strictEqual(data.errors.length, 1);
-    assert.deepStrictEqual(data.errors.map(e => e.id).sort(), ['mig-3']);
-
-    const row = await d1GetChamado(env, 'mig-1');
-    assert.ok(row, 'mig-1 deveria ter sido gravada no D1');
-    assert.strictEqual(row.name, 'Impressora não imprime');
-    assert.strictEqual(row.status, 'aberto');
-    assert.strictEqual(row.priority, 2); // 'high' -> 2
-    assert.strictEqual(row.tipo, 2);
-    assert.strictEqual(row.setor, 1);
-    assert.strictEqual(row.solicitante, 'Michael Vasconcelos');
-    assert.strictEqual(row.assignee_id, 170628721);
-
-    const orfao = await d1GetChamado(env, 'mig-2');
-    assert.ok(orfao, 'mig-2 (solicitante fora do campo atual) deveria ter sido gravada mesmo assim');
-    assert.strictEqual(orfao.solicitante, '', 'solicitante não resolvido vira string vazia, não bloqueia a migração (Fase B7)');
-
-    const semTipo = await d1GetChamado(env, 'mig-4');
-    assert.ok(semTipo, 'mig-4 (sem TIPO) deveria ter sido gravada mesmo assim');
-    assert.strictEqual(semTipo.tipo, null, 'tipo ausente vira NULL de verdade (coluna já não é NOT NULL)');
-    assert.strictEqual(semTipo.setor, 0);
-  });
-
-  await test('rodar de novo é idempotente — não duplica, marca como skipped', async () => {
-    const res = await worker.fetch(req('POST', '/admin/migrate-d1', {
-      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
-      body: '{}',
-    }), env);
-    const data = await res.json();
-    assert.strictEqual(data.migrated, 0, 'já tinha migrado antes, não deveria contar de novo');
-    assert.strictEqual(data.skipped, 3);
-  });
+  // Fase M5 (2026-08-13): POST /admin/migrate-d1 removida (já rodou em produção — 453/453
+  // chamados reais migrados, ver CLAUDE.md) — sem rota, sem teste. `mig-1` (fixture usada
+  // pelos testes de migração de schema abaixo) agora é semeada direto via
+  // seedChamadoComId, no lugar de vir de uma migração da ClickUp.
 
   console.log('--- POST /admin/migrate-schema-nullable-tipo-setor (Fase B7, mesmo dia — recria a tabela pra permitir NULL em tipo/setor) ---');
   await test('sem X-Admin-Secret dá 403', async () => {
@@ -1212,6 +967,10 @@ async function test(name, fn) {
     assert.strictEqual(res.status, 403);
   });
   await test('migra o schema preservando os dados já gravados, e continua idempotente rodando de novo', async () => {
+    await seedChamadoComId(env, 'mig-1', {
+      name: 'Impressora não imprime', status: 'aberto', priority: 2, tipo: 2, setor: 1,
+      solicitante: 'Michael Vasconcelos', assignee_id: 170628721, due_date: 1700000000000,
+    });
     const antes = await d1GetChamado(env, 'mig-1');
     assert.ok(antes, 'pré-condição: mig-1 já devia estar no D1 antes da migração de schema');
 
@@ -1227,19 +986,11 @@ async function test(name, fn) {
     assert.strictEqual(depois.name, antes.name);
     assert.strictEqual(depois.tipo, antes.tipo);
 
-    // agora tipo/setor ausentes não devem mais dar erro de constraint na hora de gravar
-    // — mesmo caminho real (POST /admin/migrate-d1), não uma chamada direta às funções
-    // internas, pra testar o fluxo de verdade.
-    migrationTasksOverride = [{
-      id: 'schema-v2-check', name: 'Chamado de teste pós-migração',
-      status: { status: 'aberto' }, priority: { priority: 'normal' }, assignees: [],
-      custom_fields: [{ id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } }],
-    }];
-    const resMig = await worker.fetch(req('POST', '/admin/migrate-d1', {
-      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
-    }), env);
-    const dataMig = await resMig.json();
-    assert.strictEqual(dataMig.errors.length, 0, 'sem TIPO nem SETOR não deveria mais dar erro depois da migração de schema');
+    // agora tipo/setor ausentes não devem mais dar erro de constraint na hora de gravar.
+    await seedChamadoComId(env, 'schema-v2-check', {
+      name: 'Chamado de teste pós-migração', status: 'aberto', priority: 3,
+      tipo: null, setor: null, solicitante: 'Michael Vasconcelos',
+    });
     const gravado = await d1GetChamado(env, 'schema-v2-check');
     assert.strictEqual(gravado.tipo, null);
     assert.strictEqual(gravado.setor, null);
@@ -1276,20 +1027,12 @@ async function test(name, fn) {
     assert.strictEqual(res2.status, 200, 'rodar de novo não deveria falhar (CREATE ... IF NOT EXISTS)');
   });
 
-  await test('migração de um chamado com 2+ operadores grava os dois na tabela de junção', async () => {
-    migrationTasksOverride = [{
-      id: 'multi-op-1', name: 'Chamado com dois operadores',
-      status: { status: 'aberto' }, priority: { priority: 'normal' },
-      assignees: [{ id: 170628721, username: 'Everson' }, { id: 200498355, username: 'Henrique' }],
-      custom_fields: [
-        { id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } },
-        { id: TIPO_FIELD_ID, value: 0 },
-        { id: SETOR_FIELD_ID, value: 0 },
-      ],
-    }];
-    await worker.fetch(req('POST', '/admin/migrate-d1', {
-      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
-    }), env);
+  await test('chamado com 2+ operadores grava os dois na tabela de junção (via assignee_ids)', async () => {
+    await seedChamadoComId(env, 'multi-op-1', {
+      name: 'Chamado com dois operadores', status: 'aberto', priority: 3, tipo: 0, setor: 0,
+      solicitante: 'Michael Vasconcelos', assignee_id: 170628721,
+      assignee_ids: [170628721, 200498355],
+    });
 
     const row = await d1GetChamado(env, 'multi-op-1');
     assert.strictEqual(row.assignee_id, 170628721, 'coluna assignee_id continua guardando só o 1º (compat com /api/my-tasks)');
@@ -1309,20 +1052,12 @@ async function test(name, fn) {
     assert.deepStrictEqual(multiOp.assignees.map(a => a.id).sort(), [170628721, 200498355], 'os 2 operadores reais deveriam vir completos, não só o primeiro');
   });
 
-  await test('rodar a migração de novo também sincroniza operador de chamado que já existia (backfill)', async () => {
-    // Simula o cenário real de produção: chamado já estava no D1 de antes desta tabela
-    // existir (só com assignee_id, sem nada em chamado_assignees ainda).
-    await worker.fetch(req('POST', '/admin/migrate-schema-chamado-assignees', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
-    await env.CHAMADOS_DB.prepare('DELETE FROM chamado_assignees WHERE chamado_id = ?').bind('multi-op-1').run();
-    assert.deepStrictEqual(await assigneesDoChamado('multi-op-1'), [], 'pré-condição: tabela de junção limpa pra esse chamado');
-
-    const res = await worker.fetch(req('POST', '/admin/migrate-d1', {
-      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
-    }), env);
-    const data = await res.json();
-    assert.strictEqual(data.skipped, 1, 'a linha principal já existia (INSERT OR IGNORE) — só os operadores são re-sincronizados');
-    assert.deepStrictEqual(await assigneesDoChamado('multi-op-1'), [170628721, 200498355], 'rodar a migração de novo backfilla os operadores mesmo pra chamado que já estava no D1');
-  });
+  // Fase M5 (2026-08-13): o teste "rodar a migração de novo também sincroniza operador…
+  // (backfill)" que existia aqui foi removido — testava especificamente reprocessar
+  // `POST /admin/migrate-d1` pra backfillar `chamado_assignees` de um chamado que já
+  // estava no D1 de antes dessa tabela existir; a rota (e o cenário que ela cobria) não
+  // existem mais. `d1SetAssignees`/`buildSetAssigneesStatements` continuam cobertas pelo
+  // teste acima e por tests/d1-layer.test.js.
 
   await test('atualização admin com operador único substitui a tabela de junção por completo', async () => {
     // Fase M4: sem mock de ClickUp nenhum — handleAdminUpdateTask nem chama fetch mais

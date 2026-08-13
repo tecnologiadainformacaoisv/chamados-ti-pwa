@@ -5,8 +5,13 @@
 // Variáveis de ambiente (Settings → Variables → Add):
 //   VAPID_PUBLIC_KEY  → chave pública gerada (PUBLIC_KEY)
 //   VAPID_PRIVATE_JWK → chave privada em JSON (PRIVATE_JWK)
-//   CLICKUP_API_KEY   → chave da API do ClickUp (marcar como secret) — usada na automação de
-//                        status E no proxy /api/* (o app.js NUNCA recebe essa chave)
+//   CLICKUP_API_KEY   → chave da API do ClickUp (marcar como secret) — Fase M5 (2026-08-13,
+//                        migração de saída da ClickUp): NENHUMA rota usa mais isso, o D1/R2 são
+//                        a fonte de verdade em tudo. Deixada configurada de propósito por
+//                        enquanto (não é preciso remover pra terminar a migração — só reduz
+//                        superfície se um dia alguém rodar `wrangler secret delete
+//                        CLICKUP_API_KEY`; a conta da ClickUp em si continua intacta como
+//                        arquivo, decisão já tomada, ver CLAUDE.md).
 //   SUBSCRIBE_SECRET  → mesmo valor de APP_SHARED_SECRET no app.js (marcar como secret) —
 //                        valida /subscribe e /api/* (header X-App-Secret) e /auth/* (mesmo header)
 //   ADMIN_SECRET      → segredo só seu (marcar como secret) — gere um valor aleatório
@@ -15,8 +20,8 @@
 //                        X-Admin-Secret): GET /admin/users (quem já tem senha cadastrada),
 //                        GET /admin/tasks (todos os chamados, com filtros), GET /admin/metrics
 //                        (agregados de SLA/volume/tempo de atendimento) e POST /admin/tasks/:id
-//                        (única rota de admin que MUTA a ClickUp — status/solução/operador;
-//                        é o que substitui a ClickUp como interface de trabalho da TI).
+//                        (muta status/solução/operador — direto no D1 desde a Fase M4,
+//                        2026-08-13; é o que substitui a ClickUp como interface de trabalho da TI).
 //
 // KV Namespace (Settings → KV Namespace Bindings → Add):
 //   Nome da variável: SUBSCRIPTIONS — reaproveitado também pra login (sem KV novo):
@@ -27,14 +32,18 @@
 //     adminfail_<ip>    → contador de tentativas erradas de ADMIN_SECRET, por IP (expira em 15min)
 // =====================================================================
 
-// ⚠️ Mantenha sincronizado com LIST_ID/FIELD_IDS.SOLICITANTE/FIELD_IDS.TIPO/FIELD_IDS.SETOR/
-// FIELD_IDS.SOLUCAO/FIELD_IDS.EMAIL em app.js
+// TIPO/SETOR/SOLUCAO_FIELD_ID continuam em uso — são os ids que d1RowToTaskShape usa
+// pra montar `custom_fields` no mesmo shape de sempre (contrato que o frontend já
+// espera) e que handleCreateTask lê do payload que o formulário manda.
+// LIST_ID/EMAIL_FIELD_ID/SOLICITANTE_FIELD_ID ficaram vestigiais desde a Fase M5
+// (2026-08-13, migração de saída da ClickUp) — só documentam qual lista/campo da
+// ClickUp arquivada essas rotas costumavam ler; nenhum código usa mais nenhum dos
+// três (D1 guarda `solicitante` como nome puro, sem field_id nem orderindex).
 const LIST_ID               = '901324490220';
 const SOLICITANTE_FIELD_ID  = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
 const TIPO_FIELD_ID         = '47e475fe-e911-40cd-b4a2-23625fbf57f1';
 const SETOR_FIELD_ID        = 'c1ca88de-4b01-4933-93ff-24494bed59e2';
 const SOLUCAO_FIELD_ID      = '16144175-845e-4e3c-baaa-a2517325cd43';
-// Só usado pela migração pro D1 (Fase B3) — nenhuma rota anterior precisava ler EMAIL.
 const EMAIL_FIELD_ID        = '2d8d4780-1d48-44dc-b605-0b5dd76c9d0f';
 const VAPID_SUBJECT         = 'mailto:henrique.krvalho@gmail.com';
 
@@ -110,10 +119,12 @@ const LOGIN_LOCKOUT_SECONDS = 15 * 60;
 // =====================================================================
 // ROUTER
 //
-// /api/* — proxy autenticado pra ClickUp: o app (app.js) nunca recebe a
-// chave da ClickUp. Ele manda o header X-App-Secret (mesmo valor de
-// APP_SHARED_SECRET em app.js / env.SUBSCRIBE_SECRET aqui); o Worker
-// injeta env.CLICKUP_API_KEY (secret, só existe aqui) antes de repassar.
+// /api/* — rotas autenticadas pelo header X-App-Secret (mesmo valor de
+// APP_SHARED_SECRET no frontend / env.SUBSCRIBE_SECRET aqui). Até a Fase M5
+// (2026-08-13, migração de saída da ClickUp), esse header liberava um proxy pra API
+// da ClickUp (o frontend nunca recebia a chave dela); hoje o D1/R2 já são a fonte de
+// verdade em toda rota — o header continua existindo com a mesma função de sempre
+// (só libera quem pode falar com o Worker), só não é mais "proxy" de nada externo.
 // =====================================================================
 export default {
   async fetch(request, env) {
@@ -135,20 +146,25 @@ export default {
       if (attachMatch) return handleUploadAttachment(request, env, attachMatch[1]);
       const adminUpdateMatch = pathname.match(/^\/admin\/tasks\/([^/]+)$/);
       if (adminUpdateMatch) return handleAdminUpdateTask(request, env, adminUpdateMatch[1]);
-      if (pathname === '/admin/migrate-d1') return handleAdminMigrateD1(request, env);
+      // Fase M5 (2026-08-13): rotas de migração de uso único que liam da ClickUp
+      // (/admin/migrate-d1, /admin/migrate-solicitantes, /admin/migrate-anexos) foram
+      // removidas — já rodaram em produção, seus dados já estão no D1/R2, e mantê-las
+      // vivas exigiria manter fetchAllTasks/getSolicitanteMaps/CLICKUP_API_KEY só por
+      // causa delas. Rotas de migração de SCHEMA (abaixo) continuam — são D1-only, sem
+      // ligação nenhuma com a ClickUp.
       if (pathname === '/admin/migrate-schema-nullable-tipo-setor') return handleAdminMigrateSchemaNullableTipoSetor(request, env);
       if (pathname === '/admin/migrate-schema-chamado-assignees') return handleAdminMigrateSchemaChamadoAssignees(request, env);
       if (pathname === '/admin/migrate-schema-solicitantes') return handleAdminMigrateSchemaSolicitantes(request, env);
-      if (pathname === '/admin/migrate-solicitantes') return handleAdminMigrateSolicitantes(request, env);
       if (pathname === '/admin/solicitantes') return handleAdminCreateSolicitante(request, env);
       const solAtivoMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/ativo$/);
       if (solAtivoMatch) return handleAdminSetSolicitanteAtivo(request, env, solAtivoMatch[1]);
       if (pathname === '/admin/migrate-schema-anexos') return handleAdminMigrateSchemaAnexos(request, env);
-      if (pathname === '/admin/migrate-anexos') return handleAdminMigrateAnexos(request, env);
     }
 
     if (request.method === 'GET') {
-      if (pathname === '/api/field')         return handleGetField(request, env);
+      // Fase M5 (2026-08-13): rota /api/field removida — GET /api/solicitantes (D1,
+      // Fase M1) já tinha substituído por completo o único consumidor dela (a tela de
+      // login do app), e nada mais no frontend chamava /api/field.
       if (pathname === '/api/solicitantes')  return handleListSolicitantes(request, env);
       if (pathname === '/api/my-tasks')      return handleGetMyTasks(request, env);
       if (pathname === '/admin/users')       return handleAdminListUsers(request, env);
@@ -167,7 +183,7 @@ export default {
 };
 
 // =====================================================================
-// PROXY AUTENTICADO PRA CLICKUP (/api/*)
+// AUTENTICAÇÃO DE APP (/api/*, /subscribe) — X-App-Secret
 // =====================================================================
 function hasValidSecret(request, env) {
   // Falha FECHADA se o Worker não tiver SUBSCRIBE_SECRET configurado (deploy é manual, colado
@@ -184,14 +200,6 @@ function sessionInvalid() {
   return jsonRes({ error: 'sessão inválida ou expirada, faça login novamente' }, 401);
 }
 
-async function passthrough(upstream) {
-  const text = await upstream.text();
-  return new Response(text, {
-    status: upstream.status,
-    headers: { ...CORS, 'Content-Type': upstream.headers.get('Content-Type') || 'application/json' }
-  });
-}
-
 // Quem está autenticado nesta requisição, segundo o token de sessão — nunca segundo o que
 // o cliente alega no corpo/query. Base de tudo que protege um solicitante ver dado de outro.
 async function requireSession(request, env) {
@@ -201,40 +209,12 @@ async function requireSession(request, env) {
   return raw ? JSON.parse(raw) : null;
 }
 
-// Nome <-> orderindex real da ClickUp, buscado fresco a cada chamada que precisa (mesma
-// lógica de app.js, só que do lado do servidor — usada pra nunca confiar no índice que o
-// cliente manda ao criar/filtrar/notificar.
-async function getSolicitanteMaps(env) {
-  const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/field`, {
-    headers: { Authorization: env.CLICKUP_API_KEY }
-  });
-  const data = await upstream.json();
-  const field = data.fields?.find(f => f.id === SOLICITANTE_FIELD_ID);
-  const options = field?.type_config?.options || [];
-  const nameToIdx = {};
-  const idxToName = {};
-  for (const opt of options) {
-    nameToIdx[opt.name] = opt.orderindex;
-    idxToName[opt.orderindex] = opt.name;
-  }
-  return { nameToIdx, idxToName };
-}
-
-async function handleGetField(request, env) {
-  if (!hasValidSecret(request, env)) return unauthorized();
-  const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/field`, {
-    headers: { Authorization: env.CLICKUP_API_KEY }
-  });
-  return passthrough(upstream);
-}
-
 // Fase B7 (2026-08-12): lê do D1 em vez de paginar a ClickUp — é a rota mais chamada
 // do Worker (poll de 60s de cada solicitante logado), então é onde o corte pro D1
 // rende mais (sem round-trip pra API externa a cada poll). D1 guarda `solicitante`
 // como o nome já resolvido (não um orderindex), então nem precisa mais do fallback
 // que existia aqui pra quando o nome não resolvia no campo customizado atual da
 // ClickUp — essa ambiguidade simplesmente não existe mais neste caminho.
-// GET /tasks/:id (não esta rota) continua na ClickUp — é lá que mora `attachments`.
 async function handleGetMyTasks(request, env) {
   const session = await requireSession(request, env);
   if (!session) return sessionInvalid();
@@ -243,35 +223,26 @@ async function handleGetMyTasks(request, env) {
   return jsonRes({ tasks: rows.map(d1RowToTaskShape) });
 }
 
+// Fase M5 (2026-08-13, migração de saída da ClickUp): passou a ler do D1 por completo
+// (`d1GetChamado` + `d1ListAnexos`) — antes era a última rota que ainda dependia da
+// ClickUp pra qualquer coisa além de migração/push (a Fase M2 já tinha tirado os
+// anexos de lá, mas o corpo da task em si continuava vindo de um GET direto). Checagem
+// de dono ficou bem mais simples: compara `chamado.solicitante` com `session.name`
+// direto, sem precisar resolver orderindex nenhum (D1 nunca guardou isso).
 async function handleGetTask(request, env, taskId) {
   const session = await requireSession(request, env);
   if (!session) return sessionInvalid();
 
-  const upstream = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
-    headers: { Authorization: env.CLICKUP_API_KEY }
-  });
-  const text = await upstream.text();
-  if (!upstream.ok) {
-    return new Response(text, { status: upstream.status, headers: { ...CORS, 'Content-Type': 'application/json' } });
-  }
+  const chamado = await d1GetChamado(env, taskId);
+  if (!chamado) return jsonRes({ error: 'chamado não encontrado' }, 404);
 
   // Dono do chamado tem que bater com quem está logado — sem isso, dava pra ver qualquer
   // chamado só sabendo/adivinhando o ID.
-  const task = JSON.parse(text);
-  const { idxToName } = await getSolicitanteMaps(env);
-  const cf = task.custom_fields?.find(f => f.id === SOLICITANTE_FIELD_ID);
-  const v  = cf?.value?.orderindex ?? cf?.value;
-  if (idxToName[v] !== session.name) return unauthorized('sem permissão pra ver esse chamado');
+  if (chamado.solicitante !== session.name) return unauthorized('sem permissão pra ver esse chamado');
 
-  // Fase M2 (2026-08-13, migração de saída da ClickUp): anexo passou a morar no R2/D1
-  // (`chamado_anexos`), não mais na ClickUp — sobrescreve `attachments` com o que tiver
-  // lá, no mesmo shape que o frontend já espera (url/title/name/extension). A "url"
-  // aqui é a rota autenticada nova (`/api/anexos/:id`), não mais um link direto/público
-  // da ClickUp — precisa deploy JUNTO com a mudança de handleUploadAttachment/frontend
-  // (AnexoModal), nunca separado: se o upload já vai pro R2 mas esta rota ainda lê
-  // attachments da ClickUp, o anexo recém-subido fica invisível até os dois baterem.
   const anexos = await d1ListAnexos(env, taskId);
   const origin = new URL(request.url).origin;
+  const task = d1RowToTaskShape(chamado);
   task.attachments = anexos.map(a => ({
     url: `${origin}/api/anexos/${a.id}`,
     title: a.filename,
@@ -545,44 +516,11 @@ async function handleAdminListUsers(request, env) {
   return jsonRes({ total: users.length, users });
 }
 
-// Valor "puro" de um campo customizado — mesmo padrão repetido em handleGetMyTasks/
-// handleGetTask/handleUploadAttachment (cf?.value?.orderindex ?? cf?.value), só que
-// nomeado, pra não reescrever de novo nas rotas de admin abaixo.
-function cfValue(task, fieldId) {
-  const cf = task.custom_fields?.find(f => f.id === fieldId);
-  return cf?.value?.orderindex ?? cf?.value ?? null;
-}
-
-// Busca TODOS os chamados da lista (não só a primeira página) — as rotas de admin
-// precisam do total real pra métricas/filtros baterem, diferente de handleGetMyTasks
-// (que é por pessoa e raramente passa de 100 chamados).
-//
-// LIMITAÇÃO CONHECIDA (teto de páginas + double-fetch): teto de `maxPages` páginas
-// (~2000 chamados no padrão) só como salvaguarda contra loop infinito se a API mudar
-// de formato — mas na prática, se o volume real passar disso, os chamados mais antigos
-// somem silenciosamente das métricas/filtros. Por isso devolve `truncated: true` quando
-// bate o teto, pra quem chama poder avisar. Além disso, /admin/tasks e /admin/metrics
-// chamam esta função de forma independente (cada carregamento do painel faz a paginação
-// completa duas vezes) — aceitável no volume atual (dezenas de chamados = 1 página cada),
-// mas vira ~40 chamadas à ClickUp por carregamento se o volume um dia chegar na casa dos
-// milhares. Se isso passar a importar, a solução é cachear o resultado por alguns
-// segundos no KV (chave curta, TTL de 15-30s) em vez de buscar tudo de novo a cada rota.
-async function fetchAllTasks(env, maxPages = 20) {
-  const tasks = [];
-  for (let page = 0; page < maxPages; page++) {
-    const params = new URLSearchParams({ order_by: 'created', reverse: 'true', include_closed: 'true', page: String(page) });
-    const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task?${params}`, {
-      headers: { Authorization: env.CLICKUP_API_KEY }
-    });
-    const data  = await upstream.json();
-    const batch = data.tasks || [];
-    tasks.push(...batch);
-    if (batch.length < 100 || data.last_page) return { tasks, truncated: false };
-  }
-  // Só chega aqui se todas as `maxPages` páginas vieram cheias (100 itens, sem last_page) —
-  // sinal de que ainda tem mais chamados na ClickUp que não foram buscados.
-  return { tasks, truncated: true };
-}
+// Fase M5 (2026-08-13): `cfValue`/`fetchAllTasks` foram removidas — só existiam pra
+// ler o shape bruto de task da ClickUp (usado por `mapClickUpTaskToD1`/
+// `handleAdminMigrateD1`/`handleAdminMigrateAnexos`, as três rotas de migração de
+// uso único que saíram junto nesta fase, ver mais abaixo). Nenhuma rota que continua
+// no ar depende delas.
 
 // =====================================================================
 // /admin/tasks — todos os chamados, com filtros opcionais via query string (status,
@@ -749,13 +687,16 @@ async function handleSubscribe(request, env) {
     const { subscription } = await request.json();
     if (!subscription?.endpoint) return jsonRes({ error: 'subscription ausente' }, 400);
 
-    // O índice usado como chave é resolvido aqui, não mandado pelo cliente — fica
-    // consistente com o valor que /webhook lê depois direto da task pra achar essa chave.
-    const { nameToIdx } = await getSolicitanteMaps(env);
-    const cuIdx = nameToIdx[session.name];
-    if (cuIdx == null) return jsonRes({ error: 'não foi possível confirmar seu cadastro na ClickUp' }, 400);
-
-    await env.SUBSCRIPTIONS.put(`u_${cuIdx}`, JSON.stringify(subscription));
+    // Fase M5 (2026-08-13, migração de saída da ClickUp): a chave passou de
+    // `u_<orderindex da ClickUp>` (exigia resolver o índice via getSolicitanteMaps a
+    // cada inscrição) pra `usub_<nome>` direto — `session.name` já é a identidade real
+    // desde sempre, não precisa de tradução nenhuma. `d1TransitionStatus` lê essa mesma
+    // chave pra mandar push. Quem já tinha uma subscription salva sob a chave antiga
+    // fica sem push até reabrir o app (o app já rechama /subscribe sozinho toda vez que
+    // a página carrega com permissão concedida — ver use-push-notifications.tsx/
+    // setupNotifications() em app.js — então se resolve sozinho no uso normal, mesmo
+    // padrão do incidente de troca de par VAPID em 2026-08-10).
+    await env.SUBSCRIPTIONS.put(`usub_${session.name}`, JSON.stringify(subscription));
     return jsonRes({ ok: true });
   } catch (err) {
     return jsonRes({ error: err.message }, 500);
@@ -1320,96 +1261,9 @@ async function handleAdminSetSolicitanteAtivo(request, env, name) {
   return jsonRes({ ok: true });
 }
 
-// =====================================================================
-// POST /admin/migrate-solicitantes — migração de uso único (Fase M1): copia a lista
-// de nomes que hoje vive só na ClickUp (mesmo campo/mesma função que GET /api/field já
-// usava) pra tabela `solicitantes` do D1. Idempotente (d1CreateSolicitante usa INSERT
-// OR IGNORE) — rodar de novo não duplica, só marca como "skipped" quem já migrou.
-// =====================================================================
-async function handleAdminMigrateSolicitantes(request, env) {
-  if (!(await isAdmin(request, env))) return unauthorized();
-
-  const { idxToName } = await getSolicitanteMaps(env);
-  const nomes = Object.values(idxToName);
-
-  let migrated = 0, skipped = 0;
-  for (const name of nomes) {
-    const { inserted } = await d1CreateSolicitante(env, name);
-    if (inserted) migrated++; else skipped++;
-  }
-  return jsonRes({ total: nomes.length, migrated, skipped });
-}
-
-// =====================================================================
-// POST /admin/migrate-d1 — Fase B3 do roadmap (migração de histórico, 2026-08-11).
-// Só leitura na ClickUp (fetchAllTasks, mesma função que /admin/tasks já usa) + escrita
-// no D1 — não muda NADA em produção, já que nenhuma rota lê do D1 ainda. Protegido por
-// ADMIN_SECRET, mesmo padrão das outras rotas /admin/*.
-//
-// Idempotente: usa INSERT OR IGNORE com o próprio task_id da ClickUp como id no D1 (só
-// pras linhas migradas — chamados criados depois direto no D1, quando existirem, usam
-// UUID via d1CreateChamado) — rodar de novo não duplica nem falha, só marca como
-// "skipped" o que já tinha sido migrado antes.
-//
-// Aceita { "dryRun": true } no corpo pra simular sem gravar nada — mapeia/valida todas as
-// tasks e devolve a mesma contagem que uma migração de verdade daria, sem tocar no D1.
-//
-// Falha por task individual não derruba a migração inteira (mesmo espírito de
-// handleAdminUpdateTask reportando "updated" parcial) — cada erro vai pra "errors",
-// identificado pelo id/nome da task, migração continua pras próximas.
-// =====================================================================
-
-function mapClickUpTaskToD1(task, idxToName) {
-  const statusRaw = (task.status?.status || '').toLowerCase();
-  if (!VALID_STATUSES.includes(statusRaw)) {
-    throw new Error(`status fora do esperado: "${task.status?.status}"`);
-  }
-
-  // Fase B7 (2026-08-12): os 269 chamados de antes do app existir (2026-01 a metade de
-  // 2026-05, quando o campo SOLICITANTE nem existia/não era preenchido — ver CLAUDE.md,
-  // "Fase B3") agora migram mesmo assim, com solicitante = '' (string vazia, não NULL —
-  // a coluna é NOT NULL no schema). Decisão tomada em 2026-08-11: prioriza ter o
-  // histórico completo num lugar só sobre a praticidade de não aparecerem em "meus
-  // chamados" de ninguém (não têm dono mesmo, não é bug perder essa associação).
-  const solicitanteIdx  = cfValue(task, SOLICITANTE_FIELD_ID);
-  const solicitanteName = (solicitanteIdx != null ? idxToName[solicitanteIdx] : null) || '';
-
-  // Fase B7 (2026-08-12, mesmo dia): os 12 chamados bem antigos que ainda faltavam
-  // migrar tinham TIPO e SETOR ausentes (nenhum custom_fields preenchido — não é bug,
-  // são tasks de antes desses campos serem obrigatórios no formulário). Mesmo
-  // tratamento do SOLICITANTE acima: migra com null em vez de virar erro, pra ter o
-  // histórico completo — mas aqui pode ser NULL de verdade (não string vazia), porque
-  // a coluna já não tem NOT NULL (ver d1/schema.sql). Investigado antes de mudar: a
-  // prioridade dessas 12 tasks está presente normalmente, só tipo/setor faltam mesmo.
-  const tipoIdx  = cfValue(task, TIPO_FIELD_ID);
-  const setorIdx = cfValue(task, SETOR_FIELD_ID);
-
-  const priorityName = task.priority?.priority;
-  const priority = PRIORITY_NAME_TO_NUM[priorityName];
-  if (!priority) throw new Error(`prioridade ausente/desconhecida: "${priorityName}"`);
-
-  return {
-    id:           task.id,
-    name:         task.name,
-    description:  task.description || task.text_content || null,
-    status:       statusRaw,
-    priority,
-    tipo:         tipoIdx  != null ? Number(tipoIdx)  : null,
-    setor:        setorIdx != null ? Number(setorIdx) : null,
-    solicitante:  solicitanteName,
-    email:        cfValue(task, EMAIL_FIELD_ID),
-    solucao:      cfValue(task, SOLUCAO_FIELD_ID),
-    assignee_id:  task.assignees?.[0]?.id ?? null,
-    // Suporte a múltiplos operadores (B7 parte 2, fase 1) — array completo, não só o
-    // primeiro. `assignee_id` acima continua existindo à parte (coluna já em uso por
-    // GET /api/my-tasks) — este campo alimenta a tabela chamado_assignees.
-    assignee_ids: (task.assignees || []).map(a => a.id),
-    due_date:     task.due_date    != null ? Number(task.due_date)    : null,
-    date_created: task.date_created != null ? Number(task.date_created) : Date.now(),
-    date_closed:  task.date_closed != null ? Number(task.date_closed)  : null,
-    start_date:   task.start_date  != null ? Number(task.start_date)   : null,
-  };
-}
+// Fase M5 (2026-08-13): POST /admin/migrate-solicitantes removida — já rodou em
+// produção (43 nomes migrados, ver CLAUDE.md), único consumidor de getSolicitanteMaps
+// que sobrava fora de d1TransitionStatus/handleSubscribe (já resolvidos acima).
 
 // Suporte a múltiplos operadores (B7 parte 2, fase 1, 2026-08-12) — substitui por
 // completo quem está atribuído a um chamado na tabela de junção. DELETE+INSERT em vez
@@ -1476,65 +1330,6 @@ async function d1GetAssigneesMap(env, chamadoIds) {
     }
   }
   return map;
-}
-
-async function d1MigrateChamado(env, data) {
-  const now = Date.now();
-  const result = await env.CHAMADOS_DB.prepare(
-    `INSERT OR IGNORE INTO chamados
-      (id, name, description, status, priority, tipo, setor, solicitante, email, solucao,
-       assignee_id, due_date, date_created, date_closed, start_date, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    data.id, data.name, data.description, data.status, data.priority, data.tipo, data.setor,
-    data.solicitante, data.email, data.solucao, data.assignee_id, data.due_date, data.date_created,
-    data.date_closed, data.start_date, now, now
-  ).run();
-  // Sempre sincroniza os operadores, mesmo quando o INSERT acima foi ignorado (chamado
-  // já existia) — é assim que rodar a migração de novo também BACKFILLA o 2º+ operador
-  // dos chamados que já estavam no D1 antes desta tabela existir (ela só guardava o
-  // primeiro até aqui). d1SetAssignees já é 1 subrequest só (.batch()) — total de 2
-  // subrequests/linha nesta função (INSERT + batch), bem abaixo do teto mesmo pros 453.
-  if (data.assignee_ids !== undefined) {
-    await d1SetAssignees(env, data.id, data.assignee_ids);
-  }
-  return { inserted: (result.meta?.changes ?? 0) > 0 };
-}
-
-async function handleAdminMigrateD1(request, env) {
-  if (!(await isAdmin(request, env))) return unauthorized();
-
-  let body = {};
-  const text = await request.text();
-  if (text) {
-    try { body = JSON.parse(text); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
-  }
-  const dryRun = body.dryRun === true;
-
-  const { tasks, truncated } = await fetchAllTasks(env);
-  const { idxToName } = await getSolicitanteMaps(env);
-
-  let migrated = 0, skipped = 0;
-  const errors = [];
-
-  for (const task of tasks) {
-    let mapped;
-    try {
-      mapped = mapClickUpTaskToD1(task, idxToName);
-    } catch (err) {
-      errors.push({ id: task.id, name: task.name, reason: err.message });
-      continue;
-    }
-    if (dryRun) { migrated++; continue; }
-    try {
-      const result = await d1MigrateChamado(env, mapped);
-      if (result.inserted) migrated++; else skipped++;
-    } catch (err) {
-      errors.push({ id: task.id, name: task.name, reason: err.message });
-    }
-  }
-
-  return jsonRes({ dryRun, total: tasks.length, migrated, skipped, errors, truncated });
 }
 
 // =====================================================================
@@ -1768,130 +1563,35 @@ async function handleAdminMigrateSchemaAnexos(request, env) {
   }
 }
 
-// =====================================================================
-// POST /admin/migrate-anexos — migração de uso único dos anexos históricos da
-// ClickUp pro R2 (Fase M2, 2026-08-13). O MAIOR RISCO TÉCNICO da migração inteira
-// (volume desconhecido de anexos, arquivos grandes, teto de subrequests por
-// invocação do Worker — ver o achado de 2026-08-12 sobre `.batch()`) — por isso
-// PAGINADA desde o início (aceita { offset, limit } no corpo), em vez de tentar
-// processar tudo numa invocação só e descobrir o estouro na hora, como aconteceu
-// antes com o backfill de chamado_assignees. Idempotente: confere se já existe uma
-// linha pra aquele chamado_id+filename antes de baixar/subir de novo.
-//
-// `fetchAllTasks` não devolve `attachments` (só a lista de tasks) — precisa de 1
-// GET /task/:id por task pra saber se ela tem anexo, daí o teto de `limit` baixo
-// por padrão (cada task nesse range já custa 1 subrequest só pra checar).
-//
-// 🛡️ Achado real rodando em produção (2026-08-13, mesmo dia): o teto de subrequests
-// por invocação do Worker é BEM menor do que os "~1000 no plano pago" documentados
-// em 2026-08-12 pro backfill de chamado_assignees — `limit:50` (padrão inicial desta
-// rota) estourava consistentemente ANTES de terminar o lote, com o erro real da
-// Cloudflare "Too many subrequests by single Worker invocation" (nota: mensagem
-// "subrequests", diferente da variante "API requests" vista no achado de 2026-08-12 —
-// mesma causa raiz, mensagem um pouco diferente). Pior ainda: uma vez estourado, TODO
-// o resto do lote falhava também (inclusive o `GET /task/:id` que só checa se a task
-// TEM anexo) — ou seja, tasks que nem tinham anexo apareciam como "erro", não como
-// "sem anexo". `limit:5` rodou os 455 chamados reais (91 chamadas) com ZERO erros.
-// Conclusão prática: não confiar em "~1000" como orçamento de subrequests pra
-// qualquer migração futura neste projeto — testar empiricamente com lotes pequenos
-// primeiro. Corrigido reduzindo o padrão daqui pra 5 (comprovado em produção).
-// =====================================================================
-async function handleAdminMigrateAnexos(request, env) {
-  if (!(await isAdmin(request, env))) return unauthorized();
-
-  let body = {};
-  const text = await request.text();
-  if (text) {
-    try { body = JSON.parse(text); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
-  }
-  const offset = Number.isInteger(body.offset) ? body.offset : 0;
-  const limit  = Number.isInteger(body.limit) ? body.limit : 5;
-
-  const { tasks, truncated } = await fetchAllTasks(env);
-  const slice = tasks.slice(offset, offset + limit);
-
-  let tasksComAnexo = 0, migrated = 0, skipped = 0;
-  const errors = [];
-
-  for (const task of slice) {
-    try {
-      const detailResp = await fetch(`https://api.clickup.com/api/v2/task/${task.id}`, {
-        headers: { Authorization: env.CLICKUP_API_KEY }
-      });
-      if (!detailResp.ok) {
-        errors.push({ id: task.id, name: task.name, reason: `GET task falhou: ${detailResp.status}` });
-        continue;
-      }
-      const detail = await detailResp.json();
-      const attachments = detail.attachments || [];
-      if (!attachments.length) continue;
-      tasksComAnexo++;
-
-      for (const att of attachments) {
-        const filename = att.title || att.name || 'arquivo';
-        try {
-          const already = await env.CHAMADOS_DB.prepare(
-            'SELECT id FROM chamado_anexos WHERE chamado_id = ? AND filename = ?'
-          ).bind(task.id, filename).first();
-          if (already) { skipped++; continue; }
-
-          const fileResp = await fetch(att.url);
-          if (!fileResp.ok) {
-            errors.push({ id: task.id, name: task.name, reason: `download do anexo "${filename}" falhou: ${fileResp.status}` });
-            continue;
-          }
-          const contentType = fileResp.headers.get('Content-Type') || 'application/octet-stream';
-          const { key, size } = await r2UploadAnexo(env, task.id, filename, contentType, fileResp.body);
-          await env.CHAMADOS_DB.prepare(
-            'INSERT INTO chamado_anexos (id, chamado_id, r2_key, filename, content_type, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-          ).bind(crypto.randomUUID(), task.id, key, filename, contentType, size, Date.now()).run();
-          migrated++;
-        } catch (err) {
-          errors.push({ id: task.id, name: task.name, reason: `"${filename}": ${err.message}` });
-        }
-      }
-    } catch (err) {
-      errors.push({ id: task.id, name: task.name, reason: err.message });
-    }
-  }
-
-  const nextOffset = offset + slice.length;
-  return jsonRes({
-    totalTasks: tasks.length, offset, limit, processedTasks: slice.length,
-    tasksComAnexo, migrated, skipped, errors,
-    hasMore: nextOffset < tasks.length, nextOffset,
-    truncated,
-  });
-}
+// Fase M5 (2026-08-13): POST /admin/migrate-anexos removida — já rodou em produção
+// (46 anexos reais migrados em 41 chamados, 0 erros, ver CLAUDE.md). Era a última rota
+// que ainda chamava api.clickup.com pra ler task/anexo (fora do lookup de push, já
+// resolvido acima) — não sobra nenhum `fetch` pra ClickUp neste arquivo depois desta
+// fase (só o comentário de arquitetura no topo do arquivo/router, histórico).
 
 // =====================================================================
 // AUTOMAÇÃO DE SLA/PUSH EMBUTIDA — D1 (Fase B5 do roadmap de modernização,
 // 2026-08-11 — ver CLAUDE.md "Decisões técnicas tomadas")
 //
-// Mesma automação de runStatusAutomation (acima), reescrita pra não depender do
-// webhook da automação da ClickUp — chamar esta função já basta, tudo embutido
-// na própria mudança de status. ⚠️ NADA nas rotas usa isto ainda (mesmo espírito
-// das Fases B2/B4) — é a peça que falta pra um dia (Fase B7) o D1 não precisar
-// mais da automação configurada na ClickUp pra funcionar.
+// Escrita e testada na Fase B5, ficou dormente até a Fase M4 (2026-08-13) ligar de
+// verdade em `handleAdminUpdateTask` — hoje é a ÚNICA automação de status que existe
+// (a versão baseada em webhook/`runStatusAutomation` foi removida na mesma M4).
 //
-// Diferenças deliberadas em relação ao original, não são bug:
-// - Sem dedup (processed_<id>_<status> no original): aquele dedup existe só
-//   porque o webhook da ClickUp pode entregar o mesmo evento mais de uma vez.
-//   Aqui não tem webhook nenhum — esta função só roda quando ALGUÉM chama ela
-//   direto (uma vez por mudança de status), então a duplicata que o dedup
-//   evitava não pode acontecer nesse desenho.
-// - "encerrado" sempre grava date_closed, mesmo sem start_date (chamado que
-//   pula "em atendimento" e vai direto pra "encerrado"). O original pulava o
-//   registro de tempo nesse caso porque dependia de start_date pra calcular a
-//   duração pra API de time-tracking da ClickUp — o D1 não tem equivalente
-//   disso (a duração já é só date_closed - start_date, calculada sob demanda
-//   em d1GetMetrics, que já ignora quando start_date falta).
-// - Push embutido na mesma função (não um passo separado) — ainda resolve a
-//   inscrição pelo orderindex da ClickUp (getSolicitanteMaps + sendWebPush, os
-//   dois já existentes), porque é assim que handleSubscribe grava a chave hoje;
-//   isso não muda nesta fase. Falha ao enviar push nunca derruba a mudança de
-//   status (fica num try/catch próprio) — igual ao original, que já mandava a
-//   automação em separado de qualquer jeito.
+// Diferenças deliberadas em relação ao `runStatusAutomation` original, não são bug:
+// - Sem dedup (`processed_<id>_<status>` no original): aquele dedup existia só porque
+//   o webhook da ClickUp podia entregar o mesmo evento mais de uma vez. Sem webhook
+//   nenhum (nem essa classe de duplicata), essa função só roda quando alguém chama ela
+//   direto — uma vez por mudança de status.
+// - "encerrado" sempre grava date_closed, mesmo sem start_date (chamado que pula "em
+//   atendimento" e vai direto pra "encerrado"). O original pulava o registro de tempo
+//   nesse caso porque dependia de start_date pra calcular a duração pra API de
+//   time-tracking da ClickUp — o D1 não tem equivalente disso (a duração já é só
+//   date_closed - start_date, calculada sob demanda em d1GetMetrics, que já ignora
+//   quando start_date falta).
+// - Push embutido na mesma função (não um passo separado), lendo a chave `usub_<nome>`
+//   direto (Fase M5 — antes resolvia orderindex via getSolicitanteMaps, chamada à
+//   ClickUp que não existe mais). Falha ao enviar push nunca derruba a mudança de
+//   status (fica num try/catch próprio).
 // =====================================================================
 async function d1TransitionStatus(env, chamadoId, novoStatus) {
   if (!VALID_STATUSES.includes(novoStatus)) {
@@ -1930,17 +1630,13 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
   const label = NOTIFY_STATUSES[novoStatus];
   if (label) {
     try {
-      const { nameToIdx } = await getSolicitanteMaps(env);
-      const idx = nameToIdx[chamado.solicitante];
-      if (idx != null) {
-        const subJson = await env.SUBSCRIPTIONS.get(`u_${idx}`);
-        if (subJson) {
-          await sendWebPush(JSON.parse(subJson), JSON.stringify({
-            title: 'Chamados de TI – ISV',
-            body:  `"${chamado.name}" está agora: ${label}`,
-            data:  { task_id: chamadoId, status: novoStatus }
-          }), env);
-        }
+      const subJson = await env.SUBSCRIPTIONS.get(`usub_${chamado.solicitante}`);
+      if (subJson) {
+        await sendWebPush(JSON.parse(subJson), JSON.stringify({
+          title: 'Chamados de TI – ISV',
+          body:  `"${chamado.name}" está agora: ${label}`,
+          data:  { task_id: chamadoId, status: novoStatus }
+        }), env);
       }
     } catch (err) {
       console.error(`d1TransitionStatus: falha ao enviar push pra ${chamadoId}: ${err.message}`);

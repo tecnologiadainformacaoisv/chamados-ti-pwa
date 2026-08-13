@@ -70,9 +70,6 @@ function makeMockKV() {
   };
 }
 
-const SOLICITANTE_FIELD_ID = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
-const FAKE_SOLICITANTE_OPTIONS = [{ id: 'a27', name: 'Michael Vasconcelos', orderindex: 27 }];
-
 function freshEnvComAutomacao(vapidPrivateJwk) {
   return { ...freshEnv(), SUBSCRIPTIONS: makeMockKV(), CLICKUP_API_KEY: 'fake', VAPID_PRIVATE_JWK: vapidPrivateJwk };
 }
@@ -98,15 +95,14 @@ async function test(name, fn) {
   const vapidKeyPair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const vapidPrivateJwk = JSON.stringify(await crypto.subtle.exportKey('jwk', vapidKeyPair.privateKey));
 
-  // Mock de fetch só pro que d1TransitionStatus precisa: getSolicitanteMaps (lista de
-  // campo da ClickUp) e o endpoint de push em si (sendWebPush) — nunca toca rede real.
+  // Mock de fetch só pro endpoint de push em si (sendWebPush) — nunca toca rede real.
+  // Fase M5 (2026-08-13): d1TransitionStatus parou de resolver a inscrição via
+  // getSolicitanteMaps/GET-field da ClickUp — lê `usub_<nome>` direto do KV agora, sem
+  // fetch nenhum envolvido nessa parte.
   let lastPushCall = null;
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, opts) => {
     const u = String(url);
-    if (u.includes('/list/') && u.includes('/field')) {
-      return new Response(JSON.stringify({ fields: [{ id: SOLICITANTE_FIELD_ID, type_config: { options: FAKE_SOLICITANTE_OPTIONS } }] }), { status: 200 });
-    }
     if (u.startsWith('https://fake-push-endpoint.test/')) {
       lastPushCall = { url: u, headers: opts.headers, body: opts.body };
       if (u.endsWith('/falha')) return new Response('endpoint fora do ar', { status: 410 });
@@ -416,7 +412,7 @@ async function test(name, fn) {
   console.log('--- push embutido ---');
   await test('envia push quando existe inscrição pro solicitante', async () => {
     const env = freshEnvComAutomacao(vapidPrivateJwk);
-    await env.SUBSCRIPTIONS.put('u_27', JSON.stringify({
+    await env.SUBSCRIPTIONS.put(`usub_${baseChamado.solicitante}`, JSON.stringify({
       endpoint: 'https://fake-push-endpoint.test/abc',
       keys: { p256dh: 'BMgcsTAUEhUr-dau-LaPhTHktmCZ90q4GXFF6CX0p3IvmeB51v68JqZLeuKrO3swUcSXKiNhQ6Ur5I74fm6tp2Q', auth: 'dGVzdC1hdXRoLTE2Yg' },
     }));
@@ -441,7 +437,7 @@ async function test(name, fn) {
 
   await test('falha ao enviar push não derruba a transição de status', async () => {
     const env = freshEnvComAutomacao(vapidPrivateJwk);
-    await env.SUBSCRIPTIONS.put('u_27', JSON.stringify({
+    await env.SUBSCRIPTIONS.put(`usub_${baseChamado.solicitante}`, JSON.stringify({
       endpoint: 'https://fake-push-endpoint.test/falha',
       keys: { p256dh: 'BMgcsTAUEhUr-dau-LaPhTHktmCZ90q4GXFF6CX0p3IvmeB51v68JqZLeuKrO3swUcSXKiNhQ6Ur5I74fm6tp2Q', auth: 'dGVzdC1hdXRoLTE2Yg' },
     }));
