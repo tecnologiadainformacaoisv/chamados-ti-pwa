@@ -1952,6 +1952,20 @@ async function handleAdminMigrateSchemaAnexos(request, env) {
 // `fetchAllTasks` não devolve `attachments` (só a lista de tasks) — precisa de 1
 // GET /task/:id por task pra saber se ela tem anexo, daí o teto de `limit` baixo
 // por padrão (cada task nesse range já custa 1 subrequest só pra checar).
+//
+// 🛡️ Achado real rodando em produção (2026-08-13, mesmo dia): o teto de subrequests
+// por invocação do Worker é BEM menor do que os "~1000 no plano pago" documentados
+// em 2026-08-12 pro backfill de chamado_assignees — `limit:50` (padrão inicial desta
+// rota) estourava consistentemente ANTES de terminar o lote, com o erro real da
+// Cloudflare "Too many subrequests by single Worker invocation" (nota: mensagem
+// "subrequests", diferente da variante "API requests" vista no achado de 2026-08-12 —
+// mesma causa raiz, mensagem um pouco diferente). Pior ainda: uma vez estourado, TODO
+// o resto do lote falhava também (inclusive o `GET /task/:id` que só checa se a task
+// TEM anexo) — ou seja, tasks que nem tinham anexo apareciam como "erro", não como
+// "sem anexo". `limit:5` rodou os 455 chamados reais (91 chamadas) com ZERO erros.
+// Conclusão prática: não confiar em "~1000" como orçamento de subrequests pra
+// qualquer migração futura neste projeto — testar empiricamente com lotes pequenos
+// primeiro. Corrigido reduzindo o padrão daqui pra 5 (comprovado em produção).
 // =====================================================================
 async function handleAdminMigrateAnexos(request, env) {
   if (!(await isAdmin(request, env))) return unauthorized();
@@ -1962,7 +1976,7 @@ async function handleAdminMigrateAnexos(request, env) {
     try { body = JSON.parse(text); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
   }
   const offset = Number.isInteger(body.offset) ? body.offset : 0;
-  const limit  = Number.isInteger(body.limit) ? body.limit : 50;
+  const limit  = Number.isInteger(body.limit) ? body.limit : 5;
 
   const { tasks, truncated } = await fetchAllTasks(env);
   const slice = tasks.slice(offset, offset + limit);
