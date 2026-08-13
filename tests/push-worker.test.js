@@ -52,7 +52,6 @@ function freshD1() {
 const SOLICITANTE_FIELD_ID = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
 const TIPO_FIELD_ID = '47e475fe-e911-40cd-b4a2-23625fbf57f1';
 const SETOR_FIELD_ID = 'c1ca88de-4b01-4933-93ff-24494bed59e2';
-const SOLUCAO_FIELD_ID = '16144175-845e-4e3c-baaa-a2517325cd43';
 const MAX_ANEXO_BYTES = 10 * 1024 * 1024; // mesmo valor de push-worker.js (Fase M2)
 const FAKE_OPTIONS = [
   { id: 'a1', name: 'Ariele Santo', orderindex: 1 },
@@ -165,7 +164,7 @@ async function test(name, fn) {
 
 (async () => {
   const workerPath = pathToFileURL(path.join(__dirname, '..', 'push-worker.js')).href;
-  const { default: worker, d1GetChamado, d1SetAssignees, d1CreateSolicitante, d1ListAnexos } = await import(workerPath);
+  const { default: worker, d1GetChamado, d1SetAssignees, d1CreateSolicitante, d1ListAnexos, d1CreateChamado } = await import(workerPath);
 
   let taskListCallCount = 0;
   let migrationTasksOverride = null; // usado só nos testes de POST /admin/migrate-d1
@@ -892,209 +891,178 @@ async function test(name, fn) {
     assert.strictEqual(data.tempoMedioPorOperador['200498355'], undefined, 'chamado da Ariele não foi encerrado, não deveria contar tempo de atendimento pro Henrique');
   });
 
-  console.log('--- POST /admin/tasks/:id — a TI passa a trabalhar por aqui em vez de abrir a ClickUp ---');
+  console.log('--- POST /admin/tasks/:id — a TI trabalha por aqui, direto no D1 (Fase M4, 2026-08-13) ---');
+  // Fase M4: handleAdminUpdateTask parou de chamar a ClickUp — grava direto no D1
+  // (d1TransitionStatus/d1UpdateChamado). `criarChamadoTeste` semeia um chamado fresco
+  // via d1CreateChamado (a mesma função de produção, não uma reimplementação paralela)
+  // pra cada teste que precisa de um — mais simples que reaproveitar task-michael-1
+  // (que já está "encerrado", herdado de FAKE_TASKS) quando o teste precisa de um
+  // ponto de partida "aberto".
+  async function criarChamadoTeste(overrides = {}) {
+    const row = await d1CreateChamado(env, {
+      name: 'Chamado de teste (M4)', priority: 3, tipo: 0, setor: 0,
+      solicitante: 'Michael Vasconcelos', status: 'aberto', assignee_id: 170628721,
+      ...overrides,
+    });
+    return row.id;
+  }
+
   await test('sem X-Admin-Secret dá 403', async () => {
-    const res = await worker.fetch(req('POST', '/admin/tasks/task-michael-1', { body: JSON.stringify({ status: 'em atendimento' }) }), env);
+    const id = await criarChamadoTeste();
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, { body: JSON.stringify({ status: 'em atendimento' }) }), env);
     assert.strictEqual(res.status, 403);
   });
   await test('status inválido dá 400', async () => {
-    const res = await worker.fetch(req('POST', '/admin/tasks/task-michael-1', {
+    const id = await criarChamadoTeste();
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
       headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'invalido' })
     }), env);
     assert.strictEqual(res.status, 400);
   });
   await test('corpo sem nada pra atualizar dá 400', async () => {
-    const res = await worker.fetch(req('POST', '/admin/tasks/task-michael-1', {
+    const id = await criarChamadoTeste();
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
       headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({})
     }), env);
     assert.strictEqual(res.status, 400);
   });
-  await test('muda status, escreve solução e reatribui operador — cada mudança chama o endpoint certo da ClickUp', async () => {
+  await test('chamado inexistente dá 404', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks/nao-existe-no-d1', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'em atendimento' })
+    }), env);
+    assert.strictEqual(res.status, 404);
+  });
+  await test('muda status, escreve solução e reatribui operador — grava tudo direto no D1, sem tocar na ClickUp', async () => {
+    const id = await criarChamadoTeste();
     const previousFetch = globalThis.fetch;
-    const calls = [];
+    let taskMutationCalled = false;
     globalThis.fetch = async (url, opts) => {
-      const u = String(url);
-      calls.push({ url: u, method: opts?.method || 'GET', body: opts?.body ? JSON.parse(opts.body) : null });
-      if (u.endsWith('/task/task-update-1') && (!opts?.method || opts.method === 'GET')) {
-        return new Response(JSON.stringify({ id: 'task-update-1', assignees: [{ id: 170628721, username: 'Everson' }] }), { status: 200 });
-      }
-      if (u.endsWith('/task/task-update-1') && opts.method === 'PUT') {
-        return new Response(JSON.stringify({ id: 'task-update-1', ok: true }), { status: 200 });
-      }
-      if (u.includes('/task/task-update-1/field/') && opts.method === 'POST') {
-        return new Response(JSON.stringify({ ok: true }), { status: 200 });
-      }
+      // A única chamada residual esperada é o GET de /field (resolução nome->orderindex
+      // pro lookup de subscription de push em d1TransitionStatus — dependência conhecida
+      // e documentada, só sai na Fase M5). Nenhuma chamada em /task/ (GET, PUT ou POST)
+      // deveria mais acontecer — essa é a garantia real desta fase.
+      if (String(url).includes('/task/')) taskMutationCalled = true;
       return previousFetch(url, opts);
     };
-
     try {
-      const res = await worker.fetch(req('POST', '/admin/tasks/task-update-1', {
+      const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
         headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
         body: JSON.stringify({ status: 'em atendimento', solucao: 'Reiniciei o notebook e atualizei o driver.', assigneeId: 200498355 })
       }), env);
       assert.strictEqual(res.status, 200);
       const data = await res.json();
       assert.deepStrictEqual(data.updated, { status: 'em atendimento', solucao: true, assigneeId: 200498355 });
+      assert.strictEqual(taskMutationCalled, false, 'M4: nenhuma sub-mutação deveria mais chamar /task/ na ClickUp — tudo no D1 direto');
 
-      const statusCall = calls.find(c => c.method === 'PUT' && c.body?.status === 'em atendimento');
-      assert.ok(statusCall, 'deveria ter dado PUT com o status novo');
-
-      const fieldCall = calls.find(c => c.url.includes('/field/') && c.method === 'POST');
-      assert.ok(fieldCall, 'deveria ter dado POST no endpoint de campo customizado');
-      assert.ok(fieldCall.url.includes(SOLUCAO_FIELD_ID), 'deveria usar o field_id da SOLUCAO');
-      assert.strictEqual(fieldCall.body.value, 'Reiniciei o notebook e atualizei o driver.');
-
-      const assigneeCall = calls.find(c => c.method === 'PUT' && c.body?.assignees);
-      assert.ok(assigneeCall, 'deveria ter dado PUT trocando assignees');
-      assert.deepStrictEqual(assigneeCall.body.assignees, { add: [200498355], rem: [170628721] }, 'deveria remover o Everson e adicionar o Henrique, não empilhar os dois');
+      const linha = await d1GetChamado(env, id);
+      assert.strictEqual(linha.status, 'em atendimento');
+      assert.strictEqual(linha.solucao, 'Reiniciei o notebook e atualizei o driver.');
+      assert.strictEqual(linha.assignee_id, 200498355);
+      assert.ok(linha.start_date, 'd1TransitionStatus deveria ter definido start_date ao entrar em "em atendimento"');
     } finally {
       globalThis.fetch = previousFetch;
     }
   });
-  await test('atualização admin espelha status/solução/operador no D1 (Fase B7, dual-write)', async () => {
-    // task-michael-1 já está no D1 (semeado no início do arquivo) — diferente do
-    // task-update-1 do teste acima, que nunca existiu lá (o mirror seria um no-op
-    // silencioso nesse caso, sem linha nenhuma pra atualizar).
-    const previousFetch = globalThis.fetch;
-    globalThis.fetch = async (url, opts) => {
-      const u = String(url);
-      if (u.endsWith('/task/task-michael-1') && (!opts?.method || opts.method === 'GET')) {
-        return new Response(JSON.stringify({ id: 'task-michael-1', assignees: [{ id: 170628721, username: 'Everson' }] }), { status: 200 });
-      }
-      if (u.endsWith('/task/task-michael-1') && opts.method === 'PUT') {
-        return new Response(JSON.stringify({ id: 'task-michael-1', ok: true }), { status: 200 });
-      }
-      if (u.includes('/task/task-michael-1/field/') && opts.method === 'POST') {
-        return new Response(JSON.stringify({ ok: true }), { status: 200 });
-      }
-      return previousFetch(url, opts);
-    };
-    try {
-      const res = await worker.fetch(req('POST', '/admin/tasks/task-michael-1', {
-        headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
-        body: JSON.stringify({ status: 'pendente', solucao: 'Aguardando peça de reposição.', assigneeId: 170628721 })
-      }), env);
-      assert.strictEqual(res.status, 200);
-      const mirrored = await d1GetChamado(env, 'task-michael-1');
-      assert.strictEqual(mirrored.status, 'pendente');
-      assert.strictEqual(mirrored.solucao, 'Aguardando peça de reposição.');
-      assert.strictEqual(mirrored.assignee_id, 170628721);
-    } finally {
-      globalThis.fetch = previousFetch;
-    }
+  await test('status "em atendimento" -> d1TransitionStatus define start_date/due_date pelo padrão da prioridade (sem webhook nenhum)', async () => {
+    const id = await criarChamadoTeste({ priority: 1 }); // Urgente -> 15min padrão (DEFAULT_TIME_ESTIMATE_MS_BY_PRIORITY)
+    const before = Date.now();
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'em atendimento' })
+    }), env);
+    assert.strictEqual(res.status, 200);
+    const linha = await d1GetChamado(env, id);
+    assert.ok(linha.start_date >= before);
+    assert.ok(linha.due_date >= linha.start_date + 15 * 60000 - 1000 && linha.due_date <= linha.start_date + 15 * 60000 + 5000, 'Urgente: due_date deveria ser ~15min após start_date');
   });
-  await test('reatribuir pra quem já é o assignee não dispara PUT nenhum (nada pra mudar)', async () => {
-    const previousFetch = globalThis.fetch;
-    let putCalled = false;
-    globalThis.fetch = async (url, opts) => {
-      const u = String(url);
-      if (u.endsWith('/task/task-update-2') && (!opts?.method || opts.method === 'GET')) {
-        return new Response(JSON.stringify({ id: 'task-update-2', assignees: [{ id: 170628721, username: 'Everson' }] }), { status: 200 });
-      }
-      if (u.endsWith('/task/task-update-2') && opts.method === 'PUT') {
-        putCalled = true;
-        return new Response(JSON.stringify({ ok: true }), { status: 200 });
-      }
-      return previousFetch(url, opts);
-    };
-    try {
-      const res = await worker.fetch(req('POST', '/admin/tasks/task-update-2', {
-        headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ assigneeId: 170628721 })
-      }), env);
-      assert.strictEqual(res.status, 200);
-      assert.strictEqual(putCalled, false, 'já era o assignee — não deveria mandar PUT nenhum');
-    } finally {
-      globalThis.fetch = previousFetch;
-    }
+  await test('status "encerrado" -> d1TransitionStatus grava date_closed', async () => {
+    const id = await criarChamadoTeste({ status: 'em atendimento' });
+    const before = Date.now();
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'encerrado' })
+    }), env);
+    assert.strictEqual(res.status, 200);
+    const linha = await d1GetChamado(env, id);
+    assert.strictEqual(linha.status, 'encerrado');
+    assert.ok(linha.date_closed >= before);
   });
+  await test('"pendente" pausa o SLA e sair de "pendente" empurra o due_date pelo tempo pausado', async () => {
+    const dueDateOriginal = Date.now() + 3600000;
+    const id = await criarChamadoTeste({ status: 'em atendimento', due_date: dueDateOriginal });
+    await worker.fetch(req('POST', `/admin/tasks/${id}`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'pendente' })
+    }), env);
+    const emPendente = await d1GetChamado(env, id);
+    assert.strictEqual(emPendente.due_date, dueDateOriginal, 'due_date não deveria mudar só por entrar em pendente');
 
-  await test('assigneeId:null ("Sem atribuição") remove quem estava atribuído', async () => {
-    const previousFetch = globalThis.fetch;
-    let sentPayload = null;
-    globalThis.fetch = async (url, opts) => {
-      const u = String(url);
-      if (u.endsWith('/task/task-update-3') && (!opts?.method || opts.method === 'GET')) {
-        return new Response(JSON.stringify({ id: 'task-update-3', assignees: [{ id: 170628721, username: 'Everson' }, { id: 200498355, username: 'Henrique' }] }), { status: 200 });
-      }
-      if (u.endsWith('/task/task-update-3') && opts.method === 'PUT') {
-        sentPayload = JSON.parse(opts.body);
-        return new Response(JSON.stringify({ ok: true }), { status: 200 });
-      }
-      return previousFetch(url, opts);
-    };
-    try {
-      const res = await worker.fetch(req('POST', '/admin/tasks/task-update-3', {
-        headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ assigneeId: null })
-      }), env);
-      assert.strictEqual(res.status, 200);
-      assert.deepStrictEqual(sentPayload.assignees, { add: [], rem: [170628721, 200498355] }, 'deveria remover todo mundo que estava atribuído');
-    } finally {
-      globalThis.fetch = previousFetch;
-    }
+    // Simula alguns minutos de pausa mexendo direto no KV (sem precisar de sleep real no teste).
+    await env.SUBSCRIPTIONS.put(`d1_pending_start_${id}`, String(Date.now() - 120000), { expirationTtl: 2592000 });
+    await worker.fetch(req('POST', `/admin/tasks/${id}`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'em atendimento' })
+    }), env);
+    const depoisDaPausa = await d1GetChamado(env, id);
+    assert.ok(depoisDaPausa.due_date > dueDateOriginal, 'due_date deveria ter sido empurrado pelo tempo que ficou pendente');
+  });
+  await test('assigneeId:null ("Sem atribuição") limpa assignee_id e a tabela de junção', async () => {
+    const id = await criarChamadoTeste({ assignee_id: 170628721, assignee_ids: [170628721, 200498355] });
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ assigneeId: null })
+    }), env);
+    assert.strictEqual(res.status, 200);
+    const linha = await d1GetChamado(env, id);
+    assert.strictEqual(linha.assignee_id, null);
+    const { results } = await env.CHAMADOS_DB.prepare('SELECT assignee_id FROM chamado_assignees WHERE chamado_id = ?').bind(id).all();
+    assert.deepStrictEqual(results, [], 'assigneeId:null deveria remover todo mundo da tabela de junção também');
   });
 
   console.log('--- validação de tipo/valor (achados do revisor 2026-08-07) ---');
   await test('solucao com tipo diferente de string dá 400 (não fica ok:true em silêncio)', async () => {
-    const res = await worker.fetch(req('POST', '/admin/tasks/task-michael-1', {
+    const id = await criarChamadoTeste();
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
       headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ solucao: 123 })
     }), env);
     assert.strictEqual(res.status, 400);
   });
   await test('assigneeId não numérico (nem null) dá 400', async () => {
-    const res = await worker.fetch(req('POST', '/admin/tasks/task-michael-1', {
+    const id = await criarChamadoTeste();
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
       headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ assigneeId: 'nao-e-numero' })
     }), env);
     assert.strictEqual(res.status, 400);
   });
-  await test('atualizar só o status de um chamado com 2 assignees NÃO manda PUT de assignee nenhum (preserva os dois)', async () => {
-    // Este é o cenário do bug crítico encontrado pelo revisor: o front-end só deve mandar
-    // "assigneeId" quando o admin realmente toca o campo — aqui simula exatamente o corpo
-    // que o admin.js corrigido manda (sem a chave assigneeId), e confirma que o Worker não
-    // toca nos assignees existentes (nem faz GET da task pra montar diff, já que a chave
-    // nem está presente no body).
-    const previousFetch = globalThis.fetch;
-    let assigneeTouched = false;
-    globalThis.fetch = async (url, opts) => {
-      const u = String(url);
-      if (u.endsWith('/task/task-update-4') && opts?.method === 'PUT') {
-        const payload = JSON.parse(opts.body);
-        if (payload.assignees) assigneeTouched = true;
-        return new Response(JSON.stringify({ ok: true }), { status: 200 });
-      }
-      return previousFetch(url, opts);
-    };
-    try {
-      const res = await worker.fetch(req('POST', '/admin/tasks/task-update-4', {
-        headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'pendente' })
-      }), env);
-      assert.strictEqual(res.status, 200);
-      assert.strictEqual(assigneeTouched, false, 'sem a chave assigneeId no body, o Worker não deveria nem tentar tocar nos assignees');
-    } finally {
-      globalThis.fetch = previousFetch;
-    }
+  await test('atualizar só o status de um chamado com 2 assignees NÃO toca na tabela de junção (preserva os dois)', async () => {
+    // Este é o cenário do bug crítico encontrado pelo revisor em 2026-08-07: o front-end
+    // só deve mandar "assigneeId" quando o admin realmente toca o campo — aqui simula
+    // exatamente o corpo que admin.js manda (sem a chave assigneeId) e confirma que o
+    // Worker não sincroniza chamado_assignees nesse caso (d1TransitionStatus nunca passa
+    // assigneeIdsForSync pra d1UpdateChamado).
+    const id = await criarChamadoTeste({ assignee_id: 170628721, assignee_ids: [170628721, 200498355] });
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'pendente' })
+    }), env);
+    assert.strictEqual(res.status, 200);
+    const { results } = await env.CHAMADOS_DB.prepare('SELECT assignee_id FROM chamado_assignees WHERE chamado_id = ? ORDER BY assignee_id').bind(id).all();
+    assert.deepStrictEqual(results.map(r => r.assignee_id), [170628721, 200498355], 'sem a chave assigneeId no body, os dois operadores deveriam continuar intactos');
   });
   await test('falha ao salvar a solução reporta em "updated" o que já tinha sido aplicado antes (status)', async () => {
-    const previousFetch = globalThis.fetch;
-    globalThis.fetch = async (url, opts) => {
-      const u = String(url);
-      if (u.endsWith('/task/task-update-5') && opts?.method === 'PUT') {
-        return new Response(JSON.stringify({ ok: true }), { status: 200 }); // status aplicado com sucesso
-      }
-      if (u.includes('/task/task-update-5/field/') && opts?.method === 'POST') {
-        return new Response(JSON.stringify({ err: 'campo inválido' }), { status: 500 }); // solução falha
-      }
-      return previousFetch(url, opts);
+    const id = await criarChamadoTeste();
+    // Simula falha do D1 especificamente na sub-mutação da solução, depois do status já
+    // ter aplicado — mesma proteção do revisor de 2026-08-07 (reportar `updated` parcial
+    // em vez de mascarar estado parcial), agora validada contra o D1 direto, não a ClickUp.
+    const realPrepare = env.CHAMADOS_DB.prepare.bind(env.CHAMADOS_DB);
+    env.CHAMADOS_DB.prepare = (sql) => {
+      if (sql.includes('SET solucao')) throw new Error('D1 indisponível (simulado)');
+      return realPrepare(sql);
     };
     try {
-      const res = await worker.fetch(req('POST', '/admin/tasks/task-update-5', {
+      const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
         headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
         body: JSON.stringify({ status: 'em atendimento', solucao: 'tentativa que vai falhar' })
       }), env);
-      assert.strictEqual(res.status, 500);
+      assert.strictEqual(res.status, 400);
       const data = await res.json();
       assert.deepStrictEqual(data.updated, { status: 'em atendimento' }, 'deveria reportar que o status já tinha sido salvo antes da solução falhar');
     } finally {
-      globalThis.fetch = previousFetch;
+      env.CHAMADOS_DB.prepare = realPrepare;
     }
   });
 
@@ -1357,86 +1325,51 @@ async function test(name, fn) {
   });
 
   await test('atualização admin com operador único substitui a tabela de junção por completo', async () => {
-    const previousFetch = globalThis.fetch;
-    globalThis.fetch = async (url, opts) => {
-      const u = String(url);
-      if (u.endsWith('/task/multi-op-1') && (!opts?.method || opts.method === 'GET')) {
-        return new Response(JSON.stringify({ id: 'multi-op-1', assignees: [{ id: 170628721 }, { id: 200498355 }] }), { status: 200 });
-      }
-      if (u.endsWith('/task/multi-op-1') && opts.method === 'PUT') {
-        return new Response(JSON.stringify({ ok: true }), { status: 200 });
-      }
-      return previousFetch(url, opts);
-    };
-    try {
-      const res = await worker.fetch(req('POST', '/admin/tasks/multi-op-1', {
-        headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ assigneeId: 170628721 }),
-      }), env);
-      assert.strictEqual(res.status, 200);
-      assert.deepStrictEqual(await assigneesDoChamado('multi-op-1'), [170628721], 'painel de admin sempre colapsa pra 1 operador — junção deve refletir isso, sem sobrar o Henrique');
-    } finally {
-      globalThis.fetch = previousFetch;
-    }
+    // Fase M4: sem mock de ClickUp nenhum — handleAdminUpdateTask nem chama fetch mais
+    // pra atualizar assignee (não precisa mais buscar quem já estava atribuído pra
+    // montar um diff {add,rem}, d1UpdateChamado já substitui por completo).
+    const res = await worker.fetch(req('POST', '/admin/tasks/multi-op-1', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ assigneeId: 170628721 }),
+    }), env);
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(await assigneesDoChamado('multi-op-1'), [170628721], 'painel de admin sempre colapsa pra 1 operador — junção deve refletir isso, sem sobrar o Henrique');
   });
 
-  console.log('--- atomicidade do espelho D1 em atualizações admin (achado do revisor, 2026-08-12) ---');
-  await test('se o .batch() falhar no meio, nem status nem operador mudam no D1 — tudo ou nada, não fica um espelhado e o outro não', async () => {
-    // Env isolado — não quer misturar com o dataset acumulado do resto do arquivo.
+  console.log('--- atomicidade entre chamados.assignee_id e chamado_assignees numa atualização admin (Fase M4) ---');
+  await test('se o .batch() falhar ao salvar o operador, nem assignee_id nem a tabela de junção mudam — tudo ou nada', async () => {
+    // Fase M4: a garantia de atomicidade que importava de verdade (achado do revisor,
+    // 2026-08-12) sempre foi entre `chamados.assignee_id` e `chamado_assignees` — as
+    // DUAS linhas que representam "quem está atribuído" — não entre campos
+    // independentes como status/operador (esses nunca tiveram transação real entre si,
+    // nem quando cada um era uma chamada separada à ClickUp; ver comentário no topo de
+    // handleAdminUpdateTask). Isso continua garantido porque `d1UpdateChamado` sempre
+    // grava as duas no MESMO `.batch()` quando `assigneeIdsForSync` é passado.
+    //
+    // Diferença real em relação à versão anterior deste teste (que existia quando D1 era
+    // só espelho best-effort da ClickUp): antes, o endpoint respondia 200 mesmo com o
+    // `.batch()` falhando (a mutação "de verdade" já tinha sido aplicada na ClickUp).
+    // Agora o D1 É a escrita — uma falha aqui é uma falha real, reportada como erro.
     const atomicEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
-    migrationTasksOverride = [{
-      id: 'atomic-1', name: 'Chamado pra teste de atomicidade',
-      status: { status: 'aberto' }, priority: { priority: 'normal' },
-      assignees: [{ id: 170628721, username: 'Everson' }],
-      custom_fields: [
-        { id: SOLICITANTE_FIELD_ID, value: { orderindex: 27 } },
-        { id: TIPO_FIELD_ID, value: 0 },
-        { id: SETOR_FIELD_ID, value: 0 },
-      ],
-    }];
-    await worker.fetch(req('POST', '/admin/migrate-d1', {
-      headers: { 'X-Admin-Secret': atomicEnv.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
-    }), atomicEnv);
-    migrationTasksOverride = null;
+    const created = await d1CreateChamado(atomicEnv, {
+      name: 'Chamado pra teste de atomicidade', priority: 3, tipo: 0, setor: 0,
+      solicitante: 'Michael Vasconcelos', status: 'aberto', assignee_id: 170628721,
+    });
 
-    const before = await d1GetChamado(atomicEnv, 'atomic-1');
-    assert.strictEqual(before.status, 'aberto');
-    assert.strictEqual(before.assignee_id, 170628721);
-
-    // Simula um erro transiente do D1 bem no meio da mutação (ex.: rede caiu entre o
-    // request e a resposta do binding) — antes do fix, isso deixava `chamados` e
-    // `chamado_assignees` divergirem silenciosamente (2 chamadas D1 separadas); depois
-    // do fix, os dois vivem no mesmo .batch(), então ou aplicam juntos ou nenhum aplica.
     const realBatch = atomicEnv.CHAMADOS_DB.batch.bind(atomicEnv.CHAMADOS_DB);
     atomicEnv.CHAMADOS_DB.batch = async () => { throw new Error('D1 indisponível (simulado)'); };
-
-    const previousFetch = globalThis.fetch;
-    globalThis.fetch = async (url, opts) => {
-      const u = String(url);
-      if (u.endsWith('/task/atomic-1') && (!opts?.method || opts.method === 'GET')) {
-        return new Response(JSON.stringify({ id: 'atomic-1', assignees: [{ id: 170628721 }] }), { status: 200 });
-      }
-      if (u.endsWith('/task/atomic-1') && opts.method === 'PUT') {
-        return new Response(JSON.stringify({ ok: true }), { status: 200 });
-      }
-      return previousFetch(url, opts);
-    };
     try {
-      const res = await worker.fetch(req('POST', '/admin/tasks/atomic-1', {
+      const res = await worker.fetch(req('POST', `/admin/tasks/${created.id}`, {
         headers: { 'X-Admin-Secret': atomicEnv.ADMIN_SECRET },
-        body: JSON.stringify({ status: 'em atendimento', assigneeId: 200498355 }),
+        body: JSON.stringify({ assigneeId: 200498355 }),
       }), atomicEnv);
-      // A mutação na ClickUp (mockada) teve sucesso — o endpoint responde 200 mesmo com
-      // o espelho D1 falhando (best-effort, nunca derruba a resposta pro usuário).
-      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.status, 400, 'D1 é a escrita agora — uma falha real deveria virar erro, não um 200 silencioso');
     } finally {
-      globalThis.fetch = previousFetch;
       atomicEnv.CHAMADOS_DB.batch = realBatch;
     }
 
-    const after = await d1GetChamado(atomicEnv, 'atomic-1');
-    assert.strictEqual(after.status, 'aberto', 'status NÃO deveria ter mudado — o batch falhou, nada aplicou');
-    assert.strictEqual(after.assignee_id, 170628721, 'assignee_id também não deveria ter mudado — mesma transação atômica que o status');
-    const { results } = await atomicEnv.CHAMADOS_DB.prepare('SELECT assignee_id FROM chamado_assignees WHERE chamado_id = ?').bind('atomic-1').all();
+    const after = await d1GetChamado(atomicEnv, created.id);
+    assert.strictEqual(after.assignee_id, 170628721, 'assignee_id NÃO deveria ter mudado — o batch falhou, nada aplicou');
+    const { results } = await atomicEnv.CHAMADOS_DB.prepare('SELECT assignee_id FROM chamado_assignees WHERE chamado_id = ?').bind(created.id).all();
     assert.deepStrictEqual(results.map(r => r.assignee_id), [170628721], 'tabela de junção também não deveria ter mudado — sem isso, ficaria mostrando o Henrique enquanto assignee_id ainda diz Everson (ou pior, vazia)');
   });
 

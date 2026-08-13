@@ -128,7 +128,8 @@ export default {
       if (pathname === '/auth/login')    return handleLogin(request, env);
       if (pathname === '/auth/logout')   return handleLogout(request, env);
       if (pathname === '/subscribe')     return handleSubscribe(request, env);
-      if (pathname === '/webhook')       return handleWebhook(request, env);
+      // Fase M4 (2026-08-13): rota /webhook removida — ver comentário perto de onde
+      // handleWebhook/runStatusAutomation viviam (antes de "WEB PUSH" no arquivo).
       if (pathname === '/api/tasks')     return handleCreateTask(request, env);
       const attachMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/attachment$/);
       if (attachMatch) return handleUploadAttachment(request, env, attachMatch[1]);
@@ -641,18 +642,26 @@ async function handleAdminMetrics(request, env) {
 }
 
 // =====================================================================
-// POST /admin/tasks/:id — a TI passa a trabalhar por aqui em vez de abrir a ClickUp
-// (decisão de 2026-08-07: ClickUp continua guardando o dado, mas deixa de ser a
-// INTERFACE de trabalho — ver CLAUDE.md, "Painel de admin"). Protegido por ADMIN_SECRET,
-// mesmo padrão das outras rotas /admin/*. Body aceita qualquer subconjunto de:
+// POST /admin/tasks/:id — a TI trabalha por aqui em vez de abrir a ClickUp (decisão de
+// 2026-08-07: ClickUp continua guardando o dado, mas deixa de ser a INTERFACE de
+// trabalho — ver CLAUDE.md, "Painel de admin"). Protegido por ADMIN_SECRET, mesmo
+// padrão das outras rotas /admin/*. Body aceita qualquer subconjunto de:
 //   { status, solucao, assigneeId }
-// Cada campo presente dispara uma chamada própria pra ClickUp, porque a API dela usa
-// formatos diferentes pra cada tipo de mudança (status é PUT direto na task; campo
-// customizado como SOLUCAO é POST num endpoint próprio de campo; assignee é PUT com
-// {add, rem} depois de buscar quem já está atribuído). Mudar o status aqui já é
-// suficiente pra disparar a automação de SLA existente (runStatusAutomation) — ela reage
-// à automação/webhook configurada na ClickUp, que dispara em QUALQUER mudança de status,
-// não importa se veio da UI da ClickUp ou da API (que é o que este endpoint usa).
+//
+// Fase M4 (2026-08-13, migração de saída da ClickUp): D1 vira o destino direto de toda
+// sub-mutação — não é mais espelho depois de escrever na ClickUp, é a escrita em si.
+// `status` chama `d1TransitionStatus` (Fase B5, dormente até agora), que já embute o
+// que antes vinha de `runStatusAutomation` via webhook (pausa/retomada de SLA em
+// "pendente", start_date/due_date ao entrar em "em atendimento", date_closed ao
+// "encerrado", push) — de forma SÍNCRONA, na mesma request, sem depender de nenhuma
+// automação configurada na ClickUp. `assigneeId` não precisa mais buscar quem já está
+// atribuído pra montar um diff {add, rem} (isso só existia por causa da API da
+// ClickUp) — `d1UpdateChamado` com `assigneeIdsForSync` já SUBSTITUI por completo quem
+// está atribuído (mesmo padrão que já existia pro espelho, ver comentário de
+// `d1UpdateChamado`). Segue valendo: sem transação real entre as sub-mutações (cada
+// `d1UpdateChamado`/`d1TransitionStatus` é sua própria escrita) — uma falha no meio
+// reporta em `updated` o que já foi aplicado antes de parar, mesma proteção do
+// revisor de 2026-08-07 contra mascarar estado parcial.
 // =====================================================================
 async function handleAdminUpdateTask(request, env, taskId) {
   if (!(await isAdmin(request, env))) return unauthorized();
@@ -660,8 +669,8 @@ async function handleAdminUpdateTask(request, env, taskId) {
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
 
-  // Validação de tipo/valor de cada campo antes de tocar em qualquer coisa na ClickUp —
-  // achados do revisor 2026-08-07: "solucao" não-string era ignorado em silêncio (respondia
+  // Validação de tipo/valor de cada campo antes de tocar em qualquer coisa — achados do
+  // revisor 2026-08-07: "solucao" não-string era ignorado em silêncio (respondia
   // ok:true sem salvar nada) e "assigneeId" não validava número/NaN.
   if (body.status !== undefined && !VALID_STATUSES.includes(body.status)) {
     return jsonRes({ error: `status inválido — use um de: ${VALID_STATUSES.join(', ')}` }, 400);
@@ -676,80 +685,41 @@ async function handleAdminUpdateTask(request, env, taskId) {
     return jsonRes({ error: 'nada pra atualizar — mande status, solucao e/ou assigneeId' }, 400);
   }
 
-  const headers = { Authorization: env.CLICKUP_API_KEY, 'Content-Type': 'application/json' };
+  const chamado = await d1GetChamado(env, taskId);
+  if (!chamado) return jsonRes({ error: 'chamado não encontrado' }, 404);
+
   const updated = {};
 
   if (body.status !== undefined) {
-    const upstream = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
-      method: 'PUT', headers, body: JSON.stringify({ status: body.status })
-    });
-    if (!upstream.ok) return passthrough(upstream); // nada foi aplicado ainda, passthrough puro está ok
-    updated.status = body.status;
+    try {
+      await d1TransitionStatus(env, taskId, body.status);
+      updated.status = body.status;
+    } catch (err) {
+      return jsonRes({ error: `status não pôde ser salvo: ${err.message}`, updated }, 400);
+    }
   }
 
-  // Da 2ª sub-mutação em diante, uma falha não é mais "nada foi aplicado" — reporta em
-  // `updated` o que já tinha sido salvo antes de falhar, pra quem chamou (admin.js) saber
-  // que a operação ficou parcialmente aplicada, em vez de um erro genérico (achado do
-  // revisor 2026-08-07: não há rollback entre as 3 sub-mutações, cada uma é uma chamada
-  // separada à ClickUp; reportar o que já foi salvo é o possível aqui sem transação real).
   if (body.solucao !== undefined) {
-    const upstream = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/field/${SOLUCAO_FIELD_ID}`, {
-      method: 'POST', headers, body: JSON.stringify({ value: body.solucao })
-    });
-    if (!upstream.ok) {
-      const text = await upstream.text();
-      return jsonRes({ error: `solução não pôde ser salva: ${text}`, updated }, upstream.status || 502);
+    try {
+      await d1UpdateChamado(env, taskId, { solucao: body.solucao });
+      updated.solucao = true;
+    } catch (err) {
+      return jsonRes({ error: `solução não pôde ser salva: ${err.message}`, updated }, 400);
     }
-    updated.solucao = true;
   }
 
   if (body.assigneeId !== undefined) {
     // null = "Sem atribuição" (remove quem estiver atribuído); qualquer outro valor = o
-    // id de pra quem atribuir.
+    // id de pra quem atribuir. `assigneeIdsForSync` como array substitui por completo
+    // (DELETE+INSERT) quem está em `chamado_assignees` — não precisa de diff {add, rem}
+    // nem de buscar quem já estava atribuído antes, já que não tem mais API externa
+    // exigindo isso.
     const desiredId = body.assigneeId === null ? null : Number(body.assigneeId);
-    // Busca quem já está atribuído pra montar o diff {add, rem} — a API da ClickUp não
-    // tem "set assignee", só "adicionar"/"remover" em cima do que já existe. Sem isso,
-    // "atribuir pro Henrique" um chamado que já era do Everson deixaria os dois atribuídos.
-    const taskResp = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, { headers: { Authorization: env.CLICKUP_API_KEY } });
-    if (!taskResp.ok) return jsonRes({ error: 'não foi possível confirmar quem já estava atribuído', updated }, taskResp.status || 502);
-    const task = await taskResp.json();
-    const currentIds = (task.assignees || []).map(a => a.id);
-    const rem = desiredId === null ? currentIds : currentIds.filter(id => id !== desiredId);
-    const add = desiredId === null ? [] : (currentIds.includes(desiredId) ? [] : [desiredId]);
-
-    if (add.length || rem.length) {
-      const upstream = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
-        method: 'PUT', headers, body: JSON.stringify({ assignees: { add, rem } })
-      });
-      if (!upstream.ok) {
-        const text = await upstream.text();
-        return jsonRes({ error: `operador não pôde ser salvo: ${text}`, updated }, upstream.status || 502);
-      }
-    }
-    updated.assigneeId = desiredId;
-  }
-
-  // Espelho no D1 (Fase B7, 2026-08-12) — só chega aqui se TODAS as sub-mutações acima
-  // já tiverem sido aplicadas com sucesso na ClickUp (qualquer falha no meio retorna
-  // antes, mais acima). Best-effort, nunca derruba a resposta: a ClickUp já é a fonte
-  // de verdade da mutação em si, o D1 só está copiando o resultado. Só espelha os
-  // campos literais (status/solução/operador) — não recalcula start_date/due_date/
-  // date_closed aqui (isso continua vindo só da automação da ClickUp via webhook,
-  // ver runStatusAutomation); uma migração completa fecha essa lacuna se acumular.
-  if (Object.keys(updated).length > 0) {
     try {
-      const d1Patch = {};
-      if (updated.status !== undefined) d1Patch.status = updated.status;
-      if (updated.solucao !== undefined) d1Patch.solucao = body.solucao;
-      if (updated.assigneeId !== undefined) d1Patch.assigneeId = updated.assigneeId;
-      // Sincroniza chamados + chamado_assignees no MESMO .batch() (achado do revisor,
-      // 2026-08-12 — ver comentário em d1UpdateChamado) — este endpoint sempre colapsa
-      // pra 0 ou 1 operador (o diff add/rem contra a ClickUp já remove qualquer outro
-      // que estivesse atribuído, ver acima), então é seguro substituir por completo.
-      await d1UpdateChamado(env, taskId, d1Patch,
-        updated.assigneeId !== undefined ? (updated.assigneeId != null ? [updated.assigneeId] : []) : undefined);
+      await d1UpdateChamado(env, taskId, { assigneeId: desiredId }, desiredId != null ? [desiredId] : []);
+      updated.assigneeId = desiredId;
     } catch (err) {
-      console.warn('espelho D1 falhou na atualização (ClickUp já foi atualizada normalmente):', err.message);
+      return jsonRes({ error: `operador não pôde ser salvo: ${err.message}`, updated }, 400);
     }
   }
 
@@ -793,156 +763,20 @@ async function handleSubscribe(request, env) {
 }
 
 // =====================================================================
-// /webhook — recebe evento taskStatusUpdated do ClickUp
+// Fase M4 (2026-08-13, migração de saída da ClickUp): `POST /webhook`,
+// `handleWebhook` e `runStatusAutomation` foram REMOVIDOS daqui — existiam só pra
+// reagir à automação configurada dentro da própria interface da ClickUp (evento
+// `taskStatusUpdated`), que ficou dispensada assim que `handleAdminUpdateTask` passou a
+// chamar `d1TransitionStatus` de forma síncrona, na mesma request (ver comentário lá).
+// Fecha de quebra o item de segurança que já estava documentado no CLAUDE.md: `POST
+// /webhook` nunca teve autenticação nenhuma — qualquer um que soubesse a URL do Worker
+// (hardcoded em app.js, pública) e um task_id real podia forjar uma mudança de status.
+// **Coordenação manual pendente, fora do código:** a automação correspondente
+// continua configurada dentro da interface da ClickUp e vai continuar chamando essa
+// URL (que agora só devolve 404) até alguém desligá-la/apagá-la lá manualmente — sem
+// efeito nenhum aqui (a chamada simplesmente falha em silêncio do lado da ClickUp),
+// mas fica como lixo de configuração até ser removida.
 // =====================================================================
-async function handleWebhook(request, env) {
-  try {
-    const body = await request.json();
-
-    if (body.event !== 'taskStatusUpdated') {
-      return new Response('ignored', { status: 200 });
-    }
-
-    const taskId     = body.task_id;
-    const newStatus  = (body.history_items?.[0]?.after?.status  ?? '').toLowerCase();
-    const prevStatus = (body.history_items?.[0]?.before?.status ?? '').toLowerCase();
-
-    // Busca detalhes da tarefa uma única vez (usada pela automação e pela notificação)
-    const taskResp = await fetch(
-      `https://api.clickup.com/api/v2/task/${taskId}`,
-      { headers: { Authorization: env.CLICKUP_API_KEY } }
-    );
-    if (!taskResp.ok) return new Response('task fetch error', { status: 200 });
-    const task = await taskResp.json();
-
-    await runStatusAutomation(taskId, newStatus, prevStatus, task, env);
-
-    const label = NOTIFY_STATUSES[newStatus];
-    if (!label) return new Response(`status "${newStatus}" sem notificação`, { status: 200 });
-
-    const cf      = task.custom_fields?.find(f => f.id === SOLICITANTE_FIELD_ID);
-    const userIdx = cf?.value?.orderindex ?? cf?.value;
-
-    if (userIdx == null) return new Response('sem solicitante', { status: 200 });
-
-    const subJson = await env.SUBSCRIPTIONS.get(`u_${userIdx}`);
-    if (!subJson)  return new Response(`sem subscription para user ${userIdx}`, { status: 200 });
-
-    await sendWebPush(JSON.parse(subJson), JSON.stringify({
-      title: 'Chamados de TI – ISV',
-      body:  `"${task.name}" está agora: ${label}`,
-      data:  { task_id: task.id, status: newStatus }
-    }), env);
-
-    return new Response('ok', { status: 200 });
-  } catch (err) {
-    console.error('Webhook error:', err);
-    return new Response('error: ' + err.message, { status: 500 });
-  }
-}
-
-// =====================================================================
-// AUTOMAÇÃO DE STATUS (migrado do Apps Script)
-// "pendente"       -> marca início da pausa de SLA
-// saiu de pendente -> empurra o due_date pelo tempo que ficou pausado
-// "em atendimento" -> define start_date/due_date com base no time_estimate
-// "encerrado"      -> calcula tempo decorrido e registra como time tracked
-//
-// LIMITAÇÃO CONHECIDA (pausa de SLA + dedup): o dedup abaixo é por
-// taskId+status, com janela de 10min. Se uma tarefa for pra "pendente",
-// saltar pra outro status e voltar pra "pendente" de novo dentro dessa
-// janela de 10min, a segunda entrada em "pendente" é ignorada como
-// duplicata — e o início dessa segunda pausa não é gravado. Resultado:
-// o tempo da segunda pausa não é somado ao due_date depois. Cenário raro
-// no uso real (exigiria trocas de status muito rápidas), então foi aceito
-// como trade-off; se isso passar a importar, o dedup precisaria considerar
-// a transição (prevStatus+status), não só o status final.
-// =====================================================================
-async function runStatusAutomation(taskId, status, prevStatus, task, env) {
-  const saiuDePendente = prevStatus === 'pendente' && status !== 'pendente';
-  const relevante = status === 'em atendimento' || status === 'encerrado' || status === 'pendente' || saiuDePendente;
-  if (!relevante) return;
-
-  // Dedup: evita reprocessar o mesmo taskId+status (webhooks podem duplicar entrega)
-  const dedupKey = `processed_${taskId}_${status}`;
-  if (await env.SUBSCRIPTIONS.get(dedupKey)) {
-    console.log(`Automação ignorada (duplicada): ${taskId} -> ${status}`);
-    return;
-  }
-  await env.SUBSCRIPTIONS.put(dedupKey, '1', { expirationTtl: 600 });
-
-  const headers = { Authorization: env.CLICKUP_API_KEY, 'Content-Type': 'application/json' };
-
-  try {
-    if (status === 'pendente') {
-      await env.SUBSCRIPTIONS.put(`pending_start_${taskId}`, String(Date.now()), { expirationTtl: 2592000 });
-      console.log(`Automação: pausa de SLA iniciada (pendente) em ${taskId}`);
-      return;
-    }
-
-    if (saiuDePendente) {
-      const pendingStartStr = await env.SUBSCRIPTIONS.get(`pending_start_${taskId}`);
-      if (pendingStartStr && task.due_date) {
-        const pendingMs   = Date.now() - parseInt(pendingStartStr);
-        const newDueDate  = Number(task.due_date) + pendingMs;
-        await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
-          method: 'PUT',
-          headers,
-          body: JSON.stringify({ due_date: newDueDate, due_date_time: true })
-        });
-        console.log(`Automação: due_date adiado ${Math.round(pendingMs / 60000)}min (pausa em ${taskId})`);
-      }
-      await env.SUBSCRIPTIONS.delete(`pending_start_${taskId}`);
-    }
-
-    if (status === 'em atendimento') {
-      const timeEstimate = task.time_estimate || DEFAULT_TIME_ESTIMATE_MS[task.priority?.priority];
-      if (!timeEstimate) {
-        console.log(`Automação: sem time_estimate em ${taskId} e sem padrão pra prioridade "${task.priority?.priority}", ignorando`);
-        return;
-      }
-
-      const now = Date.now();
-      await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
-        method: 'PUT',
-        headers,
-        body: JSON.stringify({
-          start_date:      now,
-          start_date_time: true,
-          due_date:        now + timeEstimate,
-          due_date_time:   true
-        })
-      });
-      console.log(`Automação: start_date/due_date definidos para ${taskId}`);
-      return;
-    }
-
-    if (status === 'encerrado') {
-      const startDate = task.start_date;
-      if (!startDate) {
-        console.log(`Automação: sem start_date em ${taskId}, ignorando`);
-        return;
-      }
-
-      const now        = Date.now();
-      const tempoGasto = now - parseInt(startDate);
-
-      const timeResp = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/time`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ start: parseInt(startDate), end: now, time: tempoGasto })
-      });
-
-      if (timeResp.ok) {
-        console.log(`Automação: tempo registrado para ${taskId} (${Math.round(tempoGasto / 60000)} min)`);
-      } else {
-        console.error(`Automação: erro ao registrar tempo em ${taskId}: ${await timeResp.text()}`);
-      }
-    }
-  } catch (err) {
-    console.error(`Automação: erro geral em ${taskId}: ${err.message}`);
-  }
-}
 
 // =====================================================================
 // WEB PUSH — RFC 8030 + RFC 8291 (aes128gcm) + RFC 8292 (VAPID)
