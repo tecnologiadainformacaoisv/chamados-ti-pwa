@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutDashboard } from "lucide-react"
+import { ClipboardList, LayoutDashboard, Users } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -11,11 +11,15 @@ import {
 } from "@/components/ui/sidebar"
 import logoIsv from "@/assets/logo-isv.svg"
 
-export type Secao = "gestao" | "dashboard"
+export type Secao = "gestao" | "dashboard" | "usuarios"
 
 const NAV_ITEMS: { id: Secao; label: string; icon: typeof ClipboardList }[] = [
   { id: "gestao", label: "Gestão", icon: ClipboardList },
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  // Fase M1 (2026-08-13, migração de saída da ClickUp) — antes disso, a lista de
+  // solicitantes só existia como custom field dentro da ClickUp; agora a TI gerencia
+  // aqui direto.
+  { id: "usuarios", label: "Usuários", icon: Users },
 ]
 
 // Espelha a mesma sidebar (navy, Gestão/Dashboard) que já existe em admin.html —

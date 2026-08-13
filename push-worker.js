@@ -129,14 +129,20 @@ export default {
       if (pathname === '/admin/migrate-d1') return handleAdminMigrateD1(request, env);
       if (pathname === '/admin/migrate-schema-nullable-tipo-setor') return handleAdminMigrateSchemaNullableTipoSetor(request, env);
       if (pathname === '/admin/migrate-schema-chamado-assignees') return handleAdminMigrateSchemaChamadoAssignees(request, env);
+      if (pathname === '/admin/migrate-solicitantes') return handleAdminMigrateSolicitantes(request, env);
+      if (pathname === '/admin/solicitantes') return handleAdminCreateSolicitante(request, env);
+      const solAtivoMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/ativo$/);
+      if (solAtivoMatch) return handleAdminSetSolicitanteAtivo(request, env, solAtivoMatch[1]);
     }
 
     if (request.method === 'GET') {
-      if (pathname === '/api/field')     return handleGetField(request, env);
-      if (pathname === '/api/my-tasks')  return handleGetMyTasks(request, env);
-      if (pathname === '/admin/users')   return handleAdminListUsers(request, env);
-      if (pathname === '/admin/tasks')   return handleAdminListTasks(request, env);
-      if (pathname === '/admin/metrics') return handleAdminMetrics(request, env);
+      if (pathname === '/api/field')         return handleGetField(request, env);
+      if (pathname === '/api/solicitantes')  return handleListSolicitantes(request, env);
+      if (pathname === '/api/my-tasks')      return handleGetMyTasks(request, env);
+      if (pathname === '/admin/users')       return handleAdminListUsers(request, env);
+      if (pathname === '/admin/tasks')       return handleAdminListTasks(request, env);
+      if (pathname === '/admin/metrics')     return handleAdminMetrics(request, env);
+      if (pathname === '/admin/solicitantes') return handleAdminListSolicitantes(request, env);
       const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
       if (taskMatch) return handleGetTask(request, env, taskMatch[1]);
       return new Response('Chamados TI – Push Worker OK', { status: 200 });
@@ -395,6 +401,15 @@ async function handleRegister(request, env) {
   const password = body.password;
   if (!name || !password || password.length < 8) {
     return jsonRes({ error: 'Nome e senha (mínimo 8 caracteres) são obrigatórios' }, 400);
+  }
+
+  // Fase M1 (2026-08-13, migração de saída da ClickUp): antes desta checagem, QUALQUER
+  // string virava conta — não existia validação nenhuma de que `name` era um solicitante
+  // de verdade (a única "trava" era o dropdown da UI, que confia no cliente). Agora exige
+  // que o nome esteja cadastrado e ativo na tabela `solicitantes` do D1 antes de deixar
+  // criar senha — fecha essa lacuna real de segurança.
+  if (!(await d1IsSolicitanteAtivo(env, name))) {
+    return jsonRes({ error: 'Nome não encontrado na lista de solicitantes. Fale com a TI.' }, 403);
   }
 
   if (await env.SUBSCRIPTIONS.get(`auth_${name}`)) {
@@ -1354,6 +1369,110 @@ async function d1GetMetrics(env) {
 }
 
 // =====================================================================
+// LISTA DE SOLICITANTES NO D1 (Fase M1 da migração de saída da ClickUp,
+// 2026-08-13) — até aqui essa lista só existia como custom field dropdown
+// dentro da ClickUp (SOLICITANTE_FIELD_ID via getSolicitanteMaps/GET
+// /api/field); o boot inteiro do app dos solicitantes travava
+// (state = "boot-error") se aquele endpoint falhasse. Nome é a chave — sem
+// indireção de orderindex nenhuma (diferente da ClickUp), já que
+// `chamados.solicitante`/as chaves de sessão no KV (`auth_<nome>`) sempre
+// trabalharam por nome mesmo. `ativo=0` desativa em vez de apagar —
+// chamados antigos continuam referenciando o nome pelo histórico.
+// =====================================================================
+async function d1ListSolicitantes(env, { ativos = false } = {}) {
+  const sql = ativos
+    ? 'SELECT name, ativo, created_at FROM solicitantes WHERE ativo = 1 ORDER BY name'
+    : 'SELECT name, ativo, created_at FROM solicitantes ORDER BY name';
+  const { results } = await env.CHAMADOS_DB.prepare(sql).all();
+  return results || [];
+}
+
+async function d1IsSolicitanteAtivo(env, name) {
+  const row = await env.CHAMADOS_DB.prepare('SELECT ativo FROM solicitantes WHERE name = ?').bind(name).first();
+  return !!row && row.ativo === 1;
+}
+
+// INSERT OR IGNORE — idempotente, mesmo padrão do resto da camada D1 (rodar a
+// migração de novo, ou tentar cadastrar um nome que já existe, não duplica nem falha).
+async function d1CreateSolicitante(env, name) {
+  const result = await env.CHAMADOS_DB.prepare(
+    'INSERT OR IGNORE INTO solicitantes (name, ativo, created_at) VALUES (?, 1, ?)'
+  ).bind(name, Date.now()).run();
+  return { inserted: (result.meta?.changes ?? 0) > 0 };
+}
+
+async function d1SetSolicitanteAtivo(env, name, ativo) {
+  const result = await env.CHAMADOS_DB.prepare('UPDATE solicitantes SET ativo = ? WHERE name = ?')
+    .bind(ativo ? 1 : 0, name).run();
+  return { updated: (result.meta?.changes ?? 0) > 0 };
+}
+
+// =====================================================================
+// GET /api/solicitantes — substitui GET /api/field pro app de solicitantes e pro
+// filtro do painel de admin (Fase M1). Mesma auth pública de sempre (X-App-Secret) —
+// não precisa do ADMIN_SECRET, é só a lista de nomes ativos, sem dado sensível.
+// =====================================================================
+async function handleListSolicitantes(request, env) {
+  if (!hasValidSecret(request, env)) return unauthorized();
+  const rows = await d1ListSolicitantes(env, { ativos: true });
+  return jsonRes({ names: rows.map(r => r.name) });
+}
+
+// =====================================================================
+// GET /admin/solicitantes — lista TODOS (ativos e inativos), pra tela de gestão saber
+// quem já foi desativado (e poder reativar). POST cria; PATCH ativa/desativa. Mesmo
+// padrão ADMIN_SECRET de toda rota /admin/*.
+// =====================================================================
+async function handleAdminListSolicitantes(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  const rows = await d1ListSolicitantes(env);
+  return jsonRes({ solicitantes: rows });
+}
+
+async function handleAdminCreateSolicitante(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  if (!name) return jsonRes({ error: 'nome é obrigatório' }, 400);
+
+  const { inserted } = await d1CreateSolicitante(env, name);
+  if (!inserted) return jsonRes({ error: 'já existe um solicitante com esse nome' }, 409);
+  return jsonRes({ ok: true, name });
+}
+
+async function handleAdminSetSolicitanteAtivo(request, env, name) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  if (typeof body.ativo !== 'boolean') return jsonRes({ error: '"ativo" precisa ser true ou false' }, 400);
+
+  const { updated } = await d1SetSolicitanteAtivo(env, decodeURIComponent(name), body.ativo);
+  if (!updated) return jsonRes({ error: 'solicitante não encontrado' }, 404);
+  return jsonRes({ ok: true });
+}
+
+// =====================================================================
+// POST /admin/migrate-solicitantes — migração de uso único (Fase M1): copia a lista
+// de nomes que hoje vive só na ClickUp (mesmo campo/mesma função que GET /api/field já
+// usava) pra tabela `solicitantes` do D1. Idempotente (d1CreateSolicitante usa INSERT
+// OR IGNORE) — rodar de novo não duplica, só marca como "skipped" quem já migrou.
+// =====================================================================
+async function handleAdminMigrateSolicitantes(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+
+  const { idxToName } = await getSolicitanteMaps(env);
+  const nomes = Object.values(idxToName);
+
+  let migrated = 0, skipped = 0;
+  for (const name of nomes) {
+    const { inserted } = await d1CreateSolicitante(env, name);
+    if (inserted) migrated++; else skipped++;
+  }
+  return jsonRes({ total: nomes.length, migrated, skipped });
+}
+
+// =====================================================================
 // POST /admin/migrate-d1 — Fase B3 do roadmap (migração de histórico, 2026-08-11).
 // Só leitura na ClickUp (fetchAllTasks, mesma função que /admin/tasks já usa) + escrita
 // no D1 — não muda NADA em produção, já que nenhuma rota lê do D1 ainda. Protegido por
@@ -1781,4 +1900,4 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
   return updated;
 }
 
-export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees };
+export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees, d1ListSolicitantes, d1IsSolicitanteAtivo, d1CreateSolicitante, d1SetSolicitanteAtivo };

@@ -8,6 +8,7 @@ import { AdminAuthProvider, useAdminAuth } from "@/hooks/use-admin-auth"
 import { GateScreen } from "@/components/gate-screen"
 import { GestaoView } from "@/components/gestao-view"
 import { DashboardView } from "@/components/dashboard-view"
+import { UsuariosView } from "@/components/usuarios-view"
 import { isSessionError } from "@/lib/api"
 
 // Nunca insiste tentando de novo (com backoff) quando o segredo foi revogado — isso só
@@ -30,6 +31,10 @@ const SECAO_META: Record<Secao, { titulo: string; subtitulo: string }> = {
     titulo: "Dashboard",
     subtitulo: "Indicadores e relatórios — volume por tipo/setor, SLA e tempo médio de atendimento.",
   },
+  usuarios: {
+    titulo: "Usuários",
+    subtitulo: "Quem pode abrir chamado — adicionar ou desativar solicitantes.",
+  },
 }
 
 function AdminShell() {
@@ -48,7 +53,13 @@ function AdminShell() {
               <p className="text-sm text-muted-foreground">{meta.subtitulo}</p>
             </div>
 
-            {secaoAtiva === "gestao" ? <GestaoView /> : <DashboardView />}
+            {secaoAtiva === "gestao" ? (
+              <GestaoView />
+            ) : secaoAtiva === "dashboard" ? (
+              <DashboardView />
+            ) : (
+              <UsuariosView />
+            )}
           </main>
         </SidebarInset>
       </SidebarProvider>

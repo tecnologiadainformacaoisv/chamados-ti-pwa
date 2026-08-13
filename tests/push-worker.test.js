@@ -123,7 +123,7 @@ async function test(name, fn) {
 
 (async () => {
   const workerPath = pathToFileURL(path.join(__dirname, '..', 'push-worker.js')).href;
-  const { default: worker, d1GetChamado, d1SetAssignees } = await import(workerPath);
+  const { default: worker, d1GetChamado, d1SetAssignees, d1CreateSolicitante } = await import(workerPath);
 
   let lastCreatePayload = null;
   let createdTaskCounter = 0; // cada POST de criação gera um id novo — evita colisão de
@@ -192,6 +192,14 @@ async function test(name, fn) {
     headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
   }), env);
 
+  // Fase M1 (2026-08-13): /auth/register agora exige que o nome esteja cadastrado e
+  // ativo na tabela `solicitantes` do D1 antes de deixar criar senha — semeia os nomes
+  // usados pelos testes de auth/isolamento abaixo, mesma função real de produção
+  // (d1CreateSolicitante), não uma reimplementação paralela.
+  for (const nome of ['Michael Vasconcelos', 'Ariele Santo', 'Bruno Guilherme']) {
+    await d1CreateSolicitante(env, nome);
+  }
+
   console.log('--- registro e login ---');
   let token;
   await test('registra senha nova com sucesso e já devolve token', async () => {
@@ -208,6 +216,10 @@ async function test(name, fn) {
   await test('senha curta demais é rejeitada', async () => {
     const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Nova Pessoa', password: '12' }) }), env);
     assert.strictEqual(res.status, 400);
+  });
+  await test('registrar com nome que não está na lista de solicitantes dá 403 (Fase M1, 2026-08-13)', async () => {
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Alguém Que Não Existe', password: 'senhaboa123' }) }), env);
+    assert.strictEqual(res.status, 403);
   });
   await test('login com senha certa funciona', async () => {
     const res = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Michael Vasconcelos', password: 'senha123' }) }), env);
@@ -376,6 +388,86 @@ async function test(name, fn) {
     const after = (await worker.fetch(req('GET', '/admin/users', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json()))
       .users.find(u => u.name === 'Michael Vasconcelos').lastLoginAt;
     assert.ok(after > before, 'lastLoginAt deveria ter avançado após novo login');
+  });
+
+  console.log('--- lista de solicitantes sai da ClickUp (Fase M1, 2026-08-13) ---');
+  await test('GET /api/solicitantes sem X-App-Secret dá 403', async () => {
+    const res = await worker.fetch(req('GET', '/api/solicitantes'), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('GET /api/solicitantes devolve só os ativos, ordenados', async () => {
+    const res = await worker.fetch(req('GET', '/api/solicitantes', { headers: SECRET_HEADERS }), env);
+    assert.strictEqual(res.status, 200);
+    const { names } = await res.json();
+    assert.deepStrictEqual(names, ['Ariele Santo', 'Bruno Guilherme', 'Michael Vasconcelos']);
+  });
+  await test('POST /admin/solicitantes sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/admin/solicitantes', { body: JSON.stringify({ name: 'Novo Nome' }) }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('POST /admin/solicitantes cria um solicitante novo', async () => {
+    const res = await worker.fetch(req('POST', '/admin/solicitantes', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Carlos Eduardo' }),
+    }), env);
+    assert.strictEqual(res.status, 200);
+    const res2 = await worker.fetch(req('GET', '/api/solicitantes', { headers: SECRET_HEADERS }), env);
+    const { names } = await res2.json();
+    assert.ok(names.includes('Carlos Eduardo'));
+  });
+  await test('POST /admin/solicitantes com nome repetido dá 409', async () => {
+    const res = await worker.fetch(req('POST', '/admin/solicitantes', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Carlos Eduardo' }),
+    }), env);
+    assert.strictEqual(res.status, 409);
+  });
+  await test('desativar um solicitante some da lista pública, mas continua aparecendo em GET /admin/solicitantes', async () => {
+    const res = await worker.fetch(req('POST', `/admin/solicitantes/${encodeURIComponent('Carlos Eduardo')}/ativo`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ ativo: false }),
+    }), env);
+    assert.strictEqual(res.status, 200);
+
+    const publica = await worker.fetch(req('GET', '/api/solicitantes', { headers: SECRET_HEADERS }), env).then(r => r.json());
+    assert.ok(!publica.names.includes('Carlos Eduardo'), 'desativado não deveria aparecer na lista pública (login)');
+
+    const admin = await worker.fetch(req('GET', '/admin/solicitantes', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json());
+    const carlos = admin.solicitantes.find(s => s.name === 'Carlos Eduardo');
+    assert.ok(carlos, 'desativado ainda deveria aparecer na tela de gestão (pra poder reativar)');
+    assert.strictEqual(carlos.ativo, 0);
+  });
+  await test('reativar um solicitante devolve ele pra lista pública', async () => {
+    await worker.fetch(req('POST', `/admin/solicitantes/${encodeURIComponent('Carlos Eduardo')}/ativo`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ ativo: true }),
+    }), env);
+    const publica = await worker.fetch(req('GET', '/api/solicitantes', { headers: SECRET_HEADERS }), env).then(r => r.json());
+    assert.ok(publica.names.includes('Carlos Eduardo'));
+  });
+  await test('ativar/desativar um nome que não existe dá 404', async () => {
+    const res = await worker.fetch(req('POST', `/admin/solicitantes/${encodeURIComponent('Fantasma')}/ativo`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ ativo: false }),
+    }), env);
+    assert.strictEqual(res.status, 404);
+  });
+  await test('registrar com um nome desativado dá 403, mesmo já tendo existido antes', async () => {
+    await worker.fetch(req('POST', `/admin/solicitantes/${encodeURIComponent('Carlos Eduardo')}/ativo`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ ativo: false }),
+    }), env);
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Carlos Eduardo', password: 'senhaboa123' }) }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('POST /admin/migrate-solicitantes copia a lista da ClickUp pro D1, idempotente', async () => {
+    const solicitantesEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
+    const res = await worker.fetch(req('POST', '/admin/migrate-solicitantes', { headers: { 'X-Admin-Secret': solicitantesEnv.ADMIN_SECRET } }), solicitantesEnv);
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    // FAKE_OPTIONS no topo do arquivo tem 3 nomes (Ariele Santo, Michael Vasconcelos, Bruno Guilherme)
+    assert.strictEqual(data.total, 3);
+    assert.strictEqual(data.migrated, 3);
+    assert.strictEqual(data.skipped, 0);
+
+    const res2 = await worker.fetch(req('POST', '/admin/migrate-solicitantes', { headers: { 'X-Admin-Secret': solicitantesEnv.ADMIN_SECRET } }), solicitantesEnv);
+    const data2 = await res2.json();
+    assert.strictEqual(data2.migrated, 0, 'rodar de novo não deveria migrar de novo');
+    assert.strictEqual(data2.skipped, 3, 'rodar de novo deveria marcar os 3 como já migrados');
   });
 
   console.log('--- GET /api/my-tasks lê do D1, não bate na ClickUp (Fase B7, 2026-08-12) ---');

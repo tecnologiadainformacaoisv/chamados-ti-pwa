@@ -8,7 +8,7 @@ import { KanbanBoard } from "@/components/kanban-board"
 import { TasksTable } from "@/components/tasks-table"
 import { TaskModal } from "@/components/task-modal"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
-import { fetchSolicitanteMaps, fetchTasks, isSessionError, postTaskUpdate, type Filtros, type Task, type UpdatePayload } from "@/lib/api"
+import { fetchSolicitanteNomes, fetchTasks, isSessionError, postTaskUpdate, type Filtros, type Task, type UpdatePayload } from "@/lib/api"
 
 type ViewMode = "quadro" | "tabela"
 
@@ -29,7 +29,7 @@ export function GestaoView() {
 
   const solicitantesQuery = useQuery({
     queryKey: ["solicitantes"],
-    queryFn: fetchSolicitanteMaps,
+    queryFn: fetchSolicitanteNomes,
     staleTime: 5 * 60_000,
   })
 
@@ -88,7 +88,7 @@ export function GestaoView() {
       <FiltersBar
         filtros={filtros}
         onChange={setFiltros}
-        solicitantes={solicitantesQuery.data?.names ?? []}
+        solicitantes={solicitantesQuery.data ?? []}
         busca={busca}
         onBuscaChange={setBusca}
         mostrarStatus={viewMode === "tabela"}

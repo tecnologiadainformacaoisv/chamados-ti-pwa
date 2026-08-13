@@ -61,3 +61,18 @@ CREATE TABLE IF NOT EXISTS chamado_assignees (
   PRIMARY KEY (chamado_id, assignee_id)
 );
 CREATE INDEX IF NOT EXISTS idx_chamado_assignees_assignee ON chamado_assignees (assignee_id);
+
+-- Lista de solicitantes (Fase M1 da migração de saída da ClickUp, 2026-08-13) — até
+-- aqui essa lista só existia como um custom field dropdown dentro da própria ClickUp
+-- (SOLICITANTE_FIELD_ID); o boot inteiro do app dos solicitantes travava
+-- (state = "boot-error") se aquele endpoint falhasse. Nome é a chave primária de
+-- propósito — é o mesmo valor usado em `chamados.solicitante` e nas chaves de sessão/
+-- senha no KV (`auth_<nome>`), sem indireção de id/orderindex nenhuma (diferente da
+-- ClickUp, que exigia orderindex). `ativo` desativa em vez de apagar — chamados
+-- antigos continuam referenciando o nome pelo histórico, mesmo que a pessoa não
+-- trabalhe mais aqui; só para de aparecer no dropdown de login/gestão.
+CREATE TABLE IF NOT EXISTS solicitantes (
+  name       TEXT PRIMARY KEY,
+  ativo      INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);

@@ -1,4 +1,4 @@
-import { API_BASE, AUTH_BASE, APP_SHARED_SECRET, SOLICITANTE_FIELD_ID } from "@/lib/constants"
+import { API_BASE, AUTH_BASE, APP_SHARED_SECRET } from "@/lib/constants"
 import type { Task } from "@/lib/api"
 
 export class AuthError extends Error {
@@ -108,13 +108,14 @@ export async function fetchTaskDetail(sessionToken: string, taskId: string): Pro
   return apiRequest<Task>(sessionToken, "GET", `/tasks/${taskId}`)
 }
 
-// Lista de solicitantes — mesmo endpoint público (X-App-Secret) que admin.js usa pro
-// filtro, aqui usado pro select de nome na tela de login/cadastro.
+// Lista de solicitantes — mesmo endpoint público (X-App-Secret) que o painel de admin
+// usa pro filtro, aqui usado pro select de nome na tela de login/cadastro. Fase M1
+// (2026-08-13, migração de saída da ClickUp): passou a ler de uma tabela própria no D1
+// (`solicitantes`, gerida pela TI numa tela nova no admin) em vez do campo customizado
+// da ClickUp — já vem ordenado do servidor, sem precisar reconstruir orderindex/nome.
 export async function fetchSolicitanteNomes(): Promise<string[]> {
-  const res = await fetch(`${API_BASE}/field`, { headers: { "X-App-Secret": APP_SHARED_SECRET } })
+  const res = await fetch(`${API_BASE}/solicitantes`, { headers: { "X-App-Secret": APP_SHARED_SECRET } })
   if (!res.ok) throw new Error(`Erro HTTP ${res.status} ao buscar solicitantes`)
   const data = await res.json()
-  const field = data.fields?.find((f: { id: string }) => f.id === SOLICITANTE_FIELD_ID)
-  const options: { name: string; orderindex: number }[] = field?.type_config?.options ?? []
-  return options.map((o) => o.name).sort((a, b) => a.localeCompare(b, "pt-BR"))
+  return data.names ?? []
 }

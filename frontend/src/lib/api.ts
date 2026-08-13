@@ -1,4 +1,4 @@
-import { ADMIN_BASE, SOLICITANTE_FIELD_ID } from "@/lib/constants"
+import { ADMIN_BASE } from "@/lib/constants"
 
 // Mesmo shape que /admin/tasks devolve hoje — passa a task da ClickUp praticamente
 // direto (ver handleAdminListTasks em push-worker.js). Só os campos que o painel usa.
@@ -103,23 +103,52 @@ export function getCF(task: Task, fieldId: string): number | string | null {
   return f.value as number | string
 }
 
-// Lista de solicitantes (nome -> orderindex e vice-versa), buscada em runtime do campo
-// customizado da ClickUp — mesmo endpoint que o app principal já usa (GET /api/field),
-// autenticado com o APP_SHARED_SECRET público (não o ADMIN_SECRET).
+// Lista de solicitantes pro dropdown de filtro — mesmo endpoint público que o app dos
+// solicitantes usa pro login (X-App-Secret, não o ADMIN_SECRET). Fase M1 (2026-08-13,
+// migração de saída da ClickUp): passou a ler da tabela `solicitantes` do D1 (gerida
+// pela TI numa tela própria no admin) em vez do campo customizado da ClickUp — não
+// existe mais orderindex nenhum, `task.solicitante` (ver Task acima) já vem com o nome
+// resolvido direto do servidor.
 const APP_SHARED_SECRET = "isv-chamados-2k26-9fQ3vM7xZp"
 
-export async function fetchSolicitanteMaps(): Promise<{ idxToName: Record<number, string>; names: string[] }> {
-  const res = await fetch(`${ADMIN_BASE.replace("/admin", "/api")}/field`, {
+export async function fetchSolicitanteNomes(): Promise<string[]> {
+  const res = await fetch(`${ADMIN_BASE.replace("/admin", "/api")}/solicitantes`, {
     headers: { "X-App-Secret": APP_SHARED_SECRET },
   })
   if (!res.ok) throw new AdminApiError(`Erro HTTP ${res.status} ao buscar solicitantes`, res.status)
   const data = await res.json()
-  const field = data.fields?.find((f: { id: string }) => f.id === SOLICITANTE_FIELD_ID)
-  const options: { name: string; orderindex: number }[] = field?.type_config?.options ?? []
-  const idxToName: Record<number, string> = {}
-  for (const o of options) idxToName[o.orderindex] = o.name
-  const names = options.map((o) => o.name).sort((a, b) => a.localeCompare(b, "pt-BR"))
-  return { idxToName, names }
+  return data.names ?? []
+}
+
+// Gestão de solicitantes (Fase M1, 2026-08-13) — tela nova "Usuários" no admin, pra TI
+// adicionar/desativar quem pode logar no app, sem precisar mais editar isso na ClickUp.
+export type AdminSolicitante = { name: string; ativo: number; created_at: number }
+
+export async function fetchAdminSolicitantes(secret: string): Promise<{ solicitantes: AdminSolicitante[] }> {
+  return adminRequest(secret, "/solicitantes")
+}
+
+async function adminMutate(secret: string, path: string, body: unknown): Promise<void> {
+  const res = await fetch(`${ADMIN_BASE}${path}`, {
+    method: "POST",
+    headers: { "X-Admin-Secret": secret, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (res.status === 403) {
+    throw new AdminApiError("Segredo de admin inválido ou expirado. Entre de novo.", 403)
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}) as { error?: string })
+    throw new AdminApiError(data.error || `Erro HTTP ${res.status}`, res.status)
+  }
+}
+
+export async function createSolicitante(secret: string, name: string): Promise<void> {
+  await adminMutate(secret, "/solicitantes", { name })
+}
+
+export async function setSolicitanteAtivo(secret: string, name: string, ativo: boolean): Promise<void> {
+  await adminMutate(secret, `/solicitantes/${encodeURIComponent(name)}/ativo`, { ativo })
 }
 
 export function isAtrasado(task: Task): boolean {
