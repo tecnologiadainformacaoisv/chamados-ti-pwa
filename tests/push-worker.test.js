@@ -409,6 +409,28 @@ async function test(name, fn) {
     const res = await worker.fetch(req('GET', '/api/solicitantes'), env);
     assert.strictEqual(res.status, 403);
   });
+  // 🛡️ Achado real de produção (2026-08-13): ORDER BY do SQLite/D1 não é sensível a
+  // locale — "Márcio" (acentuado) ficava depois de "Mikaelly" em vez de logo após
+  // "Mariana", porque compara por byte, não por colação pt-BR. Corrigido ordenando em
+  // JS (localeCompare) depois de buscar, igual a versão ClickUp-based sempre fez.
+  await test('ordena por localeCompare pt-BR, não por byte cru do SQLite (nomes acentuados no lugar certo)', async () => {
+    const solEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
+    await worker.fetch(req('POST', '/admin/migrate-schema-solicitantes', { headers: { 'X-Admin-Secret': solEnv.ADMIN_SECRET } }), solEnv);
+    for (const nome of ['Mikaelly Lima', 'Mariana Maia', 'Márcio Delukken']) {
+      await worker.fetch(req('POST', '/admin/solicitantes', {
+        headers: { 'X-Admin-Secret': solEnv.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: nome }),
+      }), solEnv);
+    }
+    const res = await worker.fetch(req('GET', '/api/solicitantes', { headers: { 'X-App-Secret': solEnv.SUBSCRIBE_SECRET } }), solEnv);
+    const { names } = await res.json();
+    // A ordem exata entre "Márcio"/"Mariana" é uma nuance fina de colação (o próprio
+    // localeCompare('pt-BR') do Node — mesmo mecanismo que a versão ClickUp-based
+    // sempre usou — não concorda com um chute ingênuo aqui); o que importa de verdade
+    // é o bug real que motivou o fix: "Márcio" não pode ficar isolado no fim da lista,
+    // depois de "Mikaelly" (comparação por byte cru, sem acento, do ORDER BY do SQL).
+    assert.strictEqual(names.indexOf('Márcio Delukken') < names.indexOf('Mikaelly Lima'), true, '"Márcio" deveria vir antes de "Mikaelly", agrupado com os outros nomes por M — não isolado no fim');
+    assert.deepStrictEqual([...names].sort((a, b) => a.localeCompare(b, 'pt-BR')), names, 'a lista já deveria estar na ordem que localeCompare(pt-BR) produz');
+  });
   await test('GET /api/solicitantes devolve só os ativos, ordenados', async () => {
     const res = await worker.fetch(req('GET', '/api/solicitantes', { headers: SECRET_HEADERS }), env);
     assert.strictEqual(res.status, 200);

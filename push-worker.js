@@ -1380,12 +1380,18 @@ async function d1GetMetrics(env) {
 // trabalharam por nome mesmo. `ativo=0` desativa em vez de apagar —
 // chamados antigos continuam referenciando o nome pelo histórico.
 // =====================================================================
+// Achado real de produção (2026-08-13, mesmo dia): `ORDER BY name` no SQLite/D1 é
+// ordenação "crua" por byte (não sensível a locale) — nomes acentuados (ex.: "Márcio")
+// ficavam fora de ordem, depois de qualquer nome sem acento que começasse com a mesma
+// letra (ex.: depois de "Mikaelly", não logo após "Mariana"). A versão ClickUp-based
+// sempre ordenou em JS com `localeCompare(..., 'pt-BR')` — reordena aqui do mesmo jeito
+// depois de buscar (volume é pequeno, dezenas de nomes, sem custo real).
 async function d1ListSolicitantes(env, { ativos = false } = {}) {
   const sql = ativos
-    ? 'SELECT name, ativo, created_at FROM solicitantes WHERE ativo = 1 ORDER BY name'
-    : 'SELECT name, ativo, created_at FROM solicitantes ORDER BY name';
+    ? 'SELECT name, ativo, created_at FROM solicitantes WHERE ativo = 1'
+    : 'SELECT name, ativo, created_at FROM solicitantes';
   const { results } = await env.CHAMADOS_DB.prepare(sql).all();
-  return results || [];
+  return (results || []).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
 }
 
 async function d1IsSolicitanteAtivo(env, name) {
