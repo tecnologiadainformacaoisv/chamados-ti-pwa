@@ -93,7 +93,7 @@ function SolicitanteShell() {
     <div className="min-h-svh bg-muted/30">
       <header className="bg-brand-gradient flex h-16 items-center justify-between px-4 text-primary-foreground shadow-[0_2px_12px_rgba(0,0,0,0.2)]">
         <div className="flex items-center gap-3">
-          <img src={logoIsv} alt="" className="h-8 w-8 invert" />
+          <img src={logoIsv} alt="" className="h-10 w-10 invert" />
           <div className="leading-tight">
             <p className="text-sm font-semibold">Chamados de TI</p>
             <p className="text-xs text-primary-foreground/70">{userName}</p>

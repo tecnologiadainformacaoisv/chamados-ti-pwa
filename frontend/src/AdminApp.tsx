@@ -53,7 +53,7 @@ function AdminShell() {
 
   return (
     <TooltipProvider delayDuration={200}>
-      <SidebarProvider>
+      <SidebarProvider defaultOpen={false}>
         <AppSidebar secaoAtiva={secaoAtiva} onSecaoChange={setSecaoAtiva} />
         <SidebarInset>
           <AppHeader countAberto={countAberto} />

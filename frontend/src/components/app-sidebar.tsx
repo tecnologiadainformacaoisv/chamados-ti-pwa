@@ -36,9 +36,13 @@ export function AppSidebar({
       collapsible="icon"
       className="bg-sidebar-gradient border-sidebar-border text-sidebar-foreground"
     >
-      <SidebarHeader className="p-4">
+      <SidebarHeader className="p-4 group-data-[collapsible=icon]:p-2">
         <div className="flex items-center gap-2 overflow-hidden">
-          <img src={logoIsv} alt="" className="h-8 w-8 shrink-0 invert" />
+          <img
+            src={logoIsv}
+            alt=""
+            className="h-10 w-10 shrink-0 invert group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8"
+          />
           <div className="flex flex-col leading-tight group-data-[collapsible=icon]:hidden">
             <span className="text-sm font-semibold tracking-wide">Instituto</span>
             <span className="text-sm font-semibold tracking-wide">São Vicente</span>
