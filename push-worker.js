@@ -281,6 +281,14 @@ async function handleGetTask(request, env, taskId) {
   return jsonRes(task);
 }
 
+// Fase M3 (2026-08-13, migração de saída da ClickUp): grava direto no D1
+// (`d1CreateChamado`, Fase B2 — dormente até agora), não mais na ClickUp. `id` passa a
+// ser `crypto.randomUUID()` (gerado pela aplicação, ver d1CreateChamado) em vez do
+// `task_id` que a ClickUp sempre gerou (formato tipo `86ajzr6x0`) — mudança visível
+// (quem olhar o id de um chamado novo repara), sem impacto funcional conhecido; o
+// contrato HTTP de resposta continua o mesmo `Task` shape de sempre (via
+// `d1RowToTaskShape`, já usado por GET /api/my-tasks/GET /admin/tasks), então o
+// frontend não precisou mudar nada aqui.
 async function handleCreateTask(request, env) {
   const session = await requireSession(request, env);
   if (!session) return sessionInvalid();
@@ -288,65 +296,52 @@ async function handleCreateTask(request, env) {
   let payload;
   try { payload = JSON.parse(await request.text()); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
 
-  // Nunca confia no valor de SOLICITANTE que o cliente mandou — troca pelo da sessão
-  // autenticada. É isso que impede alguém de abrir um chamado "como" outra pessoa.
-  const { nameToIdx, idxToName } = await getSolicitanteMaps(env);
-  const cuIdx = nameToIdx[session.name];
-  if (cuIdx == null) return jsonRes({ error: 'não foi possível confirmar seu cadastro na ClickUp' }, 400);
-
-  payload.custom_fields = (payload.custom_fields || []).filter(f => f.id !== SOLICITANTE_FIELD_ID);
-  payload.custom_fields.push({ id: SOLICITANTE_FIELD_ID, value: cuIdx });
-
-  // Prioridade e prazo também nunca vêm do cliente — "prioridade é sempre automática, nunca
-  // manual" é regra do projeto, e o due_date define a fila de SLA. Recalcula os dois a partir
-  // do TIPO só pra garantir que quem chamar o proxy direto (sabendo o APP_SHARED_SECRET, que é
-  // público por design) não consiga abrir chamado como Urgente com prazo já vencido.
-  const tipoField = payload.custom_fields.find(f => f.id === TIPO_FIELD_ID);
-  const tipoIdx   = tipoField?.value;
-  const prio      = CATEGORIA_PRIORIDADE[tipoIdx] ?? 3;
-  payload.priority      = prio;
-  payload.due_date       = Date.now() + (PRIORITY_SLA_MS[prio] ?? PRIORITY_SLA_MS[3]);
-  payload.due_date_time  = true;
+  // Prioridade e prazo nunca vêm do cliente — "prioridade é sempre automática, nunca
+  // manual" é regra do projeto, e o due_date define a fila de SLA. Recalculados a
+  // partir do TIPO só pra garantir que quem chamar o proxy direto (sabendo o
+  // APP_SHARED_SECRET, que é público por design) não consiga abrir chamado como
+  // Urgente com prazo já vencido.
+  const tipoIdx  = (payload.custom_fields || []).find(f => f.id === TIPO_FIELD_ID)?.value;
+  const setorIdx = (payload.custom_fields || []).find(f => f.id === SETOR_FIELD_ID)?.value;
+  const prio     = CATEGORIA_PRIORIDADE[tipoIdx] ?? 3;
+  const dueDate  = Date.now() + (PRIORITY_SLA_MS[prio] ?? PRIORITY_SLA_MS[3]);
 
   // Throttle simples: no máximo 1 chamado a cada 60s por pessoa logada — evita duplo-clique
   // acidental virando 2 tickets, e freia flood sem precisar de infra nova (reaproveita o
   // mesmo KV já usado pro dedup da automação).
   // ⚠️ expirationTtl mínimo aceito pelo Cloudflare KV é 60 — qualquer valor menor faz o PUT
   // falhar com 400, e essa falha não tratada derrubava handleCreateTask inteiro ANTES de
-  // chegar a criar o chamado na ClickUp (incidente 2026-08-10: "Abrir Chamado" não funcionava
-  // pra ninguém, sempre por essa exceção, não por CORS/rede como os erros do navegador sugeriam).
+  // chegar a criar o chamado (incidente 2026-08-10: "Abrir Chamado" não funcionava pra
+  // ninguém, sempre por essa exceção, não por CORS/rede como os erros do navegador sugeriam).
   const throttleKey = `throttle_create_${session.name}`;
   if (await env.SUBSCRIPTIONS.get(throttleKey)) {
     return jsonRes({ error: 'Aguarde alguns segundos antes de abrir outro chamado' }, 429);
   }
   await env.SUBSCRIPTIONS.put(throttleKey, '1', { expirationTtl: 60 });
 
-  const upstream = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task`, {
-    method: 'POST',
-    headers: { Authorization: env.CLICKUP_API_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  const text = await upstream.text();
-  const res = new Response(text, {
-    status: upstream.status,
-    headers: { ...CORS, 'Content-Type': upstream.headers.get('Content-Type') || 'application/json' }
-  });
-
-  // Espelho no D1 (Fase B7, 2026-08-12) — ClickUp continua sendo quem cria de verdade
-  // (é ela quem gera o task_id, e o anexo/attachment ainda sobe só pra lá); o D1 só
-  // espelha o resultado, best-effort. Uma falha aqui NUNCA derruba a resposta pro
-  // usuário — o chamado já foi criado na ClickUp de qualquer forma, e a próxima
-  // migração completa (POST /admin/migrate-d1) fecha qualquer lacuna que sobrar.
-  if (upstream.ok) {
-    try {
-      const created = JSON.parse(text);
-      await d1MigrateChamado(env, mapClickUpTaskToD1(created, idxToName));
-    } catch (err) {
-      console.warn('espelho D1 falhou na criação (chamado já existe na ClickUp normalmente):', err.message);
-    }
+  const assigneeIds = (payload.assignees || []).map(Number);
+  let row;
+  try {
+    row = await d1CreateChamado(env, {
+      name: payload.name,
+      description: payload.description ?? null,
+      status: 'aberto',
+      priority: prio,
+      tipo: tipoIdx != null ? Number(tipoIdx) : null,
+      setor: setorIdx != null ? Number(setorIdx) : null,
+      // Nunca confia no que o cliente mandou pra SOLICITANTE (nem manda nada, na
+      // verdade) — sempre o nome da sessão autenticada. É isso que impede alguém de
+      // abrir um chamado "como" outra pessoa.
+      solicitante: session.name,
+      due_date: dueDate,
+      assignee_id: assigneeIds[0] ?? null,
+      assignee_ids: assigneeIds,
+    });
+  } catch (err) {
+    return jsonRes({ error: `não foi possível criar o chamado: ${err.message}` }, 400);
   }
 
-  return res;
+  return jsonRes(d1RowToTaskShape(row));
 }
 
 // Fase M2 (2026-08-13, migração de saída da ClickUp): o anexo em si passou a ir pro R2

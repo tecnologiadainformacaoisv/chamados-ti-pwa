@@ -167,11 +167,6 @@ async function test(name, fn) {
   const workerPath = pathToFileURL(path.join(__dirname, '..', 'push-worker.js')).href;
   const { default: worker, d1GetChamado, d1SetAssignees, d1CreateSolicitante, d1ListAnexos } = await import(workerPath);
 
-  let lastCreatePayload = null;
-  let createdTaskCounter = 0; // cada POST de criação gera um id novo — evita colisão de
-  // INSERT OR IGNORE no D1 entre testes diferentes que criam chamado (Fase B7: desde que
-  // o mirror parou de exigir TIPO/SETOR, mais testes de criação passaram a espelhar de
-  // verdade, e todos usar o mesmo id fixo fazia o 2º ser silenciosamente ignorado).
   let taskListCallCount = 0;
   let migrationTasksOverride = null; // usado só nos testes de POST /admin/migrate-d1
   const realFetch = globalThis.fetch;
@@ -185,35 +180,12 @@ async function test(name, fn) {
     }
     if (u.endsWith('/task/task-michael-1')) return new Response(JSON.stringify(FAKE_TASKS[0]), { status: 200 });
     if (u.endsWith('/task/task-ariele-1'))  return new Response(JSON.stringify(FAKE_TASKS[1]), { status: 200 });
-    if (u.includes('/list/') && /\/task(\?|$)/.test(u)) {
-      if (opts?.method === 'POST') {
-        lastCreatePayload = JSON.parse(opts.body);
-        // Devolve no MESMO "shape" que a ClickUp real devolve pra task recém-criada —
-        // status/priority como objeto aninhado, não os valores crus (number/string) que
-        // foram mandados no corpo do POST. Precisa bater com esse shape porque
-        // handleCreateTask (Fase B7) usa mapClickUpTaskToD1() em cima desta resposta pra
-        // espelhar no D1 — um mock ingênuo (só ecoando o payload) já escondeu esse
-        // exato tipo de incompatibilidade de shape antes de eu perceber e corrigir aqui.
-        const PRIO_NUM_TO_NAME = { 1: 'urgent', 2: 'high', 3: 'normal' };
-        createdTaskCounter++;
-        const created = {
-          id: `new-task-id-${createdTaskCounter}`,
-          name: lastCreatePayload.name,
-          description: lastCreatePayload.description ?? null,
-          text_content: lastCreatePayload.description ?? null,
-          status: { status: 'aberto' },
-          priority: { priority: PRIO_NUM_TO_NAME[lastCreatePayload.priority] || 'normal' },
-          assignees: (lastCreatePayload.assignees || []).map(id => ({ id, username: 'Operador' })),
-          due_date: lastCreatePayload.due_date,
-          date_created: Date.now(),
-          custom_fields: lastCreatePayload.custom_fields,
-        };
-        return new Response(JSON.stringify(created), { status: 200 });
-      }
-      // Filtro por custom_fields (?custom_fields=...) não é mais usado por nenhuma rota —
-      // GET /api/my-tasks passou a ler do D1 na Fase B7 (2026-08-12), sem round-trip pra
-      // ClickUp nenhum. O que sobra aqui é só fetchAllTasks() (admin/tasks, admin/metrics,
-      // migração), que sempre pede a lista inteira, sem esse filtro.
+    // Fase M3 (2026-08-13): handleCreateTask parou de chamar `POST /list/:id/task` —
+    // grava direto no D1 agora (ver handleCreateTask). O que sobra deste padrão de URL é
+    // só o GET de listagem, usado por fetchAllTasks() (admin/tasks, admin/metrics,
+    // migração) — filtro por custom_fields (?custom_fields=...) não é usado por
+    // nenhuma rota há tempos (GET /api/my-tasks já lê do D1 desde a Fase B7).
+    if (u.includes('/list/') && /\/task(\?|$)/.test(u) && (!opts?.method || opts.method === 'GET')) {
       taskListCallCount++;
       return new Response(JSON.stringify({ tasks: migrationTasksOverride || FAKE_TASKS }), { status: 200 });
     }
@@ -308,27 +280,35 @@ async function test(name, fn) {
   });
 
   console.log('--- criação de chamado sempre usa a identidade da sessão ---');
+  // Fase M3 (2026-08-13): handleCreateTask grava direto no D1 (não mais na ClickUp) —
+  // não existe mais `lastCreatePayload` pra inspecionar (isso era o body mandado pro
+  // proxy da ClickUp). O jeito de confirmar "SOLICITANTE nunca vem do cliente" agora é
+  // olhar `solicitante` na resposta direto (d1RowToTaskShape expõe como campo próprio,
+  // ver achado de 2026-08-12) — nem faz sentido mais o payload aceitar um
+  // SOLICITANTE_FIELD_ID em custom_fields, já que o servidor nunca olha pra ele.
   await test('forjar SOLICITANTE de outra pessoa ao criar é ignorado — servidor usa o da sessão', async () => {
-    lastCreatePayload = null;
     const res = await worker.fetch(req('POST', '/api/tasks', {
       headers: { ...SECRET_HEADERS, 'X-Session-Token': token },
       body: JSON.stringify({ name: 'chamado forjado', custom_fields: [{ id: SOLICITANTE_FIELD_ID, value: 1 /* Ariele! */ }] })
     }), env);
     assert.strictEqual(res.status, 200);
-    const sentField = lastCreatePayload.custom_fields.find(f => f.id === SOLICITANTE_FIELD_ID);
-    assert.strictEqual(sentField.value, 27, 'SOLICITANTE devia ter sido forçado pro Michael (27)');
+    const data = await res.json();
+    assert.strictEqual(data.solicitante, 'Michael Vasconcelos', 'SOLICITANTE devia ter sido forçado pro Michael, ignorando o valor forjado');
   });
   await test('criação sem sessão dá 401', async () => {
     const res = await worker.fetch(req('POST', '/api/tasks', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'x' }) }), env);
     assert.strictEqual(res.status, 401);
   });
-  await test('chamado criado é espelhado no D1 (Fase B7, dual-write) — ClickUp continua sendo quem cria de verdade', async () => {
+  // Fase M3 (2026-08-13): handleCreateTask grava direto no D1 — não é mais um espelho
+  // best-effort de uma criação "de verdade" na ClickUp, é a própria fonte de verdade
+  // agora. Título/asserções atualizados pra refletir isso (a ClickUp não entra mais
+  // nessa rota nenhuma).
+  await test('chamado criado grava direto no D1 (Fase M3 — não é mais só um espelho)', async () => {
     await env.SUBSCRIPTIONS.delete('throttle_create_Michael Vasconcelos'); // testes anteriores já usaram o throttle de 60s do Michael
-    lastCreatePayload = null;
     const res = await worker.fetch(req('POST', '/api/tasks', {
       headers: { ...SECRET_HEADERS, 'X-Session-Token': token },
       body: JSON.stringify({
-        name: 'Chamado pra testar o espelho no D1',
+        name: 'Chamado pra testar a criação D1-nativa',
         custom_fields: [
           { id: TIPO_FIELD_ID, value: 0 },
           { id: SETOR_FIELD_ID, value: 1 },
@@ -337,13 +317,14 @@ async function test(name, fn) {
     }), env);
     assert.strictEqual(res.status, 200);
     const created = await res.json();
-    const mirrored = await d1GetChamado(env, created.id);
-    assert.ok(mirrored, 'chamado criado na ClickUp deveria ter sido espelhado no D1 também');
-    assert.strictEqual(mirrored.name, 'Chamado pra testar o espelho no D1');
-    assert.strictEqual(mirrored.solicitante, 'Michael Vasconcelos', 'espelho deve usar o solicitante da sessão, igual a ClickUp');
-    assert.strictEqual(mirrored.tipo, 0);
-    assert.strictEqual(mirrored.setor, 1);
-    assert.strictEqual(mirrored.status, 'aberto');
+    assert.ok(created.id, 'devia devolver um id (UUID gerado pela aplicação, não mais task_id da ClickUp)');
+    const linha = await d1GetChamado(env, created.id);
+    assert.ok(linha, 'chamado devia existir no D1 com o id devolvido');
+    assert.strictEqual(linha.name, 'Chamado pra testar a criação D1-nativa');
+    assert.strictEqual(linha.solicitante, 'Michael Vasconcelos');
+    assert.strictEqual(linha.tipo, 0);
+    assert.strictEqual(linha.setor, 1);
+    assert.strictEqual(linha.status, 'aberto');
   });
   await test('forjar priority/due_date ao criar é ignorado — servidor recalcula pelo TIPO', async () => {
     // Usa uma sessão do Bruno (recém-registrado aqui), não a do Michael — ele acabou de criar
@@ -351,7 +332,6 @@ async function test(name, fn) {
     // teste quer verificar. A Ariele não serve: ficou bloqueada pelo lockout do teste anterior.
     const brunoRegister = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Bruno Guilherme', password: 'senhadobruno' }) }), env);
     brunoToken = (await brunoRegister.json()).token;
-    lastCreatePayload = null;
     const tipoNotebooks = 0; // Urgente (1h) em CATEGORIA_PRIORIDADE
     const before = Date.now();
     const res = await worker.fetch(req('POST', '/api/tasks', {
@@ -364,9 +344,11 @@ async function test(name, fn) {
       })
     }), env);
     assert.strictEqual(res.status, 200);
-    assert.strictEqual(lastCreatePayload.priority, 1, 'Notebooks é Urgente (1) — não deveria aceitar o 4 forjado');
-    assert.ok(lastCreatePayload.due_date > before, 'due_date forjado (1) não deveria ter sido aceito');
-    assert.ok(lastCreatePayload.due_date <= before + 3600000 + 5000, 'due_date deveria ser ~1h a partir de agora (Urgente)');
+    const data = await res.json();
+    assert.strictEqual(data.priority.priority, 'urgent', 'Notebooks é Urgente — não deveria aceitar o 4 (\"Baixa\") forjado');
+    const dueDate = Number(data.due_date);
+    assert.ok(dueDate > before, 'due_date forjado (1) não deveria ter sido aceito');
+    assert.ok(dueDate <= before + 3600000 + 5000, 'due_date deveria ser ~1h a partir de agora (Urgente)');
   });
 
   console.log('--- upload de anexo também respeita quem é dono do chamado (Fase M2: R2 + D1, não mais ClickUp) ---');
