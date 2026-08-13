@@ -16,7 +16,14 @@ const POLL_MS = 20_000
 //     estavam abertos antes da TI abrir o painel).
 export function useNovosChamados(secret: string, onSessionError: () => void) {
   const queryClient = useQueryClient()
-  const knownIds = useRef<Set<string> | null>(null)
+  // 🛡️ Achado do revisor (2026-08-13, mesmo dia): guardar TODO id já visto (num Set
+  // que só cresce, nunca esquece) faz um chamado que volta pra "aberto" depois de já
+  // ter passado por aqui uma vez (reaberto manualmente, por exemplo) NUNCA mais
+  // disparar som/caixa de novo — só o badge refletiria a volta dele, em silêncio.
+  // Corrigido guardando só o resultado do POLL ANTERIOR (substituído a cada rodada,
+  // não acumulado) — um chamado reaparecido depois de sair da lista já conta como
+  // "novo" de novo, igual faria fazer sentido pra quem está de olho no painel.
+  const previousIds = useRef<Set<string> | null>(null)
   const [fila, setFila] = useState<Task[]>([])
 
   const query = useQuery({
@@ -33,13 +40,17 @@ export function useNovosChamados(secret: string, onSessionError: () => void) {
   useEffect(() => {
     const tasks = query.data?.tasks
     if (!tasks) return
-    if (knownIds.current === null) {
-      knownIds.current = new Set(tasks.map((t) => t.id))
+    const currentIds = new Set(tasks.map((t) => t.id))
+    if (previousIds.current === null) {
+      // primeira carga — só registra, não alerta (chamados que já estavam abertos
+      // antes da TI abrir o painel não deveriam disparar som/caixa).
+      previousIds.current = currentIds
       return
     }
-    const novos = tasks.filter((t) => !knownIds.current!.has(t.id))
+    const anteriores = previousIds.current
+    previousIds.current = currentIds
+    const novos = tasks.filter((t) => !anteriores.has(t.id))
     if (novos.length) {
-      for (const t of novos) knownIds.current!.add(t.id)
       playNotificationSound()
       setFila((prev) => [...prev, ...novos])
     }

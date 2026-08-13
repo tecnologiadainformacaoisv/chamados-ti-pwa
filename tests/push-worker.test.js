@@ -381,6 +381,18 @@ async function test(name, fn) {
     }), env);
     assert.strictEqual(res.status, 400);
   });
+  await test('POST /admin/subscribe com subscription sem keys.p256dh/keys.auth dá 400 (achado do revisor)', async () => {
+    // Sem isso, uma subscription incompleta ficaria gravada, e sendWebPush quebraria
+    // com um erro genérico (não "Push endpoint 404/410") toda vez que um chamado novo
+    // fosse criado — nunca seria limpa, ficaria falhando pra sempre em silêncio.
+    const res = await worker.fetch(req('POST', '/admin/subscribe', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ id: 'dispositivo-incompleto', subscription: { endpoint: 'https://fake-push-endpoint.test/incompleto' } }),
+    }), env);
+    assert.strictEqual(res.status, 400);
+    const stored = await env.SUBSCRIPTIONS.get('adminsub_dispositivo-incompleto');
+    assert.strictEqual(stored, null, 'não deveria ter gravado nada no KV');
+  });
   await test('grava adminsub_<id> no KV, e reenviar com o mesmo id sobrescreve (idempotente)', async () => {
     const res = await worker.fetch(req('POST', '/admin/subscribe', {
       headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
@@ -959,6 +971,16 @@ async function test(name, fn) {
   await test('"pendente" pausa o SLA e sair de "pendente" empurra o due_date pelo tempo pausado', async () => {
     const dueDateOriginal = Date.now() + 3600000;
     const id = await criarChamadoTeste({ status: 'em atendimento', due_date: dueDateOriginal });
+    // `start_date` precisa vir preenchido aqui — é o que representa "já estava em
+    // atendimento de verdade antes de pausar" (ver `retomandoAtendimentoPausado` em
+    // d1TransitionStatus). `d1CreateChamado` sempre grava `start_date: null` (não lê
+    // `data.start_date` — dormente desde a Fase B2, nunca precisou disso até agora),
+    // então ajusta direto via SQL depois de criar. Achado do revisor (2026-08-13):
+    // sem isso, esta fixture ficava num estado que não existe na prática (status "em
+    // atendimento" mas start_date nulo) — o que fazia ESTE teste ficar flaky depois
+    // do fix do achado anterior, pelo mesmo motivo original (o padrão da prioridade
+    // sendo aplicado por engano, só que agora por causa da fixture, não do código).
+    await env.CHAMADOS_DB.prepare('UPDATE chamados SET start_date = ? WHERE id = ?').bind(Date.now() - 600000, id).run();
     await worker.fetch(req('POST', `/admin/tasks/${id}`, {
       headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'pendente' })
     }), env);
@@ -972,6 +994,28 @@ async function test(name, fn) {
     }), env);
     const depoisDaPausa = await d1GetChamado(env, id);
     assert.ok(depoisDaPausa.due_date > dueDateOriginal, 'due_date deveria ter sido empurrado pelo tempo que ficou pendente');
+  });
+  await test('sair de "pendente" pra "em atendimento" pela 1ª vez (nunca tinha começado) aplica o padrão da prioridade, não o due_date de aceitação + pausa (achado do revisor)', async () => {
+    // Sequência real possível no Kanban (transição livre entre qualquer status):
+    // Aberto -> Pendente -> Em Atendimento, ou seja, pausar ANTES de nunca ter
+    // começado a atender. `start_date` continua null até aqui — é isso que distingue
+    // essa sequência de uma retomada de atendimento de verdade (testada acima).
+    const dueDateAceitacao = Date.now() + 3600000; // prazo de ACEITAÇÃO, não de finalização
+    const id = await criarChamadoTeste({ priority: 1, due_date: dueDateAceitacao }); // status 'aberto' (padrão do helper), Urgente -> 15min de finalização
+    await worker.fetch(req('POST', `/admin/tasks/${id}`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'pendente' })
+    }), env);
+    await env.SUBSCRIPTIONS.put(`d1_pending_start_${id}`, String(Date.now() - 120000), { expirationTtl: 2592000 });
+    const before = Date.now();
+    await worker.fetch(req('POST', `/admin/tasks/${id}`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'em atendimento' })
+    }), env);
+    const linha = await d1GetChamado(env, id);
+    assert.ok(linha.start_date >= before, 'start_date deveria ter sido definido agora — 1ª vez de verdade em atendimento');
+    assert.ok(
+      linha.due_date >= linha.start_date + 15 * 60000 - 1000 && linha.due_date <= linha.start_date + 15 * 60000 + 5000,
+      'due_date deveria seguir o padrão de finalização da prioridade (~15min a partir de agora), não o due_date de aceitação + tempo pausado'
+    );
   });
   await test('assigneeId:null ("Sem atribuição") limpa assignee_id e a tabela de junção', async () => {
     const id = await criarChamadoTeste({ assignee_id: 170628721, assignee_ids: [170628721, 200498355] });

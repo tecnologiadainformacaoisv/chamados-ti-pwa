@@ -731,7 +731,14 @@ async function handleAdminSubscribe(request, env) {
 
   const id = typeof body.id === 'string' ? body.id.trim() : '';
   if (!id) return jsonRes({ error: 'id é obrigatório' }, 400);
-  if (!body.subscription?.endpoint) return jsonRes({ error: 'subscription ausente' }, 400);
+  // 🛡️ Achado do revisor (2026-08-13, mesmo dia): validar só `endpoint` deixava
+  // gravar uma subscription sem `keys.p256dh`/`keys.auth` — sendWebPush quebraria com
+  // um TypeError genérico (não um "Push endpoint 404/410" reconhecível), então
+  // notifyAdminsNovoChamado nunca limparia essa inscrição podre, e ela ficaria
+  // falhando (só logado, nunca visível) pra sempre a cada chamado novo criado.
+  if (!body.subscription?.endpoint || !body.subscription?.keys?.p256dh || !body.subscription?.keys?.auth) {
+    return jsonRes({ error: 'subscription inválida (precisa de endpoint e keys.p256dh/keys.auth)' }, 400);
+  }
 
   await env.SUBSCRIPTIONS.put(`adminsub_${id}`, JSON.stringify(body.subscription));
   return jsonRes({ ok: true });
@@ -1680,6 +1687,17 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
 
   const prevStatus     = chamado.status;
   const saiuDePendente = prevStatus === 'pendente' && novoStatus !== 'pendente';
+  // 🛡️ Achado do revisor (2026-08-13, mesmo dia do fix de saiuDePendente abaixo): o
+  // painel de admin aceita QUALQUER transição de status a qualquer momento (Kanban
+  // com drag-and-drop livre, limitação já aceita/documentada), então "Aberto ->
+  // Pendente -> Em Atendimento" (pausar ANTES de nunca ter começado a atender) é uma
+  // sequência real. Nesse caso `saiuDePendente` sozinho não basta pra decidir se é
+  // uma "retomada de verdade": `chamado.start_date` só é não-nulo depois que o
+  // chamado já entrou em "em atendimento" pelo menos uma vez — é isso que distingue
+  // "retomando um atendimento pausado" (não deveria resetar o prazo de finalização)
+  // de "pausou antes de começar, tá entrando em atendimento agora pela 1ª vez"
+  // (deveria sim aplicar o padrão da prioridade, igual a qualquer entrada normal).
+  const retomandoAtendimentoPausado = saiuDePendente && chamado.start_date != null;
   const patch = { status: novoStatus };
 
   if (novoStatus === 'pendente') {
@@ -1696,15 +1714,19 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
     const now = Date.now();
     patch.startDate = now;
     // 🛡️ Achado real (2026-08-13, testando a feature de alerta de admin — flaky por
-    // sorte de timing, não por acaso): quando a transição é um RESUME de "pendente"
-    // (saiuDePendente), o bloco acima já calculou o due_date certo (due_date antigo +
-    // tempo pausado). Sem o `!saiuDePendente` aqui, esta atribuição sobrescrevia esse
-    // valor com `now + timeEstimate` — resetando o prazo pra uma janela cheia nova a
-    // cada pausa/retomada, em vez de só empurrar pelo tempo que ficou pendente (o
-    // chamado voltaria a ter até 1h/4h/15min inteiros de novo, mesmo já tendo
-    // consumido a maior parte do prazo antes de pausar). Só aplica o padrão por
-    // prioridade na entrada "de verdade" em atendimento (vindo de aberto).
-    if (!saiuDePendente) {
+    // sorte de timing, não por acaso): quando a transição é uma RETOMADA de um
+    // atendimento pausado (`retomandoAtendimentoPausado`), o bloco acima já calculou
+    // o due_date certo (due_date antigo + tempo pausado). Sem essa checagem aqui,
+    // esta atribuição sobrescrevia esse valor com `now + timeEstimate` — resetando o
+    // prazo pra uma janela cheia nova a cada pausa/retomada, em vez de só empurrar
+    // pelo tempo que ficou pendente (o chamado voltaria a ter até 1h/4h/15min
+    // inteiros de novo, mesmo já tendo consumido a maior parte do prazo antes de
+    // pausar). Só aplica o padrão por prioridade na entrada "de verdade" em
+    // atendimento — vindo de "aberto" diretamente, OU pausado antes de qualquer
+    // atendimento real ter começado (`chamado.start_date` ainda nulo nesse caso,
+    // então NÃO é `retomandoAtendimentoPausado` — é a 1ª entrada de verdade, só que
+    // com uma pausa no meio do caminho).
+    if (!retomandoAtendimentoPausado) {
       const timeEstimate = DEFAULT_TIME_ESTIMATE_MS_BY_PRIORITY[chamado.priority];
       if (timeEstimate) patch.dueDate = now + timeEstimate;
     }
