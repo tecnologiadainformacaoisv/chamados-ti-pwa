@@ -147,11 +147,34 @@ async function test(name, fn) {
   // algum dia voltar a tentar. Antes disso, esta função simulava `GET /list/:id/field`,
   // `GET /task/:id` e `GET /list/:id/task` pra alimentar getSolicitanteMaps/
   // fetchAllTasks/handleGetTask/as rotas de migração — todas removidas nesta fase.
-  globalThis.fetch = async (url) => {
-    throw new Error(`teste tentou chamar fetch('${url}') de verdade — push-worker.js não deveria mais fazer nenhuma chamada à ClickUp`);
+  //
+  // Exceção deliberada (feature de alerta de chamado novo, 2026-08-13): chamadas pra
+  // `https://fake-push-endpoint.test/*` são o endpoint de push simulado que
+  // `notifyAdminsNovoChamado`/`sendWebPush` de fato precisam chamar de verdade — não é
+  // ClickUp, é o "serviço de push" do navegador (mockado aqui do mesmo jeito que
+  // tests/d1-layer.test.js já faz pra `d1TransitionStatus`). `failingPushEndpoints`
+  // (mapa url->status, populado por teste) permite simular subscription morta (404/410)
+  // pra um endpoint específico sem afetar os outros.
+  const adminPushCalls = [];
+  const failingPushEndpoints = new Map();
+  globalThis.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.startsWith('https://fake-push-endpoint.test/')) {
+      adminPushCalls.push({ url: u, headers: opts?.headers });
+      if (failingPushEndpoints.has(u)) return new Response('endpoint fora do ar', { status: failingPushEndpoints.get(u) });
+      return new Response('', { status: 201 });
+    }
+    throw new Error(`teste tentou chamar fetch('${u}') de verdade — push-worker.js não deveria mais fazer nenhuma chamada à ClickUp`);
   };
 
-  const env = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1(), ANEXOS: makeMockR2() };
+  // Par VAPID descartável só pra createVapidJwt (dentro de sendWebPush) não falhar ao
+  // assinar — mesma técnica de tests/d1-layer.test.js (crypto.subtle nativo, sem
+  // dependência nova). VAPID_PUBLIC_KEY não precisa bater criptograficamente com nada
+  // pro teste — só vai literal no header Authorization, que o mock acima não valida.
+  const vapidKeyPairAdmin = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const vapidPrivateJwkAdmin = JSON.stringify(await crypto.subtle.exportKey('jwk', vapidKeyPairAdmin.privateKey));
+
+  const env = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1(), ANEXOS: makeMockR2(), VAPID_PRIVATE_JWK: vapidPrivateJwkAdmin, VAPID_PUBLIC_KEY: 'fake-vapid-public-key' };
   const SECRET_HEADERS = { 'X-App-Secret': env.SUBSCRIBE_SECRET, 'Content-Type': 'application/json' };
   let brunoToken; // Bruno nunca erra senha nem esbarra em throttle — usado pra testes que precisam de uma sessão "limpa"
 
@@ -336,6 +359,98 @@ async function test(name, fn) {
     const dueDate = Number(data.due_date);
     assert.ok(dueDate > before, 'due_date forjado (1) não deveria ter sido aceito');
     assert.ok(dueDate <= before + 3600000 + 5000, 'due_date deveria ser ~1h a partir de agora (Urgente)');
+  });
+
+  console.log('--- POST /admin/subscribe e alerta de chamado novo pro admin (2026-08-13) ---');
+  await test('POST /admin/subscribe sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/admin/subscribe', {
+      body: JSON.stringify({ id: 'dispositivo-1', subscription: { endpoint: 'https://fake-push-endpoint.test/x', keys: { p256dh: 'a', auth: 'b' } } }),
+    }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('POST /admin/subscribe sem id dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/admin/subscribe', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ subscription: { endpoint: 'https://fake-push-endpoint.test/x', keys: { p256dh: 'a', auth: 'b' } } }),
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('POST /admin/subscribe sem subscription dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/admin/subscribe', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ id: 'dispositivo-1' }),
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('grava adminsub_<id> no KV, e reenviar com o mesmo id sobrescreve (idempotente)', async () => {
+    const res = await worker.fetch(req('POST', '/admin/subscribe', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ id: 'dispositivo-idem', subscription: { endpoint: 'https://fake-push-endpoint.test/v1', keys: { p256dh: 'a', auth: 'b' } } }),
+    }), env);
+    assert.strictEqual(res.status, 200);
+    let stored = JSON.parse(await env.SUBSCRIPTIONS.get('adminsub_dispositivo-idem'));
+    assert.strictEqual(stored.endpoint, 'https://fake-push-endpoint.test/v1');
+
+    await worker.fetch(req('POST', '/admin/subscribe', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ id: 'dispositivo-idem', subscription: { endpoint: 'https://fake-push-endpoint.test/v2', keys: { p256dh: 'a', auth: 'b' } } }),
+    }), env);
+    stored = JSON.parse(await env.SUBSCRIPTIONS.get('adminsub_dispositivo-idem'));
+    assert.strictEqual(stored.endpoint, 'https://fake-push-endpoint.test/v2', 'reenviar com o mesmo id deveria sobrescrever, não duplicar');
+  });
+  // Fase M5+ (alerta de admin): sendWebPush faz ECDH de verdade em cima de `p256dh`
+  // (precisa ser um ponto EC P-256 válido, não qualquer string) — mesmas chaves
+  // "descartáveis mas válidas" já usadas em tests/d1-layer.test.js pro mesmo motivo.
+  const FAKE_PUSH_KEYS = { p256dh: 'BMgcsTAUEhUr-dau-LaPhTHktmCZ90q4GXFF6CX0p3IvmeB51v68JqZLeuKrO3swUcSXKiNhQ6Ur5I74fm6tp2Q', auth: 'dGVzdC1hdXRoLTE2Yg' };
+  await test('criar chamado dispara push pro admin inscrito', async () => {
+    await worker.fetch(req('POST', '/admin/subscribe', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ id: 'dispositivo-vivo', subscription: { endpoint: 'https://fake-push-endpoint.test/vivo', keys: FAKE_PUSH_KEYS } }),
+    }), env);
+    adminPushCalls.length = 0;
+    await env.SUBSCRIPTIONS.delete('throttle_create_Michael Vasconcelos');
+    const res = await worker.fetch(req('POST', '/api/tasks', {
+      headers: { ...SECRET_HEADERS, 'X-Session-Token': token },
+      body: JSON.stringify({ name: 'chamado pra testar alerta de admin', custom_fields: [{ id: TIPO_FIELD_ID, value: 0 }] }),
+    }), env);
+    assert.strictEqual(res.status, 200, 'criar o chamado não deveria falhar mesmo com o alerta pro admin no meio do caminho');
+    const call = adminPushCalls.find(c => c.url === 'https://fake-push-endpoint.test/vivo');
+    assert.ok(call, 'deveria ter mandado push pro dispositivo inscrito');
+    assert.ok(call.headers.Authorization?.startsWith('vapid '), 'deveria mandar o header VAPID');
+  });
+  await test('assinante com subscription morta (410) é removido, sem impedir push pros outros nem a criação do chamado', async () => {
+    await worker.fetch(req('POST', '/admin/subscribe', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ id: 'dispositivo-morto', subscription: { endpoint: 'https://fake-push-endpoint.test/morto', keys: FAKE_PUSH_KEYS } }),
+    }), env);
+    failingPushEndpoints.set('https://fake-push-endpoint.test/morto', 410);
+    adminPushCalls.length = 0;
+    await env.SUBSCRIPTIONS.delete('throttle_create_Michael Vasconcelos');
+    try {
+      const res = await worker.fetch(req('POST', '/api/tasks', {
+        headers: { ...SECRET_HEADERS, 'X-Session-Token': token },
+        body: JSON.stringify({ name: 'chamado pra testar limpeza de inscrição morta', custom_fields: [{ id: TIPO_FIELD_ID, value: 0 }] }),
+      }), env);
+      assert.strictEqual(res.status, 200, 'chamado deveria ser criado mesmo com um assinante admin morto');
+      const vivoCall = adminPushCalls.find(c => c.url === 'https://fake-push-endpoint.test/vivo');
+      assert.ok(vivoCall, 'o assinante vivo (do teste anterior) deveria continuar recebendo push');
+      const mortoStill = await env.SUBSCRIPTIONS.get('adminsub_dispositivo-morto');
+      assert.strictEqual(mortoStill, null, '410 deveria ter apagado a inscrição morta');
+    } finally {
+      failingPushEndpoints.delete('https://fake-push-endpoint.test/morto');
+    }
+  });
+  await test('sem nenhum admin inscrito, criar chamado não falha (só não manda push nenhum)', async () => {
+    const solitaryEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1(), VAPID_PRIVATE_JWK: vapidPrivateJwkAdmin, VAPID_PUBLIC_KEY: 'fake-vapid-public-key' };
+    await d1CreateSolicitante(solitaryEnv, 'Michael Vasconcelos');
+    const reg = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Michael Vasconcelos', password: 'senha123' }) }), solitaryEnv);
+    const soloToken = (await reg.json()).token;
+    adminPushCalls.length = 0;
+    const res = await worker.fetch(req('POST', '/api/tasks', {
+      headers: { ...SECRET_HEADERS, 'X-Session-Token': soloToken },
+      body: JSON.stringify({ name: 'chamado sem admin nenhum inscrito', custom_fields: [{ id: TIPO_FIELD_ID, value: 0 }] }),
+    }), solitaryEnv);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(adminPushCalls.length, 0, 'sem ninguém inscrito, não deveria tentar mandar push nenhum');
   });
 
   console.log('--- upload de anexo também respeita quem é dono do chamado (Fase M2: R2 + D1, não mais ClickUp) ---');

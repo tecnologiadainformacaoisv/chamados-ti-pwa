@@ -1,13 +1,20 @@
-import { RefreshCw, LogOut } from "lucide-react"
+import { RefreshCw, LogOut, Bell } from "lucide-react"
 import { useQueryClient } from "@tanstack/react-query"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 import logoIsv from "@/assets/logo-isv.svg"
 
 // Espelha o .app-header de admin.html — mesma marca (logo ISV, "Painel de
 // Admin" / "Chamados de TI") e as mesmas duas ações (atualizar, sair).
-export function AppHeader() {
+//
+// `countAberto` (2026-08-13, alerta de chamado novo): sino + número flutuante,
+// sempre visível aqui independente da seção ativa (Gestão/Dashboard/Usuários) —
+// recria o contador que a interface da ClickUp dava, agora que a TI não abre mais
+// ela. Vem de useNovosChamados, montado uma vez só lá em cima (AdminApp.tsx) — nunca
+// duplicado aqui, pra não rodar o polling/diff de "chamado novo" duas vezes.
+export function AppHeader({ countAberto }: { countAberto?: number }) {
   const { logout } = useAdminAuth()
   const queryClient = useQueryClient()
 
@@ -22,6 +29,14 @@ export function AppHeader() {
         <span className="text-xs text-primary-foreground/70">Chamados de TI</span>
       </div>
       <div className="flex items-center gap-1">
+        {!!countAberto && (
+          <div className="relative mr-1 flex h-8 w-8 items-center justify-center" title={`${countAberto} chamado(s) aberto(s) aguardando atendimento`}>
+            <Bell className="h-5 w-5" />
+            <Badge variant="destructive" className="absolute -top-1 -right-1 h-4 min-w-4 justify-center bg-destructive px-1 text-[0.65rem] text-white">
+              {countAberto > 99 ? "99+" : countAberto}
+            </Badge>
+          </div>
+        )}
         <Button
           size="icon"
           variant="ghost"

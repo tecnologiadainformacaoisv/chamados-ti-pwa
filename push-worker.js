@@ -159,6 +159,7 @@ export default {
       const solAtivoMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/ativo$/);
       if (solAtivoMatch) return handleAdminSetSolicitanteAtivo(request, env, solAtivoMatch[1]);
       if (pathname === '/admin/migrate-schema-anexos') return handleAdminMigrateSchemaAnexos(request, env);
+      if (pathname === '/admin/subscribe') return handleAdminSubscribe(request, env);
     }
 
     if (request.method === 'GET') {
@@ -311,6 +312,15 @@ async function handleCreateTask(request, env) {
     });
   } catch (err) {
     return jsonRes({ error: `não foi possível criar o chamado: ${err.message}` }, 400);
+  }
+
+  // Alerta de chamado novo pro admin (2026-08-13) — nunca derruba a resposta pro
+  // solicitante se o push falhar (mesmo espírito de d1TransitionStatus): o chamado já
+  // foi criado com sucesso, avisar a TI é best-effort.
+  try {
+    await notifyAdminsNovoChamado(env, row);
+  } catch (err) {
+    console.error(`handleCreateTask: falha ao notificar admins do chamado ${row.id}: ${err.message}`);
   }
 
   return jsonRes(d1RowToTaskShape(row));
@@ -675,7 +685,7 @@ async function handleLogout(request, env) {
 
 // =====================================================================
 // /subscribe — salva subscription do usuário no KV
-// Body: { user_idx: number, subscription: PushSubscription, secret: string }
+// Body: { subscription: PushSubscription }
 // =====================================================================
 async function handleSubscribe(request, env) {
   try {
@@ -701,6 +711,30 @@ async function handleSubscribe(request, env) {
   } catch (err) {
     return jsonRes({ error: err.message }, 500);
   }
+}
+
+// =====================================================================
+// POST /admin/subscribe — inscrição de push pro lado admin (feature de alerta de
+// chamado novo, 2026-08-13). Sem login por pessoa no admin (só ADMIN_SECRET
+// compartilhado, ver isAdmin) — a inscrição é por NAVEGADOR/DISPOSITIVO: `id` vem do
+// cliente (`crypto.randomUUID()`, gerado uma vez e guardado em localStorage), não do
+// servidor. Body: { id: string, subscription: PushSubscription }. `handleCreateTask`
+// enumera todo mundo sob o prefixo `adminsub_` (mesmo padrão de `.list({prefix})` que
+// `handleAdminListUsers` já usa pra `auth_`) e manda push pra cada um quando um
+// chamado novo é criado. Reenviar com o mesmo `id` sobrescreve — idempotente.
+// =====================================================================
+async function handleAdminSubscribe(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+
+  const id = typeof body.id === 'string' ? body.id.trim() : '';
+  if (!id) return jsonRes({ error: 'id é obrigatório' }, 400);
+  if (!body.subscription?.endpoint) return jsonRes({ error: 'subscription ausente' }, 400);
+
+  await env.SUBSCRIPTIONS.put(`adminsub_${id}`, JSON.stringify(body.subscription));
+  return jsonRes({ ok: true });
 }
 
 // =====================================================================
@@ -786,6 +820,50 @@ async function sendWebPush(sub, payloadStr, env) {
     const text = await resp.text();
     throw new Error(`Push endpoint ${resp.status}: ${text}`);
   }
+}
+
+// =====================================================================
+// Alerta de chamado novo pro admin (2026-08-13) — chamada por `handleCreateTask`
+// depois que o chamado já foi gravado no D1 com sucesso. Enumera todo mundo sob o
+// prefixo `adminsub_` (mesmo padrão de `.list({prefix, cursor})` que
+// `handleAdminListUsers` já usa pra `auth_`) e manda push em paralelo pra cada um —
+// um assinante com subscription morta (404/410, ex.: desinstalou o navegador) nunca
+// deveria travar o aviso pros outros nem, muito menos, a criação do chamado em si
+// (chamada isolada num try/catch próprio em handleCreateTask). Subscription morta é
+// apagada na hora, em vez de ficar tentando pra sempre a cada chamado novo.
+// =====================================================================
+async function notifyAdminsNovoChamado(env, row) {
+  const ids = [];
+  let cursor;
+  do {
+    const list = await env.SUBSCRIPTIONS.list({ prefix: 'adminsub_', cursor });
+    for (const key of list.keys) ids.push(key.name);
+    cursor = list.list_complete ? undefined : list.cursor;
+  } while (cursor);
+
+  if (!ids.length) return;
+
+  const payload = JSON.stringify({
+    title: 'Chamados de TI – ISV',
+    body:  `Novo chamado: "${row.name}" — aberto por ${row.solicitante || 'alguém'}`,
+    data:  { task_id: row.id, status: 'aberto', type: 'novo_chamado' },
+  });
+
+  await Promise.allSettled(ids.map(async (key) => {
+    const subJson = await env.SUBSCRIPTIONS.get(key);
+    if (!subJson) return;
+    try {
+      await sendWebPush(JSON.parse(subJson), payload, env);
+    } catch (err) {
+      // Endpoint não existe mais (navegador desinstalado/subscription revogada) —
+      // limpa em vez de continuar tentando pra sempre a cada chamado novo.
+      if (/^Push endpoint (404|410):/.test(err.message)) {
+        await env.SUBSCRIPTIONS.delete(key);
+      } else {
+        console.error(`notifyAdminsNovoChamado: falha ao enviar push (${key}): ${err.message}`);
+      }
+    }
+  }));
 }
 
 // =====================================================================
@@ -1617,8 +1695,19 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
   if (novoStatus === 'em atendimento') {
     const now = Date.now();
     patch.startDate = now;
-    const timeEstimate = DEFAULT_TIME_ESTIMATE_MS_BY_PRIORITY[chamado.priority];
-    if (timeEstimate) patch.dueDate = now + timeEstimate;
+    // 🛡️ Achado real (2026-08-13, testando a feature de alerta de admin — flaky por
+    // sorte de timing, não por acaso): quando a transição é um RESUME de "pendente"
+    // (saiuDePendente), o bloco acima já calculou o due_date certo (due_date antigo +
+    // tempo pausado). Sem o `!saiuDePendente` aqui, esta atribuição sobrescrevia esse
+    // valor com `now + timeEstimate` — resetando o prazo pra uma janela cheia nova a
+    // cada pausa/retomada, em vez de só empurrar pelo tempo que ficou pendente (o
+    // chamado voltaria a ter até 1h/4h/15min inteiros de novo, mesmo já tendo
+    // consumido a maior parte do prazo antes de pausar). Só aplica o padrão por
+    // prioridade na entrada "de verdade" em atendimento (vindo de aberto).
+    if (!saiuDePendente) {
+      const timeEstimate = DEFAULT_TIME_ESTIMATE_MS_BY_PRIORITY[chamado.priority];
+      if (timeEstimate) patch.dueDate = now + timeEstimate;
+    }
   }
 
   if (novoStatus === 'encerrado') {

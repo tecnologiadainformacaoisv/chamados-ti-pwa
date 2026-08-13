@@ -151,6 +151,14 @@ export async function setSolicitanteAtivo(secret: string, name: string, ativo: b
   await adminMutate(secret, `/solicitantes/${encodeURIComponent(name)}/ativo`, { ativo })
 }
 
+// Alerta de chamado novo pro admin (2026-08-13) — sem login por pessoa no admin (só
+// ADMIN_SECRET compartilhado), a inscrição de push é por NAVEGADOR/DISPOSITIVO: `id` é
+// gerado no cliente (ver use-admin-push-notifications.tsx), não no servidor. Reenviar
+// com o mesmo `id` sobrescreve (idempotente) — não precisa se preocupar em duplicar.
+export async function subscribeAdminPush(secret: string, id: string, subscription: PushSubscriptionJSON): Promise<void> {
+  await adminMutate(secret, "/subscribe", { id, subscription })
+}
+
 export function isAtrasado(task: Task): boolean {
   if (!task.due_date) return false
   const status = (task.status?.status || "").toLowerCase()
