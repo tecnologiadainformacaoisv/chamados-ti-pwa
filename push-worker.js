@@ -129,6 +129,7 @@ export default {
       if (pathname === '/admin/migrate-d1') return handleAdminMigrateD1(request, env);
       if (pathname === '/admin/migrate-schema-nullable-tipo-setor') return handleAdminMigrateSchemaNullableTipoSetor(request, env);
       if (pathname === '/admin/migrate-schema-chamado-assignees') return handleAdminMigrateSchemaChamadoAssignees(request, env);
+      if (pathname === '/admin/migrate-schema-solicitantes') return handleAdminMigrateSchemaSolicitantes(request, env);
       if (pathname === '/admin/migrate-solicitantes') return handleAdminMigrateSolicitantes(request, env);
       if (pathname === '/admin/solicitantes') return handleAdminCreateSolicitante(request, env);
       const solAtivoMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/ativo$/);
@@ -1761,6 +1762,28 @@ async function handleAdminMigrateSchemaChamadoAssignees(request, env) {
     await env.CHAMADOS_DB.prepare(
       'CREATE INDEX IF NOT EXISTS idx_chamado_assignees_assignee ON chamado_assignees (assignee_id)'
     ).run();
+    return jsonRes({ ok: true });
+  } catch (err) {
+    return jsonRes({ error: `migração de schema falhou: ${err.message}` }, 500);
+  }
+}
+
+// =====================================================================
+// POST /admin/migrate-schema-solicitantes — migração de schema ÚNICA (Fase M1,
+// 2026-08-13), cria a tabela `solicitantes` no D1 real de produção. Mesmo padrão de
+// handleAdminMigrateSchemaChamadoAssignees — CREATE TABLE IF NOT EXISTS, idempotente,
+// tabela nova (não precisa recriar nada existente). ADMIN_SECRET, roda uma vez.
+// =====================================================================
+async function handleAdminMigrateSchemaSolicitantes(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  try {
+    await env.CHAMADOS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS solicitantes (
+        name       TEXT PRIMARY KEY,
+        ativo      INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL
+      )
+    `).run();
     return jsonRes({ ok: true });
   } catch (err) {
     return jsonRes({ error: `migração de schema falhou: ${err.message}` }, 500);

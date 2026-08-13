@@ -391,6 +391,20 @@ async function test(name, fn) {
   });
 
   console.log('--- lista de solicitantes sai da ClickUp (Fase M1, 2026-08-13) ---');
+  await test('POST /admin/migrate-schema-solicitantes sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/admin/migrate-schema-solicitantes', { body: '{}' }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('cria a tabela solicitantes, idempotente rodando de novo', async () => {
+    const res = await worker.fetch(req('POST', '/admin/migrate-schema-solicitantes', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+    }), env);
+    assert.strictEqual(res.status, 200);
+    const res2 = await worker.fetch(req('POST', '/admin/migrate-schema-solicitantes', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+    }), env);
+    assert.strictEqual(res2.status, 200, 'rodar de novo não deveria falhar (CREATE ... IF NOT EXISTS)');
+  });
   await test('GET /api/solicitantes sem X-App-Secret dá 403', async () => {
     const res = await worker.fetch(req('GET', '/api/solicitantes'), env);
     assert.strictEqual(res.status, 403);
