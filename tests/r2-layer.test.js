@@ -7,17 +7,36 @@ const path = require('path');
 const assert = require('assert');
 const { pathToFileURL } = require('url');
 
-function toBytes(body) {
+async function toBytes(body) {
   if (body instanceof Uint8Array) return body;
   if (typeof body === 'string') return new TextEncoder().encode(body);
-  throw new Error('mock R2 só aceita string/Uint8Array nos testes');
+  // Fase M2 (2026-08-13, migração de saída da ClickUp): handleUploadAttachment/
+  // handleAdminMigrateAnexos passam um ReadableStream (`file.stream()`/
+  // `fileResp.body`) direto pro R2 real, que aceita — o mock precisa consumir o
+  // stream inteiro em bytes pra guardar no Map em memória.
+  if (body && typeof body.getReader === 'function') {
+    const reader = body.getReader();
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.byteLength;
+    }
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.byteLength; }
+    return out;
+  }
+  throw new Error('mock R2 só aceita string/Uint8Array/ReadableStream nos testes');
 }
 
 function makeMockR2() {
   const store = new Map();
   return {
     async put(key, body, options) {
-      const bytes = toBytes(body);
+      const bytes = await toBytes(body);
       store.set(key, { bytes, httpMetadata: options?.httpMetadata || {} });
       return { key, size: bytes.byteLength };
     },

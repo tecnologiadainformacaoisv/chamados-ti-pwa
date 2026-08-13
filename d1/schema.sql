@@ -76,3 +76,22 @@ CREATE TABLE IF NOT EXISTS solicitantes (
   ativo      INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL
 );
+
+-- Anexos (Fase M2 da migração de saída da ClickUp, 2026-08-13) — até aqui, todo anexo
+-- de chamado morava só na ClickUp (upload direto pra lá, URL pública dela usada direto
+-- no <img>/<a> do frontend). `id` é gerado pela aplicação (crypto.randomUUID(), igual
+-- chamados.id) — é o que o cliente usa em `GET /api/anexos/:id`, nunca a `r2_key` bruta
+-- (não expõe o formato interno da key do bucket). `chamado_id` aponta pro id do
+-- chamado (hoje ainda o task_id da ClickUp, até a Fase M3 trocar pra UUID nativo) — sem
+-- FOREIGN KEY de propósito, mesmo motivo de chamado_assignees (foreign_keys ligado por
+-- padrão no D1/node:sqlite bloquearia recriar a tabela chamados no futuro).
+CREATE TABLE IF NOT EXISTS chamado_anexos (
+  id           TEXT PRIMARY KEY,
+  chamado_id   TEXT NOT NULL,
+  r2_key       TEXT NOT NULL,
+  filename     TEXT,
+  content_type TEXT,
+  size         INTEGER,
+  created_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chamado_anexos_chamado ON chamado_anexos (chamado_id);

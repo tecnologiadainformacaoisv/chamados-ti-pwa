@@ -108,6 +108,19 @@ export async function fetchTaskDetail(sessionToken: string, taskId: string): Pro
   return apiRequest<Task>(sessionToken, "GET", `/tasks/${taskId}`)
 }
 
+// Fase M2 (2026-08-13, migração de saída da ClickUp): anexo passou a vir de uma rota
+// autenticada por sessão (GET /api/anexos/:id), não mais uma URL pública/direta da
+// ClickUp — não dá pra usar direto num `<img src>`/`<a href>` (não carregam headers
+// customizados), então busca o blob aqui e quem chama monta um object URL.
+export async function fetchAnexoBlob(sessionToken: string, url: string): Promise<Blob> {
+  const res = await fetch(url, {
+    headers: { "X-App-Secret": APP_SHARED_SECRET, "X-Session-Token": sessionToken },
+  })
+  if (res.status === 401) throw new AuthError("Sessão expirada, faça login novamente.", 401)
+  if (!res.ok) throw new AuthError(`Erro HTTP ${res.status} ao carregar o anexo`, res.status)
+  return res.blob()
+}
+
 // Lista de solicitantes — mesmo endpoint público (X-App-Secret) que o painel de admin
 // usa pro filtro, aqui usado pro select de nome na tela de login/cadastro. Fase M1
 // (2026-08-13, migração de saída da ClickUp): passou a ler de uma tabela própria no D1

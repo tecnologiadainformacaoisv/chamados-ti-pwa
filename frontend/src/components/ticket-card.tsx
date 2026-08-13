@@ -113,7 +113,7 @@ export function TicketCard({ task }: { task: Task }) {
         <MessageCircle className="h-4 w-4" /> Falar no WhatsApp
       </a>
 
-      <AnexoModal anexo={anexoAberto} onClose={() => setAnexoAberto(null)} />
+      <AnexoModal anexo={anexoAberto} sessionToken={sessionToken} onClose={() => setAnexoAberto(null)} />
     </div>
   )
 }

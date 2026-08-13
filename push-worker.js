@@ -50,6 +50,14 @@ const PRIORITY_NAME_TO_NUM = { urgent: 1, high: 2, normal: 3, low: 3 };
 // o status recebido do painel de admin antes de mandar pra ClickUp.
 const VALID_STATUSES = ['aberto', 'em atendimento', 'pendente', 'encerrado'];
 
+// Fase M2 (2026-08-13, migração de saída da ClickUp) — mesmo limite de sempre
+// (MAX_ANEXO_MB em frontend/src/lib/constants.ts), mas agora TAMBÉM aplicado no
+// servidor. Achado ao construir esta fase: o limite de 10MB sempre existiu só no
+// cliente — nada no Worker jamais impediu um upload maior (a ClickUp que aceitava ou
+// rejeitava por conta própria). Com o upload indo pro R2 agora, o Worker passa a ser
+// quem decide, então precisa aplicar a regra ele mesmo.
+const MAX_ANEXO_BYTES = 10 * 1024 * 1024;
+
 // ⚠️ Mantenha sincronizado com CATEGORIA_PRIORIDADE/PRIORITY em app.js — "prioridade é sempre
 // automática, nunca manual" é regra de negócio do projeto (ver CLAUDE.md); recalculada aqui de
 // novo (não só na UI) pra ninguém conseguir abrir chamado com prioridade/prazo forjados mandando
@@ -134,6 +142,8 @@ export default {
       if (pathname === '/admin/solicitantes') return handleAdminCreateSolicitante(request, env);
       const solAtivoMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/ativo$/);
       if (solAtivoMatch) return handleAdminSetSolicitanteAtivo(request, env, solAtivoMatch[1]);
+      if (pathname === '/admin/migrate-schema-anexos') return handleAdminMigrateSchemaAnexos(request, env);
+      if (pathname === '/admin/migrate-anexos') return handleAdminMigrateAnexos(request, env);
     }
 
     if (request.method === 'GET') {
@@ -144,6 +154,8 @@ export default {
       if (pathname === '/admin/tasks')       return handleAdminListTasks(request, env);
       if (pathname === '/admin/metrics')     return handleAdminMetrics(request, env);
       if (pathname === '/admin/solicitantes') return handleAdminListSolicitantes(request, env);
+      const anexoMatch = pathname.match(/^\/api\/anexos\/([^/]+)$/);
+      if (anexoMatch) return handleGetAnexo(request, env, anexoMatch[1]);
       const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
       if (taskMatch) return handleGetTask(request, env, taskMatch[1]);
       return new Response('Chamados TI – Push Worker OK', { status: 200 });
@@ -250,7 +262,23 @@ async function handleGetTask(request, env, taskId) {
   const v  = cf?.value?.orderindex ?? cf?.value;
   if (idxToName[v] !== session.name) return unauthorized('sem permissão pra ver esse chamado');
 
-  return new Response(text, { status: 200, headers: { ...CORS, 'Content-Type': 'application/json' } });
+  // Fase M2 (2026-08-13, migração de saída da ClickUp): anexo passou a morar no R2/D1
+  // (`chamado_anexos`), não mais na ClickUp — sobrescreve `attachments` com o que tiver
+  // lá, no mesmo shape que o frontend já espera (url/title/name/extension). A "url"
+  // aqui é a rota autenticada nova (`/api/anexos/:id`), não mais um link direto/público
+  // da ClickUp — precisa deploy JUNTO com a mudança de handleUploadAttachment/frontend
+  // (AnexoModal), nunca separado: se o upload já vai pro R2 mas esta rota ainda lê
+  // attachments da ClickUp, o anexo recém-subido fica invisível até os dois baterem.
+  const anexos = await d1ListAnexos(env, taskId);
+  const origin = new URL(request.url).origin;
+  task.attachments = anexos.map(a => ({
+    url: `${origin}/api/anexos/${a.id}`,
+    title: a.filename,
+    name: a.filename,
+    extension: (a.filename || '').includes('.') ? a.filename.split('.').pop() : null,
+  }));
+
+  return jsonRes(task);
 }
 
 async function handleCreateTask(request, env) {
@@ -321,31 +349,35 @@ async function handleCreateTask(request, env) {
   return res;
 }
 
+// Fase M2 (2026-08-13, migração de saída da ClickUp): o anexo em si passou a ir pro R2
+// (`r2UploadAnexo`, Fase B4 — dormente até agora) + um registro em `chamado_anexos` no
+// D1, não mais pra ClickUp. Checagem de dono também passou a usar o D1
+// (`d1GetChamado`/`chamados.solicitante`, já resolvido por nome) em vez de bater na
+// ClickUp de novo — o chamado já foi espelhado no D1 na criação (Fase B7), então o
+// dado já está lá; não tem motivo pra continuar pagando o round-trip extra.
 async function handleUploadAttachment(request, env, taskId) {
   const session = await requireSession(request, env);
   if (!session) return sessionInvalid();
 
-  // Mesma checagem de dono que handleGetTask já faz — sem isso, qualquer pessoa logada
-  // conseguia anexar arquivo no chamado de outra só sabendo/adivinhando o ID.
-  const taskResp = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
-    headers: { Authorization: env.CLICKUP_API_KEY }
-  });
-  if (!taskResp.ok) return passthrough(taskResp);
-  const task = await taskResp.json();
-  const { idxToName } = await getSolicitanteMaps(env);
-  const cf = task.custom_fields?.find(f => f.id === SOLICITANTE_FIELD_ID);
-  const v  = cf?.value?.orderindex ?? cf?.value;
-  if (idxToName[v] !== session.name) return unauthorized('sem permissão pra anexar nesse chamado');
+  const chamado = await d1GetChamado(env, taskId);
+  if (!chamado) return jsonRes({ error: 'chamado não encontrado' }, 404);
+  if (chamado.solicitante !== session.name) return unauthorized('sem permissão pra anexar nesse chamado');
 
-  const upstream = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/attachment`, {
-    method: 'POST',
-    headers: {
-      Authorization: env.CLICKUP_API_KEY,
-      'Content-Type': request.headers.get('Content-Type') || ''
-    },
-    body: request.body
-  });
-  return passthrough(upstream);
+  let formData;
+  try { formData = await request.formData(); } catch { return jsonRes({ error: 'corpo inválido (esperado multipart/form-data)' }, 400); }
+  const file = formData.get('attachment');
+  if (!(file instanceof File)) return jsonRes({ error: 'nenhum arquivo enviado (campo "attachment")' }, 400);
+  if (file.size > MAX_ANEXO_BYTES) {
+    return jsonRes({ error: `arquivo muito grande — limite de ${MAX_ANEXO_BYTES / 1024 / 1024}MB` }, 413);
+  }
+
+  const { key, size, contentType } = await r2UploadAnexo(env, taskId, file.name, file.type, file.stream());
+  const anexoId = crypto.randomUUID();
+  await env.CHAMADOS_DB.prepare(
+    'INSERT INTO chamado_anexos (id, chamado_id, r2_key, filename, content_type, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).bind(anexoId, taskId, key, file.name, contentType, size, Date.now()).run();
+
+  return jsonRes({ ok: true, id: anexoId });
 }
 
 // =====================================================================
@@ -1800,17 +1832,14 @@ async function handleAdminMigrateSchemaSolicitantes(request, env) {
 // CAMADA DE ANEXOS — CLOUDFLARE R2 (Fase B4 do roadmap de modernização,
 // 2026-08-11 — ver CLAUDE.md "Decisões técnicas tomadas")
 //
-// ⚠️ NADA nas rotas acima usa isto ainda. handleUploadAttachment continua
-// 100% ClickUp — anexo de chamado real ainda sobe pra lá, não pro R2. Estas
-// funções existem só como preparação (mesmo espírito da camada D1 da Fase B2).
+// ✅ Em uso desde a Fase M2 (migração de saída da ClickUp, 2026-08-13):
+// handleUploadAttachment grava aqui + em chamado_anexos (D1) — anexo novo não
+// sobe mais pra ClickUp. Limite de 10MB agora também é aplicado no servidor
+// (ver MAX_ANEXO_BYTES), não só no cliente como antes.
 //
 // Chave do objeto no bucket: chamados/<chamadoId>/<uuid>-<nome sanitizado> —
 // prefixo por chamado facilita listar/limpar todos os anexos de um chamado
 // de uma vez no futuro (R2 permite list({prefix})).
-//
-// Limite de 10MB por anexo continua só client-side (mesmo comportamento já
-// documentado em CLAUDE.md) — B4 não muda essa validação, só prepara onde o
-// arquivo aceito vai ser guardado.
 // =====================================================================
 
 function r2SanitizeFilename(name) {
@@ -1841,6 +1870,155 @@ async function r2GetAnexo(env, key) {
 
 async function r2DeleteAnexo(env, key) {
   await env.ANEXOS.delete(key);
+}
+
+async function d1ListAnexos(env, chamadoId) {
+  const { results } = await env.CHAMADOS_DB.prepare(
+    'SELECT id, chamado_id, r2_key, filename, content_type, size, created_at FROM chamado_anexos WHERE chamado_id = ? ORDER BY created_at'
+  ).bind(chamadoId).all();
+  return results || [];
+}
+
+async function d1GetAnexoRow(env, id) {
+  return env.CHAMADOS_DB.prepare('SELECT * FROM chamado_anexos WHERE id = ?').bind(id).first();
+}
+
+// =====================================================================
+// GET /api/anexos/:id — serve o arquivo do R2, autenticado por sessão (Fase M2,
+// 2026-08-13). Diferente da URL pública/direta que a ClickUp sempre devolveu, esta
+// rota CONFERE dono antes de servir — melhoria de segurança em relação ao
+// comportamento anterior (qualquer um com o link da ClickUp via `<img src>`
+// conseguia abrir, sem sessão nenhuma). `:id` é o id da linha em chamado_anexos
+// (UUID gerado pela aplicação), nunca a r2_key bruta — não expõe o formato
+// interno da key do bucket pro cliente.
+// =====================================================================
+async function handleGetAnexo(request, env, anexoId) {
+  const session = await requireSession(request, env);
+  if (!session) return sessionInvalid();
+
+  const row = await d1GetAnexoRow(env, anexoId);
+  if (!row) return jsonRes({ error: 'anexo não encontrado' }, 404);
+
+  const chamado = await d1GetChamado(env, row.chamado_id);
+  if (!chamado || chamado.solicitante !== session.name) return unauthorized('sem permissão pra ver esse anexo');
+
+  const obj = await r2GetAnexo(env, row.r2_key);
+  if (!obj) return jsonRes({ error: 'arquivo não encontrado no armazenamento' }, 404);
+
+  return new Response(obj.body, {
+    status: 200,
+    headers: { ...CORS, 'Content-Type': obj.contentType || 'application/octet-stream' },
+  });
+}
+
+// =====================================================================
+// POST /admin/migrate-schema-anexos — migração de schema ÚNICA (Fase M2), cria a
+// tabela `chamado_anexos` no D1 real de produção. Mesmo padrão de toda outra
+// migração de schema desta sessão — CREATE TABLE IF NOT EXISTS, idempotente.
+// =====================================================================
+async function handleAdminMigrateSchemaAnexos(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  try {
+    await env.CHAMADOS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS chamado_anexos (
+        id           TEXT PRIMARY KEY,
+        chamado_id   TEXT NOT NULL,
+        r2_key       TEXT NOT NULL,
+        filename     TEXT,
+        content_type TEXT,
+        size         INTEGER,
+        created_at   INTEGER NOT NULL
+      )
+    `).run();
+    await env.CHAMADOS_DB.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_chamado_anexos_chamado ON chamado_anexos (chamado_id)'
+    ).run();
+    return jsonRes({ ok: true });
+  } catch (err) {
+    return jsonRes({ error: `migração de schema falhou: ${err.message}` }, 500);
+  }
+}
+
+// =====================================================================
+// POST /admin/migrate-anexos — migração de uso único dos anexos históricos da
+// ClickUp pro R2 (Fase M2, 2026-08-13). O MAIOR RISCO TÉCNICO da migração inteira
+// (volume desconhecido de anexos, arquivos grandes, teto de subrequests por
+// invocação do Worker — ver o achado de 2026-08-12 sobre `.batch()`) — por isso
+// PAGINADA desde o início (aceita { offset, limit } no corpo), em vez de tentar
+// processar tudo numa invocação só e descobrir o estouro na hora, como aconteceu
+// antes com o backfill de chamado_assignees. Idempotente: confere se já existe uma
+// linha pra aquele chamado_id+filename antes de baixar/subir de novo.
+//
+// `fetchAllTasks` não devolve `attachments` (só a lista de tasks) — precisa de 1
+// GET /task/:id por task pra saber se ela tem anexo, daí o teto de `limit` baixo
+// por padrão (cada task nesse range já custa 1 subrequest só pra checar).
+// =====================================================================
+async function handleAdminMigrateAnexos(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+
+  let body = {};
+  const text = await request.text();
+  if (text) {
+    try { body = JSON.parse(text); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  }
+  const offset = Number.isInteger(body.offset) ? body.offset : 0;
+  const limit  = Number.isInteger(body.limit) ? body.limit : 50;
+
+  const { tasks, truncated } = await fetchAllTasks(env);
+  const slice = tasks.slice(offset, offset + limit);
+
+  let tasksComAnexo = 0, migrated = 0, skipped = 0;
+  const errors = [];
+
+  for (const task of slice) {
+    try {
+      const detailResp = await fetch(`https://api.clickup.com/api/v2/task/${task.id}`, {
+        headers: { Authorization: env.CLICKUP_API_KEY }
+      });
+      if (!detailResp.ok) {
+        errors.push({ id: task.id, name: task.name, reason: `GET task falhou: ${detailResp.status}` });
+        continue;
+      }
+      const detail = await detailResp.json();
+      const attachments = detail.attachments || [];
+      if (!attachments.length) continue;
+      tasksComAnexo++;
+
+      for (const att of attachments) {
+        const filename = att.title || att.name || 'arquivo';
+        try {
+          const already = await env.CHAMADOS_DB.prepare(
+            'SELECT id FROM chamado_anexos WHERE chamado_id = ? AND filename = ?'
+          ).bind(task.id, filename).first();
+          if (already) { skipped++; continue; }
+
+          const fileResp = await fetch(att.url);
+          if (!fileResp.ok) {
+            errors.push({ id: task.id, name: task.name, reason: `download do anexo "${filename}" falhou: ${fileResp.status}` });
+            continue;
+          }
+          const contentType = fileResp.headers.get('Content-Type') || 'application/octet-stream';
+          const { key, size } = await r2UploadAnexo(env, task.id, filename, contentType, fileResp.body);
+          await env.CHAMADOS_DB.prepare(
+            'INSERT INTO chamado_anexos (id, chamado_id, r2_key, filename, content_type, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          ).bind(crypto.randomUUID(), task.id, key, filename, contentType, size, Date.now()).run();
+          migrated++;
+        } catch (err) {
+          errors.push({ id: task.id, name: task.name, reason: `"${filename}": ${err.message}` });
+        }
+      }
+    } catch (err) {
+      errors.push({ id: task.id, name: task.name, reason: err.message });
+    }
+  }
+
+  const nextOffset = offset + slice.length;
+  return jsonRes({
+    totalTasks: tasks.length, offset, limit, processedTasks: slice.length,
+    tasksComAnexo, migrated, skipped, errors,
+    hasMore: nextOffset < tasks.length, nextOffset,
+    truncated,
+  });
 }
 
 // =====================================================================
@@ -1929,4 +2107,4 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
   return updated;
 }
 
-export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees, d1ListSolicitantes, d1IsSolicitanteAtivo, d1CreateSolicitante, d1SetSolicitanteAtivo };
+export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees, d1ListSolicitantes, d1IsSolicitanteAtivo, d1CreateSolicitante, d1SetSolicitanteAtivo, d1ListAnexos, d1GetAnexoRow };

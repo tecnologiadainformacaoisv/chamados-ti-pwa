@@ -53,6 +53,7 @@ const SOLICITANTE_FIELD_ID = '9f111ee8-923a-4080-bf8f-1c03eee2f7cb';
 const TIPO_FIELD_ID = '47e475fe-e911-40cd-b4a2-23625fbf57f1';
 const SETOR_FIELD_ID = 'c1ca88de-4b01-4933-93ff-24494bed59e2';
 const SOLUCAO_FIELD_ID = '16144175-845e-4e3c-baaa-a2517325cd43';
+const MAX_ANEXO_BYTES = 10 * 1024 * 1024; // mesmo valor de push-worker.js (Fase M2)
 const FAKE_OPTIONS = [
   { id: 'a1', name: 'Ariele Santo', orderindex: 1 },
   { id: 'a27', name: 'Michael Vasconcelos', orderindex: 27 },
@@ -111,6 +112,47 @@ function makeMockKV() {
   };
 }
 
+// Mock em memória do binding R2 (Fase M2, 2026-08-13) — mesmo padrão de makeMockR2 em
+// tests/r2-layer.test.js. Aceita string/Uint8Array/ReadableStream no `put` (handleUpload
+// Attachment/handleAdminMigrateAnexos passam `file.stream()`/`fileResp.body`, streams de
+// verdade, direto pro R2 real).
+async function toBytesR2(body) {
+  if (body instanceof Uint8Array) return body;
+  if (typeof body === 'string') return new TextEncoder().encode(body);
+  if (body && typeof body.getReader === 'function') {
+    const reader = body.getReader();
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.byteLength;
+    }
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.byteLength; }
+    return out;
+  }
+  throw new Error('mock R2 só aceita string/Uint8Array/ReadableStream nos testes');
+}
+function makeMockR2() {
+  const store = new Map();
+  return {
+    async put(key, body, options) {
+      const bytes = await toBytesR2(body);
+      store.set(key, { bytes, httpMetadata: options?.httpMetadata || {} });
+      return { key, size: bytes.byteLength };
+    },
+    async get(key) {
+      const entry = store.get(key);
+      if (!entry) return null;
+      return { key, size: entry.bytes.byteLength, httpMetadata: entry.httpMetadata, body: entry.bytes };
+    },
+    async delete(key) { store.delete(key); },
+  };
+}
+
 function req(method, path, { body, headers = {} } = {}) {
   return new Request('https://worker.local' + path, { method, headers, body });
 }
@@ -123,7 +165,7 @@ async function test(name, fn) {
 
 (async () => {
   const workerPath = pathToFileURL(path.join(__dirname, '..', 'push-worker.js')).href;
-  const { default: worker, d1GetChamado, d1SetAssignees, d1CreateSolicitante } = await import(workerPath);
+  const { default: worker, d1GetChamado, d1SetAssignees, d1CreateSolicitante, d1ListAnexos } = await import(workerPath);
 
   let lastCreatePayload = null;
   let createdTaskCounter = 0; // cada POST de criação gera um id novo — evita colisão de
@@ -178,7 +220,7 @@ async function test(name, fn) {
     return realFetch(url, opts);
   };
 
-  const env = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
+  const env = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1(), ANEXOS: makeMockR2() };
   const SECRET_HEADERS = { 'X-App-Secret': env.SUBSCRIBE_SECRET, 'Content-Type': 'application/json' };
   let brunoToken; // Bruno nunca erra senha nem esbarra em throttle — usado pra testes que precisam de uma sessão "limpa"
 
@@ -327,24 +369,184 @@ async function test(name, fn) {
     assert.ok(lastCreatePayload.due_date <= before + 3600000 + 5000, 'due_date deveria ser ~1h a partir de agora (Urgente)');
   });
 
-  console.log('--- upload de anexo também respeita quem é dono do chamado ---');
-  await test('Michael consegue anexar arquivo no chamado dele', async () => {
+  console.log('--- upload de anexo também respeita quem é dono do chamado (Fase M2: R2 + D1, não mais ClickUp) ---');
+  function fakeAnexoFormData(nome = 'foto.png', conteudo = 'fake-file-bytes') {
+    const formData = new FormData();
+    formData.append('attachment', new File([conteudo], nome, { type: 'image/png' }));
+    return formData;
+  }
+  await test('Michael consegue anexar arquivo no chamado dele — vai pro R2, não pra ClickUp', async () => {
     const res = await worker.fetch(req('POST', '/api/tasks/task-michael-1/attachment', {
-      headers: { ...SECRET_HEADERS, 'X-Session-Token': token, 'Content-Type': 'multipart/form-data; boundary=x' },
-      body: 'fake-file-bytes',
+      headers: { 'X-App-Secret': env.SUBSCRIBE_SECRET, 'X-Session-Token': token },
+      body: fakeAnexoFormData(),
     }), env);
     assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.ok(data.id, 'devia devolver o id do anexo (linha em chamado_anexos)');
+    const anexos = await d1ListAnexos(env, 'task-michael-1');
+    assert.strictEqual(anexos.length, 1);
+    assert.strictEqual(anexos[0].filename, 'foto.png');
+    assert.ok(anexos[0].r2_key.startsWith('chamados/task-michael-1/'), 'key do R2 devia ter o prefixo do chamado certo');
   });
   await test('Michael NÃO consegue anexar arquivo no chamado da Ariele (403)', async () => {
     const res = await worker.fetch(req('POST', '/api/tasks/task-ariele-1/attachment', {
-      headers: { ...SECRET_HEADERS, 'X-Session-Token': token, 'Content-Type': 'multipart/form-data; boundary=x' },
-      body: 'fake-file-bytes',
+      headers: { 'X-App-Secret': env.SUBSCRIBE_SECRET, 'X-Session-Token': token },
+      body: fakeAnexoFormData(),
     }), env);
     assert.strictEqual(res.status, 403);
   });
   await test('upload de anexo sem sessão dá 401', async () => {
     const res = await worker.fetch(req('POST', '/api/tasks/task-michael-1/attachment', { headers: SECRET_HEADERS, body: 'x' }), env);
     assert.strictEqual(res.status, 401);
+  });
+  await test('arquivo maior que o limite (10MB) dá 413, mesmo tendo dono certo', async () => {
+    const grandao = 'x'.repeat(MAX_ANEXO_BYTES + 1);
+    const res = await worker.fetch(req('POST', '/api/tasks/task-michael-1/attachment', {
+      headers: { 'X-App-Secret': env.SUBSCRIBE_SECRET, 'X-Session-Token': token },
+      body: fakeAnexoFormData('grande.png', grandao),
+    }), env);
+    assert.strictEqual(res.status, 413);
+  });
+  await test('GET /api/anexos/:id serve o arquivo certo, só pro dono', async () => {
+    const uploadRes = await worker.fetch(req('POST', '/api/tasks/task-michael-1/attachment', {
+      headers: { 'X-App-Secret': env.SUBSCRIBE_SECRET, 'X-Session-Token': token },
+      body: fakeAnexoFormData('unico.png', 'conteudo-do-anexo-unico'),
+    }), env);
+    const { id: anexoId } = await uploadRes.json();
+
+    const semSessao = await worker.fetch(req('GET', `/api/anexos/${anexoId}`, { headers: SECRET_HEADERS }), env);
+    assert.strictEqual(semSessao.status, 401);
+
+    const donoRes = await worker.fetch(req('GET', `/api/anexos/${anexoId}`, { headers: { ...SECRET_HEADERS, 'X-Session-Token': token } }), env);
+    assert.strictEqual(donoRes.status, 200);
+    assert.strictEqual(await donoRes.text(), 'conteudo-do-anexo-unico');
+    assert.strictEqual(donoRes.headers.get('Content-Type'), 'image/png');
+  });
+  await test('GET /api/anexos/:id dá 404 pra id inexistente', async () => {
+    const res = await worker.fetch(req('GET', '/api/anexos/id-que-nao-existe', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token } }), env);
+    assert.strictEqual(res.status, 404);
+  });
+  await test('GET /api/tasks/:id devolve os anexos do R2/D1 (não mais da ClickUp) — precisa deployar junto com o upload', async () => {
+    const res = await worker.fetch(req('GET', '/api/tasks/task-michael-1', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token } }), env);
+    assert.strictEqual(res.status, 200);
+    const task = await res.json();
+    // task-michael-1 já recebeu 2 uploads nos testes acima ("foto.png" e "unico.png").
+    assert.strictEqual(task.attachments.length, 2);
+    const nomes = task.attachments.map(a => a.name).sort();
+    assert.deepStrictEqual(nomes, ['foto.png', 'unico.png']);
+    for (const a of task.attachments) {
+      assert.ok(a.url.startsWith('https://worker.local/api/anexos/'), 'url devolvida deveria ser a rota autenticada nova, não um link direto da ClickUp');
+      assert.strictEqual(a.extension, 'png');
+    }
+  });
+
+  console.log('--- POST /admin/migrate-schema-anexos e /admin/migrate-anexos (Fase M2, 2026-08-13) ---');
+  await test('POST /admin/migrate-schema-anexos sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/admin/migrate-schema-anexos', { body: '{}' }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('cria a tabela chamado_anexos, idempotente rodando de novo', async () => {
+    const res = await worker.fetch(req('POST', '/admin/migrate-schema-anexos', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual(res.status, 200);
+    const res2 = await worker.fetch(req('POST', '/admin/migrate-schema-anexos', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual(res2.status, 200, 'rodar de novo não deveria falhar (CREATE ... IF NOT EXISTS)');
+  });
+  await test('POST /admin/migrate-anexos sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/admin/migrate-anexos', { body: '{}' }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('migra os anexos de chamados reais da ClickUp pro R2, pula tasks sem anexo, é idempotente e paginado', async () => {
+    const anexosEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1(), ANEXOS: makeMockR2() };
+    await worker.fetch(req('POST', '/admin/migrate-schema-anexos', { headers: { 'X-Admin-Secret': anexosEnv.ADMIN_SECRET } }), anexosEnv);
+
+    const previousFetch = globalThis.fetch;
+    let downloadCalls = 0;
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      if (u.includes('/list/') && /\/task\?/.test(u) && opts?.method !== 'POST') {
+        return new Response(JSON.stringify({
+          tasks: [
+            { id: 'com-anexo-1', name: 'Chamado com anexo' },
+            { id: 'sem-anexo-1', name: 'Chamado sem anexo' },
+          ],
+        }), { status: 200 });
+      }
+      if (u.endsWith('/task/com-anexo-1')) {
+        return new Response(JSON.stringify({
+          id: 'com-anexo-1',
+          attachments: [{ title: 'print-erro.png', url: 'https://fake-clickup-cdn.example/print-erro.png' }],
+        }), { status: 200 });
+      }
+      if (u.endsWith('/task/sem-anexo-1')) {
+        return new Response(JSON.stringify({ id: 'sem-anexo-1', attachments: [] }), { status: 200 });
+      }
+      if (u === 'https://fake-clickup-cdn.example/print-erro.png') {
+        downloadCalls++;
+        return new Response('bytes-do-print-de-erro', { status: 200, headers: { 'Content-Type': 'image/png' } });
+      }
+      return previousFetch(url, opts);
+    };
+    try {
+      const res = await worker.fetch(req('POST', '/admin/migrate-anexos', {
+        headers: { 'X-Admin-Secret': anexosEnv.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
+      }), anexosEnv);
+      assert.strictEqual(res.status, 200);
+      const data = await res.json();
+      assert.strictEqual(data.totalTasks, 2);
+      assert.strictEqual(data.processedTasks, 2);
+      assert.strictEqual(data.tasksComAnexo, 1);
+      assert.strictEqual(data.migrated, 1);
+      assert.strictEqual(data.errors.length, 0);
+      assert.strictEqual(data.hasMore, false);
+      assert.strictEqual(downloadCalls, 1);
+
+      const anexos = await d1ListAnexos(anexosEnv, 'com-anexo-1');
+      assert.strictEqual(anexos.length, 1);
+      assert.strictEqual(anexos[0].filename, 'print-erro.png');
+      assert.ok(anexos[0].r2_key.startsWith('chamados/com-anexo-1/'));
+      const semAnexo = await d1ListAnexos(anexosEnv, 'sem-anexo-1');
+      assert.strictEqual(semAnexo.length, 0);
+
+      // Idempotência: rodar de novo não baixa o arquivo de novo, marca como skipped.
+      const res2 = await worker.fetch(req('POST', '/admin/migrate-anexos', {
+        headers: { 'X-Admin-Secret': anexosEnv.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: '{}',
+      }), anexosEnv);
+      const data2 = await res2.json();
+      assert.strictEqual(data2.migrated, 0, 'rodar de novo não deveria migrar de novo');
+      assert.strictEqual(data2.skipped, 1);
+      assert.strictEqual(downloadCalls, 1, 'não deveria ter baixado o arquivo de novo na 2ª rodada');
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+  await test('paginação (offset/limit) processa só a fatia pedida e reporta hasMore/nextOffset', async () => {
+    const pagEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1(), ANEXOS: makeMockR2() };
+    await worker.fetch(req('POST', '/admin/migrate-schema-anexos', { headers: { 'X-Admin-Secret': pagEnv.ADMIN_SECRET } }), pagEnv);
+
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      if (u.includes('/list/') && /\/task\?/.test(u) && opts?.method !== 'POST') {
+        return new Response(JSON.stringify({
+          tasks: [{ id: 'pag-1', name: 'A' }, { id: 'pag-2', name: 'B' }, { id: 'pag-3', name: 'C' }],
+        }), { status: 200 });
+      }
+      if (/\/task\/pag-\d$/.test(u)) {
+        return new Response(JSON.stringify({ id: u.split('/').pop(), attachments: [] }), { status: 200 });
+      }
+      return previousFetch(url, opts);
+    };
+    try {
+      const res = await worker.fetch(req('POST', '/admin/migrate-anexos', {
+        headers: { 'X-Admin-Secret': pagEnv.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ offset: 0, limit: 2 }),
+      }), pagEnv);
+      const data = await res.json();
+      assert.strictEqual(data.processedTasks, 2);
+      assert.strictEqual(data.hasMore, true);
+      assert.strictEqual(data.nextOffset, 2);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
   });
 
   console.log('--- falha fechada se o Worker não tiver SUBSCRIBE_SECRET configurado ---');
