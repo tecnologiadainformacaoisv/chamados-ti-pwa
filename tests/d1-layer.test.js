@@ -510,6 +510,24 @@ async function test(name, fn) {
     assert.deepStrictEqual(await d1ListEventos(env, created.id), []);
   });
 
+  // Achado do revisor (2026-08-14): dois eventos no MESMO created_at (ex.: status e
+  // operador mudando na mesma request) ficavam em ordem indefinida só com
+  // `ORDER BY created_at` — corrigido com `, rowid` como desempate (cresce na ordem
+  // de inserção). Aqui força o empate de propósito via UPDATE direto, sem depender de
+  // timing real, pra não reintroduzir a flakiness que o setTimeout dos testes acima
+  // só contornava.
+  await test('empate de created_at é desempatado pela ordem real de inserção (rowid)', async () => {
+    const env = freshEnv();
+    const created = await d1CreateChamado(env, baseChamado);
+    await d1LogEvento(env, created.id, 'status', 'aberto', 'em atendimento');
+    await d1LogEvento(env, created.id, 'operador', null, '170628721');
+    await env.CHAMADOS_DB.prepare('UPDATE chamado_eventos SET created_at = 5000000 WHERE chamado_id = ?').bind(created.id).run();
+
+    const eventos = await d1ListEventos(env, created.id);
+    assert.strictEqual(eventos.length, 2);
+    assert.deepStrictEqual(eventos.map(e => e.tipo), ['status', 'operador'], 'deveria manter a ordem de inserção mesmo com created_at empatado');
+  });
+
   console.log(`\n${passed} passaram, ${failed} falharam`);
   if (failed > 0) process.exit(1);
 })().catch(e => { console.error('FALHA GERAL:', e); process.exit(1); });

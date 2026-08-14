@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react"
+import { Fragment, useEffect, useState } from "react"
 import { ChevronDown, Check, Circle, TriangleAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -51,6 +51,18 @@ export function TasksTable({
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+
+  // Achado do revisor (2026-08-14): sem isso, ids selecionados que somem da lista
+  // visível (filtro mudou, refetch de 60s, a própria ação em lote concluiu) ficavam
+  // "fantasmas" selecionados — a barra continuava contando eles, e uma ação em lote
+  // seguinte agiria sobre chamados que o usuário nem está mais vendo.
+  useEffect(() => {
+    const idsVisiveis = new Set(tasks.map((t) => t.id))
+    setSelected((prev) => {
+      const next = new Set([...prev].filter((id) => idsVisiveis.has(id)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [tasks])
 
   const byStatus: Record<string, Task[]> = { aberto: [], "em atendimento": [], pendente: [], encerrado: [] }
   for (const t of tasks) {

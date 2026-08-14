@@ -62,6 +62,7 @@ export function TaskModal({
   })
   const [notaAutor, setNotaAutor] = useState(SEM_ATRIBUICAO)
   const [notaTexto, setNotaTexto] = useState("")
+  const [notaError, setNotaError] = useState<string | null>(null)
   const notaMutation = useMutation({
     mutationFn: () => {
       const nomeAutor = OPERADORES[notaAutor] ?? notaAutor
@@ -69,10 +70,15 @@ export function TaskModal({
     },
     onSuccess: () => {
       setNotaTexto("")
+      setNotaError(null)
       queryClient.invalidateQueries({ queryKey: ["chamado-eventos", task?.id] })
     },
+    // Achado do revisor (2026-08-14): erro que não fosse sessão expirada era engolido
+    // em silêncio — o botão só voltava a ficar clicável, sem indicar que a nota não
+    // foi salva. Mesmo padrão de `error`/Alert que o resto do modal já usa.
     onError: (err) => {
-      if (isSessionError(err)) logout()
+      if (isSessionError(err)) { logout(); return }
+      setNotaError(err instanceof Error ? err.message : "Não foi possível adicionar a nota.")
     },
   })
 
@@ -81,6 +87,7 @@ export function TaskModal({
     setOperadorTouched(false)
     setNotaAutor(SEM_ATRIBUICAO)
     setNotaTexto("")
+    setNotaError(null)
     const statusKey = (task.status?.status || "").toLowerCase()
     if (Object.prototype.hasOwnProperty.call(STATUS_MAP, statusKey)) {
       setStatus(statusKey)
@@ -226,6 +233,11 @@ export function TaskModal({
                   className="flex-1"
                 />
               </div>
+              {notaError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{notaError}</AlertDescription>
+                </Alert>
+              )}
               <Button
                 size="sm"
                 variant="outline"

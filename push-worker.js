@@ -1375,7 +1375,12 @@ async function d1CreateEvento(env, chamadoId, { autor, texto }) {
 
 async function d1ListEventos(env, chamadoId) {
   const { results } = await env.CHAMADOS_DB.prepare(
-    'SELECT id, chamado_id, tipo, autor, texto, de_valor, para_valor, created_at FROM chamado_eventos WHERE chamado_id = ? ORDER BY created_at ASC'
+    // ORDER BY created_at, rowid — achado do revisor 2026-08-14: dois eventos no
+    // mesmo milissegundo (status+operador mudando na mesma request, ou notas rápidas)
+    // ficavam em ordem indefinida só por created_at. rowid é implícito em qualquer
+    // tabela SQLite sem WITHOUT ROWID (é o caso de chamado_eventos) e cresce na ordem
+    // de inserção — desempate determinístico sem mudar schema.
+    'SELECT id, chamado_id, tipo, autor, texto, de_valor, para_valor, created_at FROM chamado_eventos WHERE chamado_id = ? ORDER BY created_at ASC, rowid ASC'
   ).bind(chamadoId).all();
   return results || [];
 }
