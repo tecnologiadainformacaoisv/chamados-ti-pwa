@@ -36,6 +36,13 @@ export function AppSidebar({
       collapsible="icon"
       className="bg-sidebar-gradient border-sidebar-border text-sidebar-foreground"
     >
+      {/* 2026-08-13: sidebar abre colapsada por padrão (defaultOpen={false} em
+          AdminApp.tsx) — o encaixe abaixo é exato, sem sobra: modo ícone tem
+          --sidebar-width-icon: 3rem (48px, definido em ui/sidebar.tsx), e
+          p-2 (8px de cada lado) + h-8 w-8 (32px) fecham a conta em 48px. Se
+          qualquer uma das três pontas mudar (largura do ícone no componente
+          base, este padding, ou o tamanho da logo aqui), a logo colapsada
+          estoura o container — reconferir com o app rodando de verdade. */}
       <SidebarHeader className="p-4 group-data-[collapsible=icon]:p-2">
         <div className="flex items-center gap-2 overflow-hidden">
           <img
