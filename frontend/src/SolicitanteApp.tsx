@@ -93,7 +93,10 @@ function SolicitanteShell() {
     <div className="min-h-svh bg-muted/30">
       <header className="bg-brand-gradient flex h-16 items-center justify-between px-4 text-primary-foreground shadow-[0_2px_12px_rgba(0,0,0,0.2)]">
         <div className="flex items-center gap-3">
-          <img src={logoIsv} alt="" className="h-10 w-10 invert" />
+          {/* w-auto + brightness-0 invert — ver comentário em app-header.tsx
+              (mesmo achado 2026-08-14: logo esmagada numa caixa quadrada e com
+              cores erradas por causa de invert() sozinho, sem brightness-0 antes) */}
+          <img src={logoIsv} alt="" className="h-10 w-auto brightness-0 invert" />
           <div className="leading-tight">
             <p className="text-sm font-semibold">Chamados de TI</p>
             <p className="text-xs text-primary-foreground/70">{userName}</p>

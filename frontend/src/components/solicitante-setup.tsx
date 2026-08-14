@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import logoIsv from "@/assets/logo-isv.svg"
+import iconIsv from "@/assets/icon-isv.svg"
 
 // Porta showSetup()/onSetupSubmit() de app.js — login e cadastro são a mesma tela e o
 // mesmo formulário: se /auth/login devolve 404 (sem senha pra esse nome), a senha
@@ -55,7 +55,10 @@ export function SolicitanteSetup() {
       <div className="bg-brand-gradient fixed inset-0 z-0" />
       <div className="shadow-brand-card relative z-10 w-full max-w-sm rounded-[20px] bg-card p-8">
         <div className="mb-6 flex flex-col items-center gap-2 text-center">
-          <img src={logoIsv} alt="" className="h-14 w-14" />
+          {/* ícone quadrado (não o logotipo largo) — mesmo glyph do app icon/vanilla
+              setup-screen; logo-isv.svg é um lockup horizontal (~3.3:1) e fica
+              espremido/ilegível dentro de uma caixa quadrada (achado 2026-08-14) */}
+          <img src={iconIsv} alt="" className="h-14 w-14 rounded-xl" />
           <h1 className="text-lg font-semibold text-foreground">Chamados de TI</h1>
           <p className="text-sm text-muted-foreground">ISV – Suporte Técnico</p>
         </div>

@@ -10,6 +10,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 import logoIsv from "@/assets/logo-isv.svg"
+import iconIsv from "@/assets/icon-isv.svg"
 
 export type Secao = "gestao" | "dashboard" | "usuarios"
 
@@ -37,18 +38,29 @@ export function AppSidebar({
       className="bg-sidebar-gradient border-sidebar-border text-sidebar-foreground"
     >
       {/* 2026-08-13: sidebar abre colapsada por padrão (defaultOpen={false} em
-          AdminApp.tsx) — o encaixe abaixo é exato, sem sobra: modo ícone tem
-          --sidebar-width-icon: 3rem (48px, definido em ui/sidebar.tsx), e
-          p-2 (8px de cada lado) + h-8 w-8 (32px) fecham a conta em 48px. Se
-          qualquer uma das três pontas mudar (largura do ícone no componente
-          base, este padding, ou o tamanho da logo aqui), a logo colapsada
-          estoura o container — reconferir com o app rodando de verdade. */}
+          AdminApp.tsx). 2026-08-14: logo-isv.svg é um lockup largo (~3.3:1) —
+          não dá pra esmagar num quadrado sem virar ilegível (mesmo achado do
+          header/login), então aqui ela só aparece expandida (h-8 w-auto,
+          brightness-0 invert pra virar silhueta branca de verdade — só
+          invert() sozinho inverte as CORES, não basta). Quando colapsa, troca
+          pro ícone quadrado (iconIsv, mesmo glyph do app/PWA) — o encaixe é
+          exato, sem sobra: modo ícone tem --sidebar-width-icon: 3rem (48px,
+          definido em ui/sidebar.tsx), e p-2 (8px de cada lado) + h-8 w-8
+          (32px) fecham a conta em 48px. Se qualquer uma das três pontas mudar
+          (largura do ícone no componente base, este padding, ou o tamanho do
+          ícone aqui), ele estoura o container — reconferir com o app rodando
+          de verdade. */}
       <SidebarHeader className="p-4 group-data-[collapsible=icon]:p-2">
         <div className="flex items-center gap-2 overflow-hidden">
           <img
             src={logoIsv}
             alt=""
-            className="h-10 w-10 shrink-0 invert group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8"
+            className="h-8 w-auto shrink-0 brightness-0 invert group-data-[collapsible=icon]:hidden"
+          />
+          <img
+            src={iconIsv}
+            alt=""
+            className="hidden h-8 w-8 shrink-0 rounded-md group-data-[collapsible=icon]:block"
           />
           <div className="flex flex-col leading-tight group-data-[collapsible=icon]:hidden">
             <span className="text-sm font-semibold tracking-wide">Instituto</span>

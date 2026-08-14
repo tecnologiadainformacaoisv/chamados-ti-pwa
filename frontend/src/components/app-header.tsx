@@ -22,7 +22,14 @@ export function AppHeader({ countAberto }: { countAberto?: number }) {
     <header className="bg-brand-gradient flex h-16 shrink-0 items-center justify-between px-4 text-primary-foreground shadow-[0_2px_12px_rgba(0,0,0,0.2)]">
       <div className="flex items-center gap-3">
         <SidebarTrigger className="text-primary-foreground hover:bg-white/10 hover:text-primary-foreground" />
-        <img src={logoIsv} alt="Instituto São Vicente" className="h-10 w-10 invert" />
+        {/* w-auto (não w-10): logo-isv.svg é um lockup largo (~3.3:1, ícone + texto
+            "INSTITUTO SÃO VICENTE"), forçar largura quadrada esmaga o texto até
+            ficar ilegível. brightness-0 invert (não só invert) — só invert()
+            inverte as CORES do logo (fica com tons estranhos); brightness-0
+            primeiro achata pra preto sólido, invert então vira branco puro —
+            mesmo efeito de `filter: brightness(0) invert(1)` que o header vanilla
+            (css/style.css .isv-logo) sempre usou. Achado 2026-08-14. */}
+        <img src={logoIsv} alt="Instituto São Vicente" className="h-10 w-auto brightness-0 invert" />
       </div>
       <div className="flex flex-col items-center leading-tight">
         <span className="text-sm font-semibold">Painel de Admin</span>
