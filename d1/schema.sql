@@ -95,3 +95,27 @@ CREATE TABLE IF NOT EXISTS chamado_anexos (
   created_at   INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chamado_anexos_chamado ON chamado_anexos (chamado_id);
+
+-- Histórico + comentários por chamado (Fase B do roadmap pós-MVP-visual, 2026-08-14)
+-- — maior lacuna identificada comparando com a ClickUp: até aqui só existia 1 campo
+-- "solucao" (sobrescrito, sem log de quem mudou o quê nem espaço pra nota interna da
+-- TI). Uma tabela só, timeline unificada (eventos automáticos + notas manuais),
+-- ordenada por created_at — é exatamente o conceito já validado no Artifact do MVP
+-- visual (drawer de detalhe, linha do tempo misturando os dois tipos.
+-- `tipo='nota'`: autor/texto preenchidos (autor é um dos OPERADORES — sem login por
+-- pessoa no admin, só ADMIN_SECRET compartilhado, então quem escreve PRECISA se
+-- identificar manualmente, não tem sessão pra inferir). `tipo='status'`/`'operador'`:
+-- de_valor/para_valor preenchidos, autor/texto nulos — gravados automaticamente por
+-- handleAdminUpdateTask (e pela rota de ação em lote), nunca pelo cliente direto.
+-- Sem FOREIGN KEY, mesmo motivo de chamado_assignees/chamado_anexos acima.
+CREATE TABLE IF NOT EXISTS chamado_eventos (
+  id         TEXT PRIMARY KEY,
+  chamado_id TEXT NOT NULL,
+  tipo       TEXT NOT NULL CHECK (tipo IN ('nota', 'status', 'operador')),
+  autor      TEXT,
+  texto      TEXT,
+  de_valor   TEXT,
+  para_valor TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chamado_eventos_chamado ON chamado_eventos (chamado_id, created_at);

@@ -144,6 +144,14 @@ export default {
       if (pathname === '/api/tasks')     return handleCreateTask(request, env);
       const attachMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/attachment$/);
       if (attachMatch) return handleUploadAttachment(request, env, attachMatch[1]);
+      // Fase B do roadmap pós-MVP-visual (2026-08-14) — checados ANTES do match
+      // genérico de single-id logo abaixo, senão "/admin/tasks/bulk" seria confundido
+      // com um chamado de id literal "bulk", e "/admin/tasks/:id/eventos" bateria com
+      // o regex de single-segment (que não tem essa sub-rota).
+      if (pathname === '/admin/tasks/bulk') return handleAdminBulkUpdateTasks(request, env);
+      const eventoPostMatch = pathname.match(/^\/admin\/tasks\/([^/]+)\/eventos$/);
+      if (eventoPostMatch) return handleAdminCreateEvento(request, env, eventoPostMatch[1]);
+      if (pathname === '/admin/migrate-schema-chamado-eventos') return handleAdminMigrateSchemaChamadoEventos(request, env);
       const adminUpdateMatch = pathname.match(/^\/admin\/tasks\/([^/]+)$/);
       if (adminUpdateMatch) return handleAdminUpdateTask(request, env, adminUpdateMatch[1]);
       // Fase M5 (2026-08-13): rotas de migração de uso único que liam da ClickUp
@@ -172,6 +180,8 @@ export default {
       if (pathname === '/admin/tasks')       return handleAdminListTasks(request, env);
       if (pathname === '/admin/metrics')     return handleAdminMetrics(request, env);
       if (pathname === '/admin/solicitantes') return handleAdminListSolicitantes(request, env);
+      const eventosGetMatch = pathname.match(/^\/admin\/tasks\/([^/]+)\/eventos$/);
+      if (eventosGetMatch) return handleAdminListEventos(request, env, eventosGetMatch[1]);
       const anexoMatch = pathname.match(/^\/api\/anexos\/([^/]+)$/);
       if (anexoMatch) return handleGetAnexo(request, env, anexoMatch[1]);
       const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
@@ -625,39 +635,44 @@ async function handleAdminMetrics(request, env) {
 // reporta em `updated` o que já foi aplicado antes de parar, mesma proteção do
 // revisor de 2026-08-07 contra mascarar estado parcial.
 // =====================================================================
-async function handleAdminUpdateTask(request, env, taskId) {
-  if (!(await isAdmin(request, env))) return unauthorized();
-
-  let body;
-  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
-
+// Fase B do roadmap pós-MVP-visual (2026-08-14): a lógica de aplicar um patch num
+// chamado foi extraída de handleAdminUpdateTask pra uma função pura (sem parsear
+// request/responder HTTP), reaproveitada também por handleAdminBulkUpdateTasks —
+// mesma validação, mesma sequência de sub-mutações, mesmo formato de erro parcial
+// (`updated` reportando o que já foi aplicado antes de parar). Ganhou de brinde o
+// log automático em `chamado_eventos` pra status/operador (só quando o valor muda de
+// verdade — reatribuir pro mesmo operador ou "mudar" pro mesmo status não gera
+// evento à toa).
+async function applyAdminTaskUpdate(env, taskId, body) {
   // Validação de tipo/valor de cada campo antes de tocar em qualquer coisa — achados do
   // revisor 2026-08-07: "solucao" não-string era ignorado em silêncio (respondia
   // ok:true sem salvar nada) e "assigneeId" não validava número/NaN.
   if (body.status !== undefined && !VALID_STATUSES.includes(body.status)) {
-    return jsonRes({ error: `status inválido — use um de: ${VALID_STATUSES.join(', ')}` }, 400);
+    return { error: `status inválido — use um de: ${VALID_STATUSES.join(', ')}`, statusCode: 400 };
   }
   if (body.solucao !== undefined && typeof body.solucao !== 'string') {
-    return jsonRes({ error: 'solucao precisa ser uma string' }, 400);
+    return { error: 'solucao precisa ser uma string', statusCode: 400 };
   }
   if (body.assigneeId !== undefined && body.assigneeId !== null && !Number.isFinite(Number(body.assigneeId))) {
-    return jsonRes({ error: 'assigneeId precisa ser um número, null (remove atribuição), ou omitido' }, 400);
+    return { error: 'assigneeId precisa ser um número, null (remove atribuição), ou omitido', statusCode: 400 };
   }
   if (body.status === undefined && body.solucao === undefined && body.assigneeId === undefined) {
-    return jsonRes({ error: 'nada pra atualizar — mande status, solucao e/ou assigneeId' }, 400);
+    return { error: 'nada pra atualizar — mande status, solucao e/ou assigneeId', statusCode: 400 };
   }
 
   const chamado = await d1GetChamado(env, taskId);
-  if (!chamado) return jsonRes({ error: 'chamado não encontrado' }, 404);
+  if (!chamado) return { error: 'chamado não encontrado', statusCode: 404 };
 
   const updated = {};
 
   if (body.status !== undefined) {
+    const statusAnterior = chamado.status;
     try {
       await d1TransitionStatus(env, taskId, body.status);
       updated.status = body.status;
+      if (statusAnterior !== body.status) await d1LogEvento(env, taskId, 'status', statusAnterior, body.status);
     } catch (err) {
-      return jsonRes({ error: `status não pôde ser salvo: ${err.message}`, updated }, 400);
+      return { error: `status não pôde ser salvo: ${err.message}`, statusCode: 400, updated };
     }
   }
 
@@ -666,7 +681,7 @@ async function handleAdminUpdateTask(request, env, taskId) {
       await d1UpdateChamado(env, taskId, { solucao: body.solucao });
       updated.solucao = true;
     } catch (err) {
-      return jsonRes({ error: `solução não pôde ser salva: ${err.message}`, updated }, 400);
+      return { error: `solução não pôde ser salva: ${err.message}`, statusCode: 400, updated };
     }
   }
 
@@ -677,15 +692,68 @@ async function handleAdminUpdateTask(request, env, taskId) {
     // nem de buscar quem já estava atribuído antes, já que não tem mais API externa
     // exigindo isso.
     const desiredId = body.assigneeId === null ? null : Number(body.assigneeId);
+    const anteriorId = chamado.assignee_id;
     try {
       await d1UpdateChamado(env, taskId, { assigneeId: desiredId }, desiredId != null ? [desiredId] : []);
       updated.assigneeId = desiredId;
+      if (anteriorId !== desiredId) {
+        await d1LogEvento(env, taskId, 'operador', anteriorId != null ? String(anteriorId) : null, desiredId != null ? String(desiredId) : null);
+      }
     } catch (err) {
-      return jsonRes({ error: `operador não pôde ser salvo: ${err.message}`, updated }, 400);
+      return { error: `operador não pôde ser salvo: ${err.message}`, statusCode: 400, updated };
     }
   }
 
-  return jsonRes({ ok: true, updated });
+  return { updated };
+}
+
+async function handleAdminUpdateTask(request, env, taskId) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+
+  const result = await applyAdminTaskUpdate(env, taskId, body);
+  if (result.error) return jsonRes({ error: result.error, updated: result.updated }, result.statusCode);
+  return jsonRes({ ok: true, updated: result.updated });
+}
+
+// =====================================================================
+// POST /admin/tasks/bulk — ação em lote (Fase B do roadmap pós-MVP-visual,
+// 2026-08-14), mesmo conceito já demonstrado no Artifact do MVP visual. Body:
+// { ids: string[], status?, solucao?, assigneeId? } — mesmo subconjunto aceito por
+// POST /admin/tasks/:id, aplicado a vários chamados de uma vez via
+// applyAdminTaskUpdate (sem duplicar a lógica de validação/transição/log de evento).
+// Sem transação entre chamados — cada um é sua própria applyAdminTaskUpdate, e a
+// resposta reporta por id o que aconteceu (mesma filosofia de "não mascarar estado
+// parcial" da rota single-id). Teto de 50 ids por chamada — não é um número
+// arbitrário: é o mesmo tipo de cautela já aprendida nesta sessão sobre o orçamento
+// de subrequests por invocação do Worker (ver POST /admin/migrate-anexos), aplicada
+// de propósito aqui em vez de descobrir o teto real na marra em produção.
+// =====================================================================
+const BULK_MAX_IDS = 50;
+async function handleAdminBulkUpdateTasks(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+
+  const ids = Array.isArray(body.ids) ? body.ids.filter((id) => typeof id === 'string' && id) : [];
+  if (!ids.length) return jsonRes({ error: 'ids precisa ser uma lista não vazia de strings' }, 400);
+  if (ids.length > BULK_MAX_IDS) return jsonRes({ error: `no máximo ${BULK_MAX_IDS} chamados por vez` }, 400);
+
+  const { ids: _ids, ...patchBody } = body;
+  if (patchBody.status === undefined && patchBody.solucao === undefined && patchBody.assigneeId === undefined) {
+    return jsonRes({ error: 'nada pra atualizar — mande status, solucao e/ou assigneeId' }, 400);
+  }
+
+  const results = [];
+  for (const id of ids) {
+    const r = await applyAdminTaskUpdate(env, id, patchBody);
+    results.push({ id, ok: !r.error, error: r.error, updated: r.updated });
+  }
+  const sucesso = results.filter((r) => r.ok).length;
+  return jsonRes({ ok: true, total: ids.length, sucesso, falha: ids.length - sucesso, results });
 }
 
 // =====================================================================
@@ -1278,6 +1346,69 @@ async function d1GetMetrics(env, { desde, ate } = {}) {
 }
 
 // =====================================================================
+// HISTÓRICO + COMENTÁRIOS POR CHAMADO (Fase B do roadmap pós-MVP-visual, 2026-08-14)
+// — tabela `chamado_eventos`, timeline única (eventos automáticos + notas manuais),
+// mesmo conceito já validado no Artifact do MVP visual (drawer de detalhe). Ver
+// comentário completo no schema (d1/schema.sql).
+// =====================================================================
+
+// Gravado automaticamente por applyAdminTaskUpdate (status/operador) — nunca chamado
+// direto por uma rota HTTP (por isso não valida input: quem chama já validou).
+async function d1LogEvento(env, chamadoId, tipo, deValor, paraValor) {
+  await env.CHAMADOS_DB.prepare(
+    `INSERT INTO chamado_eventos (id, chamado_id, tipo, autor, texto, de_valor, para_valor, created_at)
+     VALUES (?, ?, ?, NULL, NULL, ?, ?, ?)`
+  ).bind(crypto.randomUUID(), chamadoId, tipo, deValor, paraValor, Date.now()).run();
+}
+
+// Nota manual — a única escrita em chamado_eventos que vem direto de uma requisição
+// HTTP (handleAdminCreateEvento), `autor`/`texto` já validados por quem chama.
+async function d1CreateEvento(env, chamadoId, { autor, texto }) {
+  const id = crypto.randomUUID();
+  const created_at = Date.now();
+  await env.CHAMADOS_DB.prepare(
+    `INSERT INTO chamado_eventos (id, chamado_id, tipo, autor, texto, de_valor, para_valor, created_at)
+     VALUES (?, ?, 'nota', ?, ?, NULL, NULL, ?)`
+  ).bind(id, chamadoId, autor, texto, created_at).run();
+  return { id, chamado_id: chamadoId, tipo: 'nota', autor, texto, de_valor: null, para_valor: null, created_at };
+}
+
+async function d1ListEventos(env, chamadoId) {
+  const { results } = await env.CHAMADOS_DB.prepare(
+    'SELECT id, chamado_id, tipo, autor, texto, de_valor, para_valor, created_at FROM chamado_eventos WHERE chamado_id = ? ORDER BY created_at ASC'
+  ).bind(chamadoId).all();
+  return results || [];
+}
+
+// GET /admin/tasks/:id/eventos — timeline completa (eventos + notas), mais antigo
+// primeiro (o frontend já espera essa ordem, igual ao mockup do MVP visual).
+async function handleAdminListEventos(request, env, taskId) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  const chamado = await d1GetChamado(env, taskId);
+  if (!chamado) return jsonRes({ error: 'chamado não encontrado' }, 404);
+  return jsonRes({ eventos: await d1ListEventos(env, taskId) });
+}
+
+// POST /admin/tasks/:id/eventos — adiciona uma nota manual. `autor` é texto livre (sem
+// login por pessoa no admin, ninguém pra inferir automaticamente quem está
+// escrevendo — o painel preenche com um dos OPERADORES via select, mas o servidor não
+// força isso, só exige não-vazio).
+async function handleAdminCreateEvento(request, env, taskId) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  const chamado = await d1GetChamado(env, taskId);
+  if (!chamado) return jsonRes({ error: 'chamado não encontrado' }, 404);
+
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  const autor = typeof body.autor === 'string' ? body.autor.trim() : '';
+  const texto = typeof body.texto === 'string' ? body.texto.trim() : '';
+  if (!autor) return jsonRes({ error: 'autor é obrigatório' }, 400);
+  if (!texto) return jsonRes({ error: 'texto é obrigatório' }, 400);
+
+  return jsonRes({ ok: true, evento: await d1CreateEvento(env, taskId, { autor, texto }) });
+}
+
+// =====================================================================
 // LISTA DE SOLICITANTES NO D1 (Fase M1 da migração de saída da ClickUp,
 // 2026-08-13) — até aqui essa lista só existia como custom field dropdown
 // dentro da ClickUp (SOLICITANTE_FIELD_ID via getSolicitanteMaps/GET
@@ -1559,6 +1690,36 @@ async function handleAdminMigrateSchemaSolicitantes(request, env) {
 }
 
 // =====================================================================
+// POST /admin/migrate-schema-chamado-eventos — migração de schema ÚNICA (Fase B do
+// roadmap pós-MVP-visual, 2026-08-14), cria a tabela `chamado_eventos` (histórico +
+// comentários). Mesmo padrão de sempre — CREATE TABLE/INDEX IF NOT EXISTS,
+// idempotente, tabela nova (não precisa recriar nada existente).
+// =====================================================================
+async function handleAdminMigrateSchemaChamadoEventos(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  try {
+    await env.CHAMADOS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS chamado_eventos (
+        id         TEXT PRIMARY KEY,
+        chamado_id TEXT NOT NULL,
+        tipo       TEXT NOT NULL CHECK (tipo IN ('nota', 'status', 'operador')),
+        autor      TEXT,
+        texto      TEXT,
+        de_valor   TEXT,
+        para_valor TEXT,
+        created_at INTEGER NOT NULL
+      )
+    `).run();
+    await env.CHAMADOS_DB.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_chamado_eventos_chamado ON chamado_eventos (chamado_id, created_at)'
+    ).run();
+    return jsonRes({ ok: true });
+  } catch (err) {
+    return jsonRes({ error: `migração de schema falhou: ${err.message}` }, 500);
+  }
+}
+
+// =====================================================================
 // CAMADA DE ANEXOS — CLOUDFLARE R2 (Fase B4 do roadmap de modernização,
 // 2026-08-11 — ver CLAUDE.md "Decisões técnicas tomadas")
 //
@@ -1778,4 +1939,4 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
   return updated;
 }
 
-export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees, d1ListSolicitantes, d1IsSolicitanteAtivo, d1CreateSolicitante, d1SetSolicitanteAtivo, d1ListAnexos, d1GetAnexoRow };
+export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees, d1ListSolicitantes, d1IsSolicitanteAtivo, d1CreateSolicitante, d1SetSolicitanteAtivo, d1ListAnexos, d1GetAnexoRow, d1LogEvento, d1CreateEvento, d1ListEventos };

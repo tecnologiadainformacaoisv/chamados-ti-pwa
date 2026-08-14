@@ -93,6 +93,63 @@ export async function postTaskUpdate(secret: string, taskId: string, body: Updat
   return res.json()
 }
 
+// Histórico + comentários por chamado (Fase B do roadmap pós-MVP-visual, 2026-08-14)
+// — mesmo conceito do drawer de detalhe já validado no Artifact do MVP visual.
+// `tipo: 'nota'` = escrita manual pela TI (autor/texto preenchidos); `'status'`/
+// `'operador'` = gravados automaticamente pelo servidor (de_valor/para_valor
+// preenchidos, autor/texto nulos) — o cliente nunca cria esses dois tipos direto.
+export type ChamadoEvento = {
+  id: string
+  chamado_id: string
+  tipo: "nota" | "status" | "operador"
+  autor: string | null
+  texto: string | null
+  de_valor: string | null
+  para_valor: string | null
+  created_at: number
+}
+
+export async function fetchEventos(secret: string, taskId: string): Promise<{ eventos: ChamadoEvento[] }> {
+  return adminRequest(secret, `/tasks/${taskId}/eventos`)
+}
+
+export async function postEvento(secret: string, taskId: string, autor: string, texto: string): Promise<{ evento: ChamadoEvento }> {
+  const res = await fetch(`${ADMIN_BASE}/tasks/${taskId}/eventos`, {
+    method: "POST",
+    headers: { "X-Admin-Secret": secret, "Content-Type": "application/json" },
+    body: JSON.stringify({ autor, texto }),
+  })
+  if (res.status === 403) {
+    throw new AdminApiError("Segredo de admin inválido ou expirado. Entre de novo.", 403)
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}) as { error?: string })
+    throw new AdminApiError(data.error || `Erro HTTP ${res.status}`, res.status)
+  }
+  return res.json()
+}
+
+// Ação em lote (Fase B) — mesmo subconjunto de POST /tasks/:id (UpdatePayload), só
+// aplicado a vários chamados de uma vez. Servidor reporta sucesso/falha por id (sem
+// transação entre eles) — o painel invalida o cache e mostra quantos deram certo.
+export type BulkUpdateResult = { total: number; sucesso: number; falha: number; results: { id: string; ok: boolean; error?: string }[] }
+
+export async function postBulkUpdate(secret: string, ids: string[], body: UpdatePayload): Promise<BulkUpdateResult> {
+  const res = await fetch(`${ADMIN_BASE}/tasks/bulk`, {
+    method: "POST",
+    headers: { "X-Admin-Secret": secret, "Content-Type": "application/json" },
+    body: JSON.stringify({ ids, ...body }),
+  })
+  if (res.status === 403) {
+    throw new AdminApiError("Segredo de admin inválido ou expirado. Entre de novo.", 403)
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}) as { error?: string })
+    throw new AdminApiError(data.error || `Erro HTTP ${res.status}`, res.status)
+  }
+  return res.json()
+}
+
 // Valor "puro" de um custom field — mesma lógica de getCF() em admin.js.
 export function getCF(task: Task, fieldId: string): number | string | null {
   const f = task.custom_fields?.find((cf) => cf.id === fieldId)

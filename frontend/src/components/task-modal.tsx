@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
@@ -6,9 +7,22 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { OPERADORES, SOLUCAO_FIELD_ID, STATUS_MAP, STATUS_ORDER } from "@/lib/constants"
-import { getCF, type Task, type UpdatePayload } from "@/lib/api"
+import { getCF, fetchEventos, postEvento, isSessionError, fmtDate, type ChamadoEvento, type Task, type UpdatePayload } from "@/lib/api"
+import { useAdminAuth } from "@/hooks/use-admin-auth"
 
 const SEM_ATRIBUICAO = "__sem__"
+
+// Formata o "de -> para" de um evento automático (status/operador) pra texto legível
+// — de_valor/para_valor vêm como string crua do banco (chave de status, ou id de
+// operador como string, ou null = "Sem atribuição").
+function formatEventoAutomatico(evento: ChamadoEvento): string {
+  function nomeValor(v: string | null): string {
+    if (evento.tipo === "status") return v ? (STATUS_MAP as Record<string, { label: string }>)[v]?.label ?? v : "—"
+    return v ? OPERADORES[v] ?? `#${v}` : "Sem atribuição"
+  }
+  const campo = evento.tipo === "status" ? "Status" : "Operador"
+  return `${campo} mudou de "${nomeValor(evento.de_valor)}" para "${nomeValor(evento.para_valor)}"`
+}
 
 // Porta openTaskModal()/o listener de #btn-modal-salvar de admin.js — mesmas duas
 // proteções que o revisor pediu em 2026-08-07:
@@ -28,15 +42,45 @@ export function TaskModal({
   saving: boolean
   error: string | null
 }) {
+  const { secret, logout } = useAdminAuth()
+  const queryClient = useQueryClient()
+
   const [status, setStatus] = useState("aberto")
   const [solucao, setSolucao] = useState("")
   const [operador, setOperador] = useState(SEM_ATRIBUICAO)
   const [operadorTouched, setOperadorTouched] = useState(false)
   const [statusDesconhecido, setStatusDesconhecido] = useState<string | null>(null)
 
+  // Histórico + comentários (Fase B do roadmap pós-MVP-visual, 2026-08-14) — mesmo
+  // conceito já validado no Artifact do MVP visual (drawer de detalhe), evoluindo o
+  // modal "Gerenciar" existente em vez de introduzir um componente de drawer
+  // paralelo (mesmo Dialog, mais conteúdo — não fragmenta a interação já conhecida).
+  const eventosQuery = useQuery({
+    queryKey: ["chamado-eventos", task?.id],
+    queryFn: () => fetchEventos(secret, task!.id),
+    enabled: !!task,
+  })
+  const [notaAutor, setNotaAutor] = useState(SEM_ATRIBUICAO)
+  const [notaTexto, setNotaTexto] = useState("")
+  const notaMutation = useMutation({
+    mutationFn: () => {
+      const nomeAutor = OPERADORES[notaAutor] ?? notaAutor
+      return postEvento(secret, task!.id, nomeAutor, notaTexto.trim())
+    },
+    onSuccess: () => {
+      setNotaTexto("")
+      queryClient.invalidateQueries({ queryKey: ["chamado-eventos", task?.id] })
+    },
+    onError: (err) => {
+      if (isSessionError(err)) logout()
+    },
+  })
+
   useEffect(() => {
     if (!task) return
     setOperadorTouched(false)
+    setNotaAutor(SEM_ATRIBUICAO)
+    setNotaTexto("")
     const statusKey = (task.status?.status || "").toLowerCase()
     if (Object.prototype.hasOwnProperty.call(STATUS_MAP, statusKey)) {
       setStatus(statusKey)
@@ -65,11 +109,12 @@ export function TaskModal({
 
   return (
     <Dialog open={!!task} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{task.name || "(sem título)"}</DialogTitle>
         </DialogHeader>
 
+        <div className="flex-1 overflow-y-auto pr-1">
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
             <Label>Descrição (o que o solicitante escreveu)</Label>
@@ -132,6 +177,67 @@ export function TaskModal({
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
+
+          <div className="flex flex-col gap-2 border-t border-border pt-4">
+            <Label>Histórico e comentários</Label>
+            {eventosQuery.isLoading ? (
+              <p className="text-xs text-muted-foreground">Carregando…</p>
+            ) : eventosQuery.isError ? (
+              <p className="text-xs text-destructive">Não foi possível carregar o histórico.</p>
+            ) : eventosQuery.data?.eventos.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Nenhum evento ainda.</p>
+            ) : (
+              <ul className="flex max-h-48 flex-col gap-2.5 overflow-y-auto">
+                {eventosQuery.data?.eventos.map((ev) => (
+                  <li key={ev.id} className="text-sm">
+                    {ev.tipo === "nota" ? (
+                      <div className="rounded-md border border-border bg-muted/40 p-2.5">
+                        <div className="mb-0.5 flex items-baseline justify-between gap-2">
+                          <span className="font-medium">{ev.autor}</span>
+                          <span className="text-xs text-muted-foreground">{fmtDate(ev.created_at)}</span>
+                        </div>
+                        <p className="whitespace-pre-line text-foreground">{ev.texto}</p>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        {formatEventoAutomatico(ev)} <span className="text-muted-foreground/70">— {fmtDate(ev.created_at)}</span>
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div className="flex flex-col gap-2 rounded-md border border-border p-2.5">
+              <div className="flex gap-2">
+                <Select value={notaAutor} onValueChange={setNotaAutor}>
+                  <SelectTrigger className="w-36"><SelectValue placeholder="Quem escreve?" /></SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(OPERADORES).map(([id, nome]) => (
+                      <SelectItem key={id} value={id}>{nome}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Textarea
+                  rows={2}
+                  placeholder="Escrever nota interna (visível só pra TI)..."
+                  value={notaTexto}
+                  onChange={(e) => setNotaTexto(e.target.value)}
+                  className="flex-1"
+                />
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="self-end"
+                disabled={notaAutor === SEM_ATRIBUICAO || !notaTexto.trim() || notaMutation.isPending}
+                onClick={() => notaMutation.mutate()}
+              >
+                {notaMutation.isPending ? "Adicionando…" : "Adicionar nota"}
+              </Button>
+            </div>
+          </div>
+        </div>
         </div>
 
         <DialogFooter>

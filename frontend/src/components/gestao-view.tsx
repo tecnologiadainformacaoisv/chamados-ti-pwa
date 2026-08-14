@@ -8,7 +8,7 @@ import { KanbanBoard } from "@/components/kanban-board"
 import { TasksTable } from "@/components/tasks-table"
 import { TaskModal } from "@/components/task-modal"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
-import { fetchSolicitanteNomes, fetchTasks, isSessionError, postTaskUpdate, type Filtros, type Task, type UpdatePayload } from "@/lib/api"
+import { fetchSolicitanteNomes, fetchTasks, isSessionError, postTaskUpdate, postBulkUpdate, type Filtros, type Task, type UpdatePayload } from "@/lib/api"
 
 type ViewMode = "quadro" | "tabela"
 
@@ -21,6 +21,7 @@ export function GestaoView() {
   const [viewMode, setViewMode] = useState<ViewMode>(() => (localStorage.getItem("admin_view_mode_react") as ViewMode) || "quadro")
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [bulkMessage, setBulkMessage] = useState<string | null>(null)
 
   function changeViewMode(mode: ViewMode) {
     setViewMode(mode)
@@ -86,6 +87,25 @@ export function GestaoView() {
     },
   })
 
+  // Ação em lote (Fase B, mesmo dia) — mesmo conceito do Artifact do MVP visual,
+  // via POST /admin/tasks/bulk (nova rota). Sem transação entre chamados — o servidor
+  // já reporta sucesso/falha por id, mostrado aqui como uma mensagem curta.
+  const bulkMutation = useMutation({
+    mutationFn: ({ ids, body }: { ids: string[]; body: UpdatePayload }) => postBulkUpdate(secret, ids, body),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["admin-tasks"] })
+      setBulkMessage(
+        data.falha > 0
+          ? `${data.sucesso} de ${data.total} chamados atualizados — ${data.falha} falharam.`
+          : `${data.sucesso} chamado${data.sucesso > 1 ? "s" : ""} atualizado${data.sucesso > 1 ? "s" : ""}.`
+      )
+    },
+    onError: (err) => {
+      if (isSessionError(err)) { logout(); return }
+      setBulkMessage(err instanceof Error ? err.message : "Não foi possível aplicar a ação em lote.")
+    },
+  })
+
   return (
     <div className="flex flex-col gap-4">
       <FiltersBar
@@ -135,11 +155,22 @@ export function GestaoView() {
           onDropStatus={(taskId, status) => quickUpdateMutation.mutate({ taskId, body: { status } })}
         />
       ) : (
-        <TasksTable
-          tasks={lastVisible}
-          onOpenTask={setSelectedTask}
-          onQuickUpdate={(taskId, body) => quickUpdateMutation.mutate({ taskId, body })}
-        />
+        <>
+          {bulkMessage && (
+            <Alert>
+              <AlertDescription className="flex items-center justify-between gap-2">
+                {bulkMessage}
+                <Button variant="ghost" size="sm" onClick={() => setBulkMessage(null)}>Fechar</Button>
+              </AlertDescription>
+            </Alert>
+          )}
+          <TasksTable
+            tasks={lastVisible}
+            onOpenTask={setSelectedTask}
+            onQuickUpdate={(taskId, body) => quickUpdateMutation.mutate({ taskId, body })}
+            onBulkUpdate={(taskIds, body) => { setBulkMessage(null); bulkMutation.mutate({ ids: taskIds, body }) }}
+          />
+        </>
       )}
 
       <TaskModal

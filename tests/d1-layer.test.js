@@ -82,7 +82,7 @@ async function test(name, fn) {
 
 (async () => {
   const workerPath = pathToFileURL(path.join(__dirname, '..', 'push-worker.js')).href;
-  const { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, d1TransitionStatus, d1SetAssignees } = await import(workerPath);
+  const { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, d1TransitionStatus, d1SetAssignees, d1LogEvento, d1CreateEvento, d1ListEventos } = await import(workerPath);
 
   const baseChamado = {
     name: 'Notebook não liga', tipo: 0, setor: 1, solicitante: 'Michael Vasconcelos',
@@ -477,6 +477,37 @@ async function test(name, fn) {
     const created = await d1CreateChamado(env, baseChamado);
     const updated = await d1TransitionStatus(env, created.id, 'em atendimento'); // não deve lançar
     assert.strictEqual(updated.status, 'em atendimento');
+  });
+
+  console.log('--- histórico + comentários (chamado_eventos, Fase B pós-MVP-visual) ---');
+  await test('d1CreateEvento grava uma nota e devolve o registro criado', async () => {
+    const env = freshEnv();
+    const created = await d1CreateChamado(env, baseChamado);
+    const evento = await d1CreateEvento(env, created.id, { autor: 'Henrique', texto: 'Testei aqui, parece ser hardware.' });
+    assert.strictEqual(evento.tipo, 'nota');
+    assert.strictEqual(evento.autor, 'Henrique');
+    assert.strictEqual(evento.texto, 'Testei aqui, parece ser hardware.');
+    assert.strictEqual(evento.de_valor, null);
+  });
+
+  await test('d1ListEventos devolve a timeline em ordem cronológica (mais antigo primeiro)', async () => {
+    const env = freshEnv();
+    const created = await d1CreateChamado(env, baseChamado);
+    await d1LogEvento(env, created.id, 'status', 'aberto', 'em atendimento');
+    await new Promise(r => setTimeout(r, 2));
+    await d1CreateEvento(env, created.id, { autor: 'Everson', texto: 'Já tô olhando.' });
+    await new Promise(r => setTimeout(r, 2));
+    await d1LogEvento(env, created.id, 'operador', null, '170628721');
+
+    const eventos = await d1ListEventos(env, created.id);
+    assert.strictEqual(eventos.length, 3);
+    assert.deepStrictEqual(eventos.map(e => e.tipo), ['status', 'nota', 'operador']);
+  });
+
+  await test('d1ListEventos de um chamado sem nenhum evento devolve lista vazia', async () => {
+    const env = freshEnv();
+    const created = await d1CreateChamado(env, baseChamado);
+    assert.deepStrictEqual(await d1ListEventos(env, created.id), []);
   });
 
   console.log(`\n${passed} passaram, ${failed} falharam`);

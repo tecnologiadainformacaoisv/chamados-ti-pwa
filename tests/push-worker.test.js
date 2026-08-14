@@ -139,7 +139,7 @@ async function test(name, fn) {
 
 (async () => {
   const workerPath = pathToFileURL(path.join(__dirname, '..', 'push-worker.js')).href;
-  const { default: worker, d1GetChamado, d1SetAssignees, d1CreateSolicitante, d1ListAnexos, d1CreateChamado } = await import(workerPath);
+  const { default: worker, d1GetChamado, d1SetAssignees, d1CreateSolicitante, d1ListAnexos, d1CreateChamado, d1ListEventos } = await import(workerPath);
 
   // Fase M5 (2026-08-13, migração de saída da ClickUp): push-worker.js não chama mais
   // `fetch()` pra `api.clickup.com` em NENHUMA rota — este mock vira um guarda-costas
@@ -1046,6 +1046,131 @@ async function test(name, fn) {
     assert.deepStrictEqual(results, [], 'assigneeId:null deveria remover todo mundo da tabela de junção também');
   });
 
+  console.log('--- histórico + comentários / ação em lote (Fase B pós-MVP-visual, 2026-08-14) ---');
+  await test('mudar status via POST /admin/tasks/:id grava um evento automático na timeline', async () => {
+    const id = await criarChamadoTeste({ status: 'aberto' });
+    await worker.fetch(req('POST', `/admin/tasks/${id}`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'em atendimento' })
+    }), env);
+    const eventos = await d1ListEventos(env, id);
+    assert.strictEqual(eventos.length, 1);
+    assert.strictEqual(eventos[0].tipo, 'status');
+    assert.strictEqual(eventos[0].de_valor, 'aberto');
+    assert.strictEqual(eventos[0].para_valor, 'em atendimento');
+  });
+  await test('mudar status pro MESMO valor não gera evento à toa', async () => {
+    const id = await criarChamadoTeste({ status: 'aberto' });
+    await worker.fetch(req('POST', `/admin/tasks/${id}`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'aberto' })
+    }), env);
+    assert.deepStrictEqual(await d1ListEventos(env, id), []);
+  });
+  await test('reatribuir operador via POST /admin/tasks/:id grava um evento automático', async () => {
+    const id = await criarChamadoTeste({ assignee_id: 170628721, assignee_ids: [170628721] });
+    await worker.fetch(req('POST', `/admin/tasks/${id}`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ assigneeId: 200498355 })
+    }), env);
+    const eventos = await d1ListEventos(env, id);
+    const evOperador = eventos.find(e => e.tipo === 'operador');
+    assert.ok(evOperador, 'deveria ter gravado um evento de troca de operador');
+    assert.strictEqual(evOperador.de_valor, '170628721');
+    assert.strictEqual(evOperador.para_valor, '200498355');
+  });
+
+  console.log('--- GET/POST /admin/tasks/:id/eventos (notas manuais) ---');
+  await test('sem X-Admin-Secret dá 403 (GET e POST)', async () => {
+    const id = await criarChamadoTeste();
+    const getRes = await worker.fetch(req('GET', `/admin/tasks/${id}/eventos`), env);
+    assert.strictEqual(getRes.status, 403);
+    const postRes = await worker.fetch(req('POST', `/admin/tasks/${id}/eventos`, { body: JSON.stringify({ autor: 'x', texto: 'y' }) }), env);
+    assert.strictEqual(postRes.status, 403);
+  });
+  await test('chamado inexistente dá 404 (GET e POST)', async () => {
+    const getRes = await worker.fetch(req('GET', '/admin/tasks/nao-existe/eventos', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual(getRes.status, 404);
+    const postRes = await worker.fetch(req('POST', '/admin/tasks/nao-existe/eventos', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ autor: 'x', texto: 'y' })
+    }), env);
+    assert.strictEqual(postRes.status, 404);
+  });
+  await test('POST sem autor/texto (ou vazio) dá 400', async () => {
+    const id = await criarChamadoTeste();
+    const semAutor = await worker.fetch(req('POST', `/admin/tasks/${id}/eventos`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ texto: 'oi' })
+    }), env);
+    assert.strictEqual(semAutor.status, 400);
+    const textoVazio = await worker.fetch(req('POST', `/admin/tasks/${id}/eventos`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ autor: 'Henrique', texto: '   ' })
+    }), env);
+    assert.strictEqual(textoVazio.status, 400);
+  });
+  await test('POST cria a nota, GET devolve na timeline', async () => {
+    const id = await criarChamadoTeste();
+    const postRes = await worker.fetch(req('POST', `/admin/tasks/${id}/eventos`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ autor: 'Henrique', texto: 'Já entrei em contato com o fornecedor.' })
+    }), env);
+    assert.strictEqual(postRes.status, 200);
+    const { evento } = await postRes.json();
+    assert.strictEqual(evento.autor, 'Henrique');
+
+    const getRes = await worker.fetch(req('GET', `/admin/tasks/${id}/eventos`, { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const { eventos } = await getRes.json();
+    assert.strictEqual(eventos.length, 1);
+    assert.strictEqual(eventos[0].texto, 'Já entrei em contato com o fornecedor.');
+  });
+
+  console.log('--- POST /admin/tasks/bulk (ação em lote) ---');
+  await test('sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks/bulk', { body: JSON.stringify({ ids: ['a'], status: 'pendente' }) }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('ids vazio/ausente dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks/bulk', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'pendente' })
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('mais de 50 ids dá 400 (teto de segurança)', async () => {
+    const ids = Array.from({ length: 51 }, (_, i) => `id-${i}`);
+    const res = await worker.fetch(req('POST', '/admin/tasks/bulk', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ ids, status: 'pendente' })
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('sem nada pra atualizar (só ids) dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks/bulk', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ ids: ['a'] })
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('aplica status em todos os ids válidos, reporta sucesso/falha por id', async () => {
+    const id1 = await criarChamadoTeste({ status: 'aberto' });
+    const id2 = await criarChamadoTeste({ status: 'aberto' });
+    const res = await worker.fetch(req('POST', '/admin/tasks/bulk', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ ids: [id1, id2, 'nao-existe'], status: 'pendente' })
+    }), env);
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.strictEqual(data.total, 3);
+    assert.strictEqual(data.sucesso, 2);
+    assert.strictEqual(data.falha, 1);
+    assert.strictEqual((await d1GetChamado(env, id1)).status, 'pendente');
+    assert.strictEqual((await d1GetChamado(env, id2)).status, 'pendente');
+    const falhou = data.results.find(r => r.id === 'nao-existe');
+    assert.strictEqual(falhou.ok, false);
+    assert.strictEqual(falhou.error, 'chamado não encontrado');
+  });
+  await test('ação em lote também grava evento automático por chamado', async () => {
+    const id = await criarChamadoTeste({ status: 'aberto' });
+    await worker.fetch(req('POST', '/admin/tasks/bulk', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ ids: [id], status: 'em atendimento' })
+    }), env);
+    const eventos = await d1ListEventos(env, id);
+    assert.strictEqual(eventos.length, 1);
+    assert.strictEqual(eventos[0].tipo, 'status');
+  });
+
   console.log('--- validação de tipo/valor (achados do revisor 2026-08-07) ---');
   await test('solucao com tipo diferente de string dá 400 (não fica ok:true em silêncio)', async () => {
     const id = await criarChamadoTeste();
@@ -1178,6 +1303,18 @@ async function test(name, fn) {
     assert.strictEqual(res2.status, 200);
     const aindaLa = await d1GetChamado(env, 'schema-v2-check');
     assert.ok(aindaLa, 'segunda rodada da migração de schema não deveria ter perdido nenhuma linha');
+  });
+
+  console.log('--- POST /admin/migrate-schema-chamado-eventos (Fase B pós-MVP-visual, 2026-08-14) ---');
+  await test('sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/admin/migrate-schema-chamado-eventos', { body: '{}' }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('cria a tabela chamado_eventos, idempotente rodando de novo', async () => {
+    const res1 = await worker.fetch(req('POST', '/admin/migrate-schema-chamado-eventos', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual(res1.status, 200);
+    const res2 = await worker.fetch(req('POST', '/admin/migrate-schema-chamado-eventos', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual(res2.status, 200);
   });
 
   console.log('--- suporte a múltiplos operadores (B7 parte 2, fase 1 — 2026-08-12) ---');
