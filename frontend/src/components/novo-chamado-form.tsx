@@ -106,7 +106,15 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
   }
 
   return (
-    <form onSubmit={handleSubmit} onPaste={handlePaste} className="flex flex-col gap-4 rounded-lg border border-border bg-card p-5 shadow-sm">
+    <div className="overflow-hidden rounded-lg border border-border bg-card shadow-md">
+      {/* Faixa colorida do topo do card — existia como .form-card-header no vanilla
+          (css/style.css) e nunca foi portada quando o formulário virou React na Fase
+          F4 (2026-08-11); achado 2026-08-14 (2ª rodada da regressão visual). */}
+      <div className="bg-brand-gradient px-6 py-5 text-center text-primary-foreground">
+        <h2 className="text-lg font-bold">Novo Chamado</h2>
+        <p className="text-sm text-primary-foreground/70">Preencha os dados abaixo pra abrir um chamado de suporte</p>
+      </div>
+      <form onSubmit={handleSubmit} onPaste={handlePaste} className="flex flex-col gap-4 p-6">
       <div className="flex flex-col gap-1.5">
         <Label>Solicitante</Label>
         <p className="text-sm text-muted-foreground">{userName}</p>
@@ -195,9 +203,12 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
         </Alert>
       )}
 
-      <Button type="submit" disabled={submitting} className="self-start">
+      {/* w-full (não self-start) — .btn-full no vanilla era largura cheia/centralizado;
+          "self-start" colava o botão na esquerda, achado 2026-08-14. */}
+      <Button type="submit" disabled={submitting} size="lg" className="w-full justify-center">
         {submitting ? "Enviando…" : "Abrir Chamado"}
       </Button>
-    </form>
+      </form>
+    </div>
   )
 }

@@ -90,7 +90,9 @@ function SolicitanteShell() {
   const encerrados = tasks.filter((t) => t.status?.status === "encerrado").sort((a, b) => Number(b.date_created) - Number(a.date_created))
 
   return (
-    <div className="min-h-svh bg-muted/30">
+    // bg-app-shell (não bg-muted/30) — achado 2026-08-14: bg-muted/30 lavava o fundo
+    // quase pra branco puro; #f0f4f8 (index.css) é o valor real do vanilla.
+    <div className="min-h-svh bg-app-shell">
       <header className="bg-brand-gradient flex h-16 items-center justify-between px-4 text-primary-foreground shadow-[0_2px_12px_rgba(0,0,0,0.2)]">
         <div className="flex items-center gap-3">
           {/* w-auto + brightness-0 invert — ver comentário em app-header.tsx
@@ -118,11 +120,11 @@ function SolicitanteShell() {
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="w-full">
             <TabsTrigger value="novo-chamado" className="flex-1">Novo Chamado</TabsTrigger>
-            <TabsTrigger value="meus-chamados" className="flex-1">
-              Meus Chamados{ativos.length > 0 && ` (${ativos.length})`}
+            <TabsTrigger value="meus-chamados" className="flex-1 gap-1.5">
+              Meus Chamados{ativos.length > 0 && <span className="count-pill">{ativos.length}</span>}
             </TabsTrigger>
-            <TabsTrigger value="todos-chamados" className="flex-1">
-              Histórico{encerrados.length > 0 && ` (${encerrados.length})`}
+            <TabsTrigger value="todos-chamados" className="flex-1 gap-1.5">
+              Histórico{encerrados.length > 0 && <span className="count-pill">{encerrados.length}</span>}
             </TabsTrigger>
           </TabsList>
 

@@ -188,3 +188,26 @@
 .shadow-brand-card {
   box-shadow: 0 24px 64px rgba(0, 0, 0, .3);
 }
+/* Achado 2026-08-14 (2ª rodada da regressão visual da F5): o fix de 2026-08-12 só
+   cobriu o FUNDO DE TELA (login/headers) — nunca chegou nos componentes de conteúdo
+   (cabeçalho colorido do card de formulário, abas, modal de sucesso do WhatsApp),
+   que carregavam boa parte da identidade visual e ficaram genéricos desde que
+   nasceram na Fase F4. `--bg` do css/style.css original era #f0f4f8 (cinza-azulado
+   visível) — `bg-muted/30` (usado até aqui) lava quase pra branco puro. Só pro app
+   do solicitante (admin usa `bg-muted/30` de propósito, sem essa queixa). */
+.bg-app-shell {
+  background: #f0f4f8;
+}
+/* Pill de contagem nas abas (Meus Chamados/Histórico) — mesmo `.count-pill` do
+   vanilla (fundo levemente tingido de primary, texto primary, bem arredondado). */
+.count-pill {
+  background: color-mix(in oklch, var(--primary) 12%, transparent);
+  color: var(--primary);
+  font-size: .72rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 1px 7px;
+  min-width: 20px;
+  text-align: center;
+  line-height: 1.5;
+}
