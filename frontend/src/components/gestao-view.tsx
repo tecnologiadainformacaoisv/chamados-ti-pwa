@@ -73,10 +73,13 @@ export function GestaoView() {
     },
   })
 
-  // Arrastar-e-soltar no Quadro muda só o status — mesma rota de mutação do modal,
-  // corpo diferente (só status, sem tocar solução/operador).
-  const dropMutation = useMutation({
-    mutationFn: ({ taskId, status }: { taskId: string; status: string }) => postTaskUpdate(secret, taskId, { status }),
+  // Mutação de "edição rápida" — reaproveitada tanto pelo arrastar-e-soltar do Quadro
+  // (corpo {status}) quanto pela edição inline de Status/Operador na Tabela (Fase A do
+  // roadmap pós-MVP-visual, 2026-08-14). Mesma rota do modal "Gerenciar"
+  // (POST /admin/tasks/:id), só chamada de mais lugares — sem duplicar onSuccess/
+  // onError/invalidação de cache pra cada caso.
+  const quickUpdateMutation = useMutation({
+    mutationFn: ({ taskId, body }: { taskId: string; body: UpdatePayload }) => postTaskUpdate(secret, taskId, body),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-tasks"] }),
     onError: (err) => {
       if (isSessionError(err)) logout()
@@ -129,10 +132,14 @@ export function GestaoView() {
         <KanbanBoard
           tasks={lastVisible}
           onOpenTask={setSelectedTask}
-          onDropStatus={(taskId, status) => dropMutation.mutate({ taskId, status })}
+          onDropStatus={(taskId, status) => quickUpdateMutation.mutate({ taskId, body: { status } })}
         />
       ) : (
-        <TasksTable tasks={lastVisible} onOpenTask={setSelectedTask} />
+        <TasksTable
+          tasks={lastVisible}
+          onOpenTask={setSelectedTask}
+          onQuickUpdate={(taskId, body) => quickUpdateMutation.mutate({ taskId, body })}
+        />
       )}
 
       <TaskModal

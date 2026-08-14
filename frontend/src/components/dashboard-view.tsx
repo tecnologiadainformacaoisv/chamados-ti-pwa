@@ -1,11 +1,29 @@
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { Label } from "@/components/ui/label"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 import { fetchMetrics, fmtMs, isSessionError, type OperadorTempo } from "@/lib/api"
 import { OPERADORES, SETORES, STATUS_MAP, STATUS_ORDER, TIPOS, type Opcao } from "@/lib/constants"
+
+// yyyy-mm-dd (formato nativo de <input type="date">) -> epoch ms no início/fim do dia,
+// no fuso local de quem está usando o painel (não UTC) — é o que a pessoa espera ao
+// digitar uma data. Fase A do roadmap pós-MVP-visual (2026-08-14).
+function inicioDoDia(iso: string): number {
+  return new Date(`${iso}T00:00:00`).getTime()
+}
+function fimDoDia(iso: string): number {
+  return new Date(`${iso}T23:59:59.999`).getTime()
+}
+function isoHoje(offsetDias = 0): string {
+  const d = new Date()
+  d.setDate(d.getDate() - offsetDias)
+  return d.toISOString().slice(0, 10)
+}
 
 // Porta loadMetrics()/renderMetrics()/renderBarList()/renderSlaChart()/renderOperadores()
 // de admin.js — mesmos cards, mesmo donut de SLA em SVG puro (sem lib de gráfico, mesma
@@ -13,9 +31,17 @@ import { OPERADORES, SETORES, STATUS_MAP, STATUS_ORDER, TIPOS, type Opcao } from
 export function DashboardView() {
   const { secret, logout } = useAdminAuth()
 
+  // Filtro de período (de/até, livre) + atalhos — reflete direto em `desde`/`ate` do
+  // GET /admin/metrics (`d1GetMetrics` já suporta, ver push-worker.js). Vazio = sem
+  // filtro (agregado geral, comportamento de sempre).
+  const [de, setDe] = useState("")
+  const [ate, setAte] = useState("")
+  const desdeMs = de ? inicioDoDia(de) : undefined
+  const ateMs = ate ? fimDoDia(ate) : undefined
+
   const metricsQuery = useQuery({
-    queryKey: ["admin-metrics"],
-    queryFn: () => fetchMetrics(secret),
+    queryKey: ["admin-metrics", desdeMs, ateMs],
+    queryFn: () => fetchMetrics(secret, { desde: desdeMs, ate: ateMs }),
     refetchInterval: 60_000,
   })
 
@@ -23,26 +49,36 @@ export function DashboardView() {
     if (isSessionError(metricsQuery.error)) logout()
   }, [metricsQuery.error, logout])
 
+  const periodoBar = (
+    <PeriodoFilterBar de={de} ate={ate} onDe={setDe} onAte={setAte} />
+  )
+
   if (metricsQuery.isLoading) {
     return (
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <Card key={i}>
-            <CardHeader className="pb-2"><Skeleton className="h-3 w-20" /></CardHeader>
-            <CardContent><Skeleton className="h-7 w-14" /></CardContent>
-          </Card>
-        ))}
+      <div className="flex flex-col gap-6">
+        {periodoBar}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Card key={i}>
+              <CardHeader className="pb-2"><Skeleton className="h-3 w-20" /></CardHeader>
+              <CardContent><Skeleton className="h-7 w-14" /></CardContent>
+            </Card>
+          ))}
+        </div>
       </div>
     )
   }
 
   if (metricsQuery.isError && !isSessionError(metricsQuery.error)) {
     return (
-      <Alert variant="destructive">
-        <AlertDescription>
-          {metricsQuery.error instanceof Error ? metricsQuery.error.message : "Não foi possível carregar as métricas."}
-        </AlertDescription>
-      </Alert>
+      <div className="flex flex-col gap-6">
+        {periodoBar}
+        <Alert variant="destructive">
+          <AlertDescription>
+            {metricsQuery.error instanceof Error ? metricsQuery.error.message : "Não foi possível carregar as métricas."}
+          </AlertDescription>
+        </Alert>
+      </div>
     )
   }
 
@@ -51,6 +87,7 @@ export function DashboardView() {
 
   return (
     <div className="flex flex-col gap-6">
+      {periodoBar}
       {data.truncated && (
         <Alert>
           <AlertDescription>
@@ -94,6 +131,56 @@ export function DashboardView() {
           </CardContent>
         </Card>
       </div>
+    </div>
+  )
+}
+
+// Filtro de período — de/até livre (input de data nativo) + atalhos que só preenchem
+// os campos (não é um mecanismo separado). Vazio nos dois = "Tudo" (agregado geral).
+function PeriodoFilterBar({
+  de,
+  ate,
+  onDe,
+  onAte,
+}: {
+  de: string
+  ate: string
+  onDe: (v: string) => void
+  onAte: (v: string) => void
+}) {
+  function aplicarAtalho(offsetDias: number | null) {
+    if (offsetDias === null) {
+      onDe("")
+      onAte("")
+      return
+    }
+    onDe(isoHoje(offsetDias))
+    onAte(isoHoje(0))
+  }
+
+  const semFiltro = !de && !ate
+
+  return (
+    <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border bg-card p-3 shadow-sm">
+      <div className="flex flex-col gap-1">
+        <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">De</Label>
+        <Input type="date" value={de} max={ate || undefined} onChange={(e) => onDe(e.target.value)} className="w-36" />
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Até</Label>
+        <Input type="date" value={ate} min={de || undefined} onChange={(e) => onAte(e.target.value)} className="w-36" />
+      </div>
+      <div className="flex items-center gap-1 pb-0.5">
+        <Button size="sm" variant="ghost" onClick={() => aplicarAtalho(0)}>Hoje</Button>
+        <Button size="sm" variant="ghost" onClick={() => aplicarAtalho(6)}>7 dias</Button>
+        <Button size="sm" variant="ghost" onClick={() => aplicarAtalho(29)}>30 dias</Button>
+        <Button size="sm" variant={semFiltro ? "secondary" : "ghost"} onClick={() => aplicarAtalho(null)}>Tudo</Button>
+      </div>
+      {!semFiltro && (
+        <span className="pb-1.5 text-xs text-muted-foreground">
+          Período: {de ? new Date(`${de}T00:00:00`).toLocaleDateString("pt-BR") : "início"} até {ate ? new Date(`${ate}T00:00:00`).toLocaleDateString("pt-BR") : "hoje"}
+        </span>
+      )}
     </div>
   )
 }

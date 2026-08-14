@@ -874,6 +874,23 @@ async function test(name, fn) {
     assert.strictEqual(data.tempoMedioPorOperador['200498355'], undefined, 'chamado da Ariele não foi encerrado, não deveria contar tempo de atendimento pro Henrique');
   });
 
+  // Fase A do roadmap pós-MVP-visual (2026-08-14): filtro de período opcional
+  // (desde/ate, epoch ms). task-michael-1/task-ariele-1 foram criados agora (Date.now())
+  // via seedChamadoComId — ajusta date_created direto no D1 pra ter datas conhecidas.
+  await test('desde/ate filtram por date_created — chamado fora do intervalo não conta', async () => {
+    await adminEnv.CHAMADOS_DB.prepare('UPDATE chamados SET date_created = ? WHERE id = ?').bind(1_000_000, 'task-michael-1').run();
+    await adminEnv.CHAMADOS_DB.prepare('UPDATE chamados SET date_created = ? WHERE id = ?').bind(5_000_000, 'task-ariele-1').run();
+
+    const res = await worker.fetch(req('GET', '/admin/metrics?desde=900000&ate=1100000', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.strictEqual(data.total, 1, 'só o chamado do Michael (date_created=1_000_000) deveria estar dentro do range');
+  });
+  await test('desde/ate inválido (não-numérico) devolve 400', async () => {
+    const res = await worker.fetch(req('GET', '/admin/metrics?desde=nao-e-numero', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
+    assert.strictEqual(res.status, 400);
+  });
+
   console.log('--- POST /admin/tasks/:id — a TI trabalha por aqui, direto no D1 (Fase M4, 2026-08-13) ---');
   // Fase M4: handleAdminUpdateTask parou de chamar a ClickUp — grava direto no D1
   // (d1TransitionStatus/d1UpdateChamado). `criarChamadoTeste` semeia um chamado fresco

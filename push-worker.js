@@ -584,9 +584,23 @@ async function handleAdminListTasks(request, env) {
 // mas nunca chamada por nenhuma rota até agora) em vez de paginar a ClickUp inteira.
 // Mesmo motivo/mesma data do corte de /admin/tasks acima — ver comentário lá.
 // =====================================================================
+// Fase A do roadmap pós-MVP-visual (2026-08-14): filtro de período opcional, `desde`/
+// `ate` em epoch ms via querystring — cobre o caso "quero ver só a última semana/mês"
+// sem exigir migração de schema (`date_created` já existe na tabela desde sempre).
+// Omitidos, o comportamento é idêntico a antes (agregado geral).
 async function handleAdminMetrics(request, env) {
   if (!(await isAdmin(request, env))) return unauthorized();
-  return jsonRes(await d1GetMetrics(env));
+
+  const { searchParams } = new URL(request.url);
+  const desdeRaw = searchParams.get('desde');
+  const ateRaw   = searchParams.get('ate');
+  const desde = desdeRaw != null ? Number(desdeRaw) : undefined;
+  const ate   = ateRaw   != null ? Number(ateRaw)   : undefined;
+  if ((desdeRaw != null && !Number.isFinite(desde)) || (ateRaw != null && !Number.isFinite(ate))) {
+    return jsonRes({ error: 'desde/ate precisam ser epoch ms (número)' }, 400);
+  }
+
+  return jsonRes(await d1GetMetrics(env, { desde, ate }));
 }
 
 // =====================================================================
@@ -1189,11 +1203,18 @@ async function d1UpdateChamado(env, id, patch, assigneeIdsForSync) {
 // mais só assignee_id — cada operador atribuído a um chamado encerrado recebe a
 // duração INTEIRA, não dividida entre eles (mesma regra de handleAdminMetrics baseado
 // na ClickUp, ver comentário lá — chamado com 2+ assignees não é bug, é o dado real).
-async function d1GetMetrics(env) {
+// Fase A do roadmap pós-MVP-visual (2026-08-14): `{ desde, ate }` (epoch ms,
+// ambos opcionais) filtra por `date_created` — filtro aplicado em JS sobre o
+// resultado (não no SQL) de propósito, pra manter a query e o resto da função
+// idênticos ao de sempre; volume da tabela não justifica complicar a query por
+// isso. Omitidos, comportamento idêntico ao de antes (agregado geral).
+async function d1GetMetrics(env, { desde, ate } = {}) {
   const { results } = await env.CHAMADOS_DB.prepare(
-    'SELECT id, status, tipo, setor, due_date, date_closed, start_date FROM chamados'
+    'SELECT id, status, tipo, setor, due_date, date_closed, start_date, date_created FROM chamados'
   ).all();
-  const rows = results || [];
+  let rows = results || [];
+  if (desde != null) rows = rows.filter(r => r.date_created >= desde);
+  if (ate   != null) rows = rows.filter(r => r.date_created <= ate);
 
   const porStatus = {};
   const porTipo    = {};

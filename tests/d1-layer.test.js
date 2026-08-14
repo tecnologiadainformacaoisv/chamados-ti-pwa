@@ -360,6 +360,39 @@ async function test(name, fn) {
     assert.strictEqual(m.tempoMedioPorOperador['170628721'].totalChamados, 55);
   });
 
+  // Fase A do roadmap pós-MVP-visual (2026-08-14): filtro de período opcional em
+  // d1GetMetrics — date_created não é parametrizável em d1CreateChamado (sempre
+  // Date.now()), então ajusta direto via SQL depois de criar, mesmo padrão já usado
+  // nesta sessão pra start_date (ver CLAUDE.md, achado da feature de alerta de admin).
+  await test('filtro de período (desde/ate) exclui chamados fora do intervalo', async () => {
+    const env = freshEnv();
+    const dentro = await d1CreateChamado(env, { ...baseChamado, name: 'Dentro do período' });
+    await env.CHAMADOS_DB.prepare('UPDATE chamados SET date_created = ? WHERE id = ?').bind(1_000_000, dentro.id).run();
+    const fora = await d1CreateChamado(env, { ...baseChamado, name: 'Fora do período' });
+    await env.CHAMADOS_DB.prepare('UPDATE chamados SET date_created = ? WHERE id = ?').bind(5_000_000, fora.id).run();
+
+    const m = await d1GetMetrics(env, { desde: 900_000, ate: 1_100_000 });
+    assert.strictEqual(m.total, 1);
+  });
+
+  await test('sem desde/ate, comportamento idêntico a antes (agregado geral)', async () => {
+    const env = freshEnv();
+    await seedTresChamados(env);
+    const m = await d1GetMetrics(env);
+    assert.strictEqual(m.total, 3);
+  });
+
+  await test('só desde (sem ate) filtra de um ponto em diante', async () => {
+    const env = freshEnv();
+    const antigo = await d1CreateChamado(env, { ...baseChamado, name: 'Antigo' });
+    await env.CHAMADOS_DB.prepare('UPDATE chamados SET date_created = ? WHERE id = ?').bind(1000, antigo.id).run();
+    const recente = await d1CreateChamado(env, { ...baseChamado, name: 'Recente' });
+    await env.CHAMADOS_DB.prepare('UPDATE chamados SET date_created = ? WHERE id = ?').bind(9_999_999, recente.id).run();
+
+    const m = await d1GetMetrics(env, { desde: 5000 });
+    assert.strictEqual(m.total, 1);
+  });
+
   console.log('--- automação de SLA embutida (Fase B5) ---');
   await test('"em atendimento" define start_date e due_date pela prioridade', async () => {
     const env = freshEnvComAutomacao(vapidPrivateJwk);

@@ -202,6 +202,13 @@ export type Metrics = {
   tempoMedioPorOperador: Record<string, OperadorTempo>
 }
 
-export async function fetchMetrics(secret: string): Promise<Metrics> {
-  return adminRequest(secret, "/metrics")
+// Fase A do roadmap pós-MVP-visual (2026-08-14): `desde`/`ate` (epoch ms, ambos
+// opcionais) filtram o agregado por período — `d1GetMetrics`/`handleAdminMetrics`
+// já suportam isso no servidor, sem migração de schema (`date_created` já existia).
+export async function fetchMetrics(secret: string, params?: { desde?: number; ate?: number }): Promise<Metrics> {
+  const qs = new URLSearchParams()
+  if (params?.desde != null) qs.set("desde", String(params.desde))
+  if (params?.ate != null) qs.set("ate", String(params.ate))
+  const query = qs.toString()
+  return adminRequest(secret, `/metrics${query ? `?${query}` : ""}`)
 }
