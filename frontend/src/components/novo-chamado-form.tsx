@@ -120,11 +120,16 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
         <p className="text-sm text-muted-foreground">{userName}</p>
       </div>
 
+      {/* min-w-0 nas colunas + w-full no trigger — achado 2026-08-15: SelectTrigger
+          do shadcn é `w-fit` por padrão (some texto/CSS), e um item de grid sem
+          min-w-0 nunca encolhe abaixo do conteúdo intrínseco ("grid blowout") — a
+          opção mais longa de TIPOS_FULL estourava a coluna e cortava o texto sem
+          reticências, o gatilho ficava mais largo que o card inteiro. */}
       <div className="grid gap-4 sm:grid-cols-2">
-        <div className="flex flex-col gap-1.5">
+        <div className="flex min-w-0 flex-col gap-1.5">
           <Label>Setor *</Label>
           <Select value={setor} onValueChange={setSetor}>
-            <SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger>
+            <SelectTrigger className="w-full"><SelectValue placeholder="Selecione..." /></SelectTrigger>
             <SelectContent>
               {SETORES.map((s) => (
                 <SelectItem key={s.orderindex} value={String(s.orderindex)}>{s.name}</SelectItem>
@@ -132,10 +137,10 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
             </SelectContent>
           </Select>
         </div>
-        <div className="flex flex-col gap-1.5">
+        <div className="flex min-w-0 flex-col gap-1.5">
           <Label>Tipo de solicitação *</Label>
           <Select value={tipo} onValueChange={setTipo}>
-            <SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger>
+            <SelectTrigger className="w-full"><SelectValue placeholder="Selecione..." /></SelectTrigger>
             <SelectContent>
               {TIPOS.map((t) => (
                 <SelectItem key={t.orderindex} value={String(t.orderindex)}>{TIPOS_FULL[t.orderindex]}</SelectItem>

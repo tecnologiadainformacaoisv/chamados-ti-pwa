@@ -194,7 +194,9 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 
 ## Estado atual do desenvolvimento
 
-> Última atualização: 2026-08-14
+> Última atualização: 2026-08-15
+
+- **🐛 Select de "Tipo de solicitação" estourava o card (grid blowout), corrigido (2026-08-15)** — usuário reportou print com o texto do dropdown passando da área visível, tanto no gatilho fechado (texto cortado sem reticências, caixa mais larga que o card) quanto no painel aberto (opções deslocadas pra fora da área visível). Causa: `SelectTrigger` do shadcn é `w-fit` por padrão, e a coluna do grid (`novo-chamado-form.tsx`, "Setor"/"Tipo de solicitação" lado a lado) não tinha `min-w-0` — um item de grid nunca encolhe abaixo do conteúdo intrínseco sem isso ("grid blowout" clássico de CSS), então a opção mais longa de `TIPOS_FULL` ("Plataformas (Google Drive, OMIE, Domínio e ZAPPY)") estourava a coluna. Corrigido com `min-w-0` nas duas colunas + `w-full` nos dois `SelectTrigger` (Setor também, por consistência) — texto agora trunca com reticências dentro da largura certa, e o painel abre alinhado ao card, sem vazar pra fora.
 
 - **🛡️ Auditoria do agente `revisor` (2026-08-14) sobre os 5 commits acumulados desde a última revisão** (logo, Fase A, Fase B, fix visual 2ª rodada) — nenhum achado crítico. 2 avisos e 2 sugestões, todos corrigidos no mesmo dia:
   - 🟡 **Seleção da ação em lote (`tasks-table.tsx`) ficava "fantasma" ao trocar filtro/refetch** — o `Set` de ids selecionados não reconciliava com a lista de chamados visível; selecionar linhas, mudar um filtro que as esconde, e aplicar uma ação em lote nesse estado afetaria chamados que o usuário não estava mais vendo. Corrigido com um `useEffect` que poda `selected` toda vez que `tasks` muda.
