@@ -153,6 +153,23 @@
   }
 }
 
+/* Scrollbar oculta no app do solicitante — existia no vanilla (css/style.css,
+   `html, body { scrollbar-width: none }` + `::-webkit-scrollbar { display: none }`)
+   e nunca foi portada na Fase F1/F4 (2026-08-11), achado real 2026-08-17. Scopado
+   por `.app-solicitante` no <body> de index.html (frontend/index.html) — de
+   propósito NÃO aplicado no admin (admin.html não tem essa classe): o painel tem
+   tabela/Kanban longos onde a barra de rolagem é um sinal útil pra quem trabalha
+   ali, o app do solicitante nunca precisou disso. O scroll continua funcionando
+   (mouse wheel/touch/teclado), só a barra visual some — mesmo comportamento do
+   app antigo, não trava a página numa altura fixa. */
+body.app-solicitante {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+body.app-solicitante::-webkit-scrollbar {
+  display: none;
+}
+
 /* Porta .task-highlight/@keyframes highlight-pulse de css/style.css — usado no deep-link
    de clique em notificação (F4.5), pra destacar o chamado certo depois de rolar até ele. */
 @keyframes highlight-pulse {
