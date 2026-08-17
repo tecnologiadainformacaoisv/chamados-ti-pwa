@@ -10,6 +10,7 @@ import { NovoChamadoForm } from "@/components/novo-chamado-form"
 import { TicketCard } from "@/components/ticket-card"
 import { WaModal } from "@/components/wa-modal"
 import { NotifBanner } from "@/components/notif-banner"
+import { OfflineBanner } from "@/components/offline-banner"
 import { fetchMyTasks, isAuthExpired } from "@/lib/app-api"
 import type { Task } from "@/lib/api"
 import logoIsv from "@/assets/logo-isv.svg"
@@ -93,6 +94,7 @@ function SolicitanteShell() {
     // bg-app-shell (não bg-muted/30) — achado 2026-08-14: bg-muted/30 lavava o fundo
     // quase pra branco puro; #f0f4f8 (index.css) é o valor real do vanilla.
     <div className="min-h-svh bg-app-shell">
+      <OfflineBanner />
       <header className="bg-brand-gradient flex h-16 items-center justify-between px-4 text-primary-foreground shadow-[0_2px_12px_rgba(0,0,0,0.2)]">
         <div className="flex items-center gap-3">
           {/* w-auto + brightness-0 invert — ver comentário em app-header.tsx
