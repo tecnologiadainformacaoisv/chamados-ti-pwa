@@ -11,6 +11,7 @@ import { TicketCard } from "@/components/ticket-card"
 import { WaModal } from "@/components/wa-modal"
 import { NotifBanner } from "@/components/notif-banner"
 import { OfflineBanner } from "@/components/offline-banner"
+import { InstallBanner } from "@/components/install-banner"
 import { fetchMyTasks, isAuthExpired } from "@/lib/app-api"
 import type { Task } from "@/lib/api"
 import logoIsv from "@/assets/logo-isv.svg"
@@ -159,6 +160,7 @@ function SolicitanteShell() {
       </main>
 
       <WaModal task={waTask?.task ?? null} slaLabel={waTask?.slaLabel ?? ""} anexoWarning={waTask?.anexoWarning} onClose={() => setWaTask(null)} />
+      <InstallBanner />
     </div>
   )
 }

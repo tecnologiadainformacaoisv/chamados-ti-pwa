@@ -170,6 +170,46 @@ body.app-solicitante::-webkit-scrollbar {
   display: none;
 }
 
+/* Modal em bottom-sheet no mobile, só no app do solicitante — existia no
+   vanilla (css/style.css, `@media (max-width:600px)`: `.modal-card` virava
+   full-width com cantos arredondados só em cima, `.modal` colava embaixo da
+   tela) e nunca foi portado quando o Dialog virou React (achado 2026-08-17,
+   varredura completa pedida pelo usuário). `ui/dialog.tsx` é compartilhado
+   com o admin — escopado por `body.app-solicitante` de propósito, porque
+   `css/admin.css` nunca definiu esse comportamento (TI não usava o painel no
+   celular no vanilla). Especificidade do seletor (elemento+classe+atributo)
+   já basta pra vencer as utilities do Tailwind sem precisar de `!important`. */
+@media (max-width: 600px) {
+  body.app-solicitante [data-slot="dialog-content"] {
+    /* !important em tudo — evita depender de especificidade contra as
+       utilities do Tailwind. --tw-translate-x/y (não `translate`/`transform`
+       direto) — achado depurando isto (2026-08-17), 2 camadas de surpresa:
+       (1) Tailwind v4 compila `-translate-x-1/2`/`-translate-y-1/2` pra
+       propriedade CSS `translate` (separada de `transform`, recurso moderno
+       que compõe independente — CSS Transforms Level 2), então só zerar
+       `transform` não bastava; (2) `translate: none !important` sozinho
+       TAMBÉM não bastava — o minificador (Lightning CSS) fundia meu
+       `transform:none` + `translate:none` num `transform:translate(0)` só,
+       silenciosamente perdendo o override da propriedade `translate` de
+       verdade. A saída robusta: sobrescrever as CUSTOM PROPERTIES que as
+       próprias utilities do Tailwind já usam (`--tw-translate-x/y`, lidas
+       por `translate:var(--tw-translate-x) var(--tw-translate-y)` no CSS
+       compilado do Tailwind) — não sobra nenhum `translate`/`transform` meu
+       pro minificador fundir errado. */
+    top: auto !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    --tw-translate-x: 0 !important;
+    --tw-translate-y: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 85svh !important;
+    border-radius: 1rem 1rem 0 0 !important;
+    margin: 0 !important;
+  }
+}
+
 /* Porta .task-highlight/@keyframes highlight-pulse de css/style.css — usado no deep-link
    de clique em notificação (F4.5), pra destacar o chamado certo depois de rolar até ele. */
 @keyframes highlight-pulse {
