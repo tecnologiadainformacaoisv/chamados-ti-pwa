@@ -54,8 +54,12 @@ function AlertDescription({
   return (
     <div
       data-slot="alert-description"
+      // min-w-0 break-words — achado do revisor (2026-08-17): `Alert` é `grid`, e
+      // `AlertDescription` (item direto) sem min-w-0 deixava mensagens de erro
+      // (`err.message`, geralmente sem espaço garantido — URL, id, stack) estourar o
+      // container inteiro, mesmo bug de produção do título de chamado.
       className={cn(
-        "text-sm text-balance text-muted-foreground md:text-pretty [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground [&_p:not(:last-child)]:mb-4",
+        "min-w-0 text-sm text-balance break-words text-muted-foreground md:text-pretty [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground [&_p:not(:last-child)]:mb-4",
         className
       )}
       {...props}

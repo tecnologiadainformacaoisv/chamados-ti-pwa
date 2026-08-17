@@ -121,11 +121,16 @@ export function TaskModal({
           <DialogTitle>{task.name || "(sem título)"}</DialogTitle>
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto pr-1">
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1.5">
+        <div className="min-w-0 flex-1 overflow-y-auto pr-1">
+        <div className="flex min-w-0 flex-col gap-4">
+          <div className="flex min-w-0 flex-col gap-1.5">
             <Label>Descrição (o que o solicitante escreveu)</Label>
-            <div className="max-h-36 overflow-y-auto rounded-md border border-border bg-muted/40 p-2.5 text-sm whitespace-pre-line text-foreground">
+            {/* min-w-0 + break-words — achado 2026-08-17: descrição é texto livre e
+                SEM limite de tamanho no formulário ("Detalhes adicionais" não tem
+                maxLength); sem isso, uma linha comprida sem espaço estourava a
+                largura do modal inteiro (mesmo bug visto em produção no alerta de
+                chamado novo). */}
+            <div className="max-h-36 min-w-0 overflow-y-auto rounded-md border border-border bg-muted/40 p-2.5 text-sm break-words whitespace-pre-line text-foreground">
               {task.description || task.text_content || "(sem descrição)"}
             </div>
           </div>
@@ -194,16 +199,18 @@ export function TaskModal({
             ) : eventosQuery.data?.eventos.length === 0 ? (
               <p className="text-xs text-muted-foreground">Nenhum evento ainda.</p>
             ) : (
-              <ul className="flex max-h-48 flex-col gap-2.5 overflow-y-auto">
+              <ul className="flex max-h-48 min-w-0 flex-col gap-2.5 overflow-y-auto">
                 {eventosQuery.data?.eventos.map((ev) => (
-                  <li key={ev.id} className="text-sm">
+                  <li key={ev.id} className="min-w-0 text-sm">
                     {ev.tipo === "nota" ? (
-                      <div className="rounded-md border border-border bg-muted/40 p-2.5">
-                        <div className="mb-0.5 flex items-baseline justify-between gap-2">
-                          <span className="font-medium">{ev.autor}</span>
-                          <span className="text-xs text-muted-foreground">{fmtDate(ev.created_at)}</span>
+                      <div className="min-w-0 rounded-md border border-border bg-muted/40 p-2.5">
+                        <div className="mb-0.5 flex min-w-0 items-baseline justify-between gap-2">
+                          <span className="truncate font-medium">{ev.autor}</span>
+                          <span className="shrink-0 text-xs text-muted-foreground">{fmtDate(ev.created_at)}</span>
                         </div>
-                        <p className="whitespace-pre-line text-foreground">{ev.texto}</p>
+                        {/* break-words — nota interna é texto livre digitado pela TI,
+                            sem limite de tamanho, mesmo risco de overflow. */}
+                        <p className="break-words whitespace-pre-line text-foreground">{ev.texto}</p>
                       </div>
                     ) : (
                       <p className="text-xs text-muted-foreground">

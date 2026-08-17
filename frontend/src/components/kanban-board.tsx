@@ -42,7 +42,10 @@ export function KanbanBoard({
         const list = byStatus[statusKey]
         const shown = list.slice(0, KANBAN_CARD_LIMIT)
         return (
-          <div key={statusKey} className="flex flex-col rounded-lg border border-border bg-muted/40">
+          // min-w-0 na coluna (item do grid xl:grid-cols-4 acima) — achado 2026-08-17:
+          // sem isso, um card com texto sem quebra natural podia estourar a largura
+          // da própria coluna, não só do card.
+          <div key={statusKey} className="flex min-w-0 flex-col rounded-lg border border-border bg-muted/40">
             <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
               <div className="flex items-center gap-2">
                 <span className="h-2.5 w-2.5 rounded-full" style={{ background: STATUS_MAP[statusKey].dot }} />
@@ -52,7 +55,7 @@ export function KanbanBoard({
             </div>
             <div
               data-status={statusKey}
-              className={`flex min-h-40 flex-1 flex-col gap-2 p-2 transition-colors ${dragOverCol === statusKey ? "bg-accent/20" : ""}`}
+              className={`flex min-h-40 min-w-0 flex-1 flex-col gap-2 p-2 transition-colors ${dragOverCol === statusKey ? "bg-accent/20" : ""}`}
               onDragOver={(e) => {
                 e.preventDefault()
                 setDragOverCol(statusKey)
@@ -124,7 +127,9 @@ function KanbanCard({
         isDragging ? "opacity-40" : ""
       } ${atrasado ? "border-destructive/50" : "border-border"}`}
     >
-      <p className="mb-2 line-clamp-2 text-sm font-medium text-foreground" title={task.name}>
+      {/* break-words — achado 2026-08-17: line-clamp sozinho não impede overflow
+          HORIZONTAL de uma palavra/string comprida sem espaço, só limita altura. */}
+      <p className="mb-2 line-clamp-2 text-sm font-medium break-words text-foreground" title={task.name}>
         {task.name || "(sem título)"}
       </p>
       <div className="mb-2 flex flex-wrap gap-1">

@@ -47,14 +47,17 @@ export function NovoChamadoAlert({ fila, onFechar }: { fila: Task[]; onFechar: (
           </DialogTitle>
         </DialogHeader>
 
-        <div className="flex flex-col gap-3">
-          <p className="text-lg font-semibold text-foreground">{task.name || "(sem título)"}</p>
-          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-            <span className="rounded-full border border-border px-2 py-0.5">{task.solicitante || "—"}</span>
+        <div className="flex min-w-0 flex-col gap-3">
+          {/* break-words — achado 2026-08-17: título é texto livre do solicitante
+              (sem espaço garantido), uma string comprida sem quebra natural
+              estourava a largura do modal inteiro (visto em produção). */}
+          <p className="text-lg font-semibold break-words text-foreground">{task.name || "(sem título)"}</p>
+          <div className="flex min-w-0 flex-wrap gap-2 text-xs text-muted-foreground">
+            <span className="max-w-full truncate rounded-full border border-border px-2 py-0.5">{task.solicitante || "—"}</span>
             <span className="rounded-full border border-border px-2 py-0.5">{tipo}</span>
             <span className="rounded-full border border-border px-2 py-0.5">{setor}</span>
           </div>
-          <div className="max-h-40 overflow-y-auto rounded-md border border-border bg-muted/40 p-2.5 text-sm whitespace-pre-line text-foreground">
+          <div className="max-h-40 min-w-0 overflow-y-auto rounded-md border border-border bg-muted/40 p-2.5 text-sm break-words whitespace-pre-line text-foreground">
             {task.description || task.text_content || "(sem descrição)"}
           </div>
 

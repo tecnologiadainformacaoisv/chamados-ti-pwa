@@ -109,7 +109,11 @@ function CompactSelect({
 }) {
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger size="sm" className="h-8 bg-transparent text-xs font-medium">
+      {/* max-w-48 — achado do revisor (2026-08-17): SelectTrigger é w-fit por padrão;
+          nome de solicitante (cadastro livre em usuarios-view.tsx, sem limite) podia
+          alargar o chip indefinidamente na barra de filtros. line-clamp-1 já herdado
+          do SelectTrigger cuida da reticência dentro dessa largura. */}
+      <SelectTrigger size="sm" className="h-8 max-w-48 bg-transparent text-xs font-medium">
         <SelectValue placeholder={placeholder}>{value === TODOS ? placeholder : undefined}</SelectValue>
       </SelectTrigger>
       <SelectContent>

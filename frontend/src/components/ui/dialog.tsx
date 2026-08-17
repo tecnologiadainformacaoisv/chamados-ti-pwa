@@ -92,7 +92,13 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-header"
-      className={cn("flex flex-col gap-2", className)}
+      // min-w-0 — achado do revisor (2026-08-17): DialogHeader é item direto do
+      // grid/flex do DialogContent; sem min-w-0, o `break-words` do DialogTitle
+      // (ver acima) não bastava sozinho — overflow-wrap:break-word não reduz o
+      // min-content do CONTAINER pai, só do próprio texto. Sem isso, um DialogTitle
+      // com texto livre longo (ex.: task-modal.tsx, anexo-modal.tsx) continuava
+      // estourando o modal mesmo já "quebrando" a palavra.
+      className={cn("flex min-w-0 flex-col gap-2", className)}
       {...props}
     />
   )
@@ -132,8 +138,12 @@ function DialogTitle({
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
+      // break-words (não só leading-none/font-medium) — achado 2026-08-17: título de
+      // chamado é texto livre do solicitante (sem espaço garantido), sem isso uma
+      // string comprida sem quebra natural estourava a largura do modal inteiro
+      // (visto em produção, ver novo-chamado-alert.tsx/task-modal.tsx).
       className={cn(
-        "text-base leading-none font-medium",
+        "text-base leading-none font-medium break-words",
         className
       )}
       {...props}

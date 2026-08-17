@@ -70,8 +70,13 @@ export function TicketCard({ task }: { task: Task }) {
         </div>
       )}
 
-      <p className="mb-1 font-semibold text-foreground">{task.name || "(sem título)"}</p>
-      {desc && <p className="mb-2 text-sm text-muted-foreground">{desc}</p>}
+      {/* break-words — achado 2026-08-17: título/descrição são texto livre do próprio
+          solicitante (descrição sem limite de tamanho nenhum), sem isso uma string
+          comprida sem espaço estourava a largura do card inteiro (visto em produção
+          num caso parecido, ver novo-chamado-alert.tsx). Card mais visto por usuários
+          reais no app — prioridade alta pra esse fix. */}
+      <p className="mb-1 font-semibold break-words text-foreground">{task.name || "(sem título)"}</p>
+      {desc && <p className="mb-2 text-sm break-words text-muted-foreground">{desc}</p>}
 
       <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
         <span>{tipoName}</span>
@@ -89,9 +94,11 @@ export function TicketCard({ task }: { task: Task }) {
               key={`${a.url}-${i}`}
               type="button"
               onClick={() => setAnexoAberto(a)}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
+              title={a.title || a.name || "arquivo"}
+              className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
             >
-              <Paperclip className="h-3 w-3" /> {a.title || a.name || "arquivo"}
+              <Paperclip className="h-3 w-3 shrink-0" />
+              <span className="min-w-0 truncate">{a.title || a.name || "arquivo"}</span>
             </button>
           ))}
         </div>
@@ -100,7 +107,9 @@ export function TicketCard({ task }: { task: Task }) {
       {solucao && (
         <div className="mt-3 rounded-md border border-[#22c55e]/30 bg-[#22c55e]/10 p-2.5 text-sm">
           <p className="mb-0.5 text-xs font-semibold text-[#166534]">Solução aplicada</p>
-          <p className="text-foreground">{solucao}</p>
+          {/* break-words — solução também é texto livre (escrito pela TI, sem limite
+              de tamanho), mesmo risco de overflow. */}
+          <p className="break-words text-foreground">{solucao}</p>
         </div>
       )}
 

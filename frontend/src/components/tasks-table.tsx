@@ -294,7 +294,7 @@ function TaskRow({
           "—"
         )}
       </td>
-      <td className="px-3 py-2">{solNome}</td>
+      <td className="max-w-40 truncate px-3 py-2" title={solNome}>{solNome}</td>
       <td className="px-3 py-2">
         {/* Edição inline (Fase A, 2026-08-14) — pré-seleciona só o 1º operador, mesma
             simplificação que o modal "Gerenciar" já faz; escolher aqui substitui quem

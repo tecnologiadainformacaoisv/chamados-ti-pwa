@@ -13,6 +13,12 @@ import { CATEGORIA_PRIORIDADE, MAX_ANEXO_MB, OPERADORES, PRIORITY, SETORES, SETO
 import type { Task } from "@/lib/api"
 
 const DESCRICAO_MAX = 300
+// Achado 2026-08-17: "Detalhes adicionais" nunca teve limite nenhum (diferente de
+// "Descrição do problema", já capado em 300) — texto sem limite é o pior caso pro
+// bug de overflow visto em produção (uma linha comprida sem espaço estourando a
+// largura de cards/modais). Mesmo limite generoso o bastante pra não incomodar uso
+// normal, só fecha o caso extremo.
+const DETALHES_MAX = 1000
 
 // Porta populateForm()/onFormSubmit() de app.js — SOLICITANTE nunca vai no corpo: o
 // Worker sempre resolve pela sessão (handleCreateTask em push-worker.js), o mesmo aqui.
@@ -180,7 +186,14 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
 
       <div className="flex flex-col gap-1.5">
         <Label>Detalhes adicionais (opcional)</Label>
-        <Textarea rows={3} placeholder="Mais informações, se precisar..." value={detalhes} onChange={(e) => setDetalhes(e.target.value)} />
+        <Textarea
+          rows={3}
+          maxLength={DETALHES_MAX}
+          placeholder="Mais informações, se precisar..."
+          value={detalhes}
+          onChange={(e) => setDetalhes(e.target.value)}
+        />
+        <p className="text-right text-xs text-muted-foreground">{detalhes.length}/{DETALHES_MAX}</p>
       </div>
 
       <div className="flex flex-col gap-1.5">
@@ -195,9 +208,10 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
         {anexos.length > 0 && (
           <div className="flex flex-wrap gap-2 pt-1">
             {anexos.map((f, i) => (
-              <span key={`${f.name}-${i}`} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted px-2.5 py-1 text-xs">
-                📎 {f.name}
-                <button type="button" onClick={() => removerAnexo(i)} aria-label="Remover anexo" className="text-muted-foreground hover:text-foreground">
+              <span key={`${f.name}-${i}`} title={f.name} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border bg-muted px-2.5 py-1 text-xs">
+                <span className="shrink-0">📎</span>
+                <span className="min-w-0 truncate">{f.name}</span>
+                <button type="button" onClick={() => removerAnexo(i)} aria-label="Remover anexo" className="shrink-0 text-muted-foreground hover:text-foreground">
                   <X className="h-3 w-3" />
                 </button>
               </span>
