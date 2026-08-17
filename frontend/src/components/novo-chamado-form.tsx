@@ -115,17 +115,16 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
         <p className="text-sm text-primary-foreground/70">Preencha os dados abaixo pra abrir um chamado de suporte</p>
       </div>
       <form onSubmit={handleSubmit} onPaste={handlePaste} className="flex flex-col gap-4 p-6">
-      <div className="flex flex-col gap-1.5">
-        <Label>Solicitante</Label>
-        <p className="text-sm text-muted-foreground">{userName}</p>
-      </div>
-
-      {/* min-w-0 nas colunas + w-full no trigger — achado 2026-08-15: SelectTrigger
-          do shadcn é `w-fit` por padrão (some texto/CSS), e um item de grid sem
-          min-w-0 nunca encolhe abaixo do conteúdo intrínseco ("grid blowout") — a
-          opção mais longa de TIPOS_FULL estourava a coluna e cortava o texto sem
-          reticências, o gatilho ficava mais largo que o card inteiro. */}
+      {/* Solicitante + Setor pareados na mesma linha (pedido do usuário, 2026-08-15:
+          "coloque o Setor do lado de solicitante") — simétrico, mesma largura de
+          coluna pros dois. Tipo de solicitação desceu pra sua própria linha, largura
+          cheia, alinhada com Descrição/Detalhes/Anexo/botão abaixo — mesmo respiro
+          que o resto do formulário, em vez de dividir espaço com Setor. */}
       <div className="grid gap-4 sm:grid-cols-2">
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <Label>Solicitante</Label>
+          <p className="text-sm text-muted-foreground">{userName}</p>
+        </div>
         <div className="flex min-w-0 flex-col gap-1.5">
           <Label>Setor *</Label>
           <Select value={setor} onValueChange={setSetor}>
@@ -137,17 +136,22 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
             </SelectContent>
           </Select>
         </div>
-        <div className="flex min-w-0 flex-col gap-1.5">
-          <Label>Tipo de solicitação *</Label>
-          <Select value={tipo} onValueChange={setTipo}>
-            <SelectTrigger className="w-full"><SelectValue placeholder="Selecione..." /></SelectTrigger>
-            <SelectContent>
-              {TIPOS.map((t) => (
-                <SelectItem key={t.orderindex} value={String(t.orderindex)}>{TIPOS_FULL[t.orderindex]}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+      </div>
+
+      {/* min-w-0 + w-full no trigger — achado 2026-08-15: SelectTrigger do shadcn é
+          `w-fit` por padrão, e um item de grid/flex sem min-w-0 nunca encolhe abaixo
+          do conteúdo intrínseco ("grid blowout") — a opção mais longa de TIPOS_FULL
+          estourava o container e cortava o texto sem reticências. */}
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <Label>Tipo de solicitação *</Label>
+        <Select value={tipo} onValueChange={setTipo}>
+          <SelectTrigger className="w-full"><SelectValue placeholder="Selecione..." /></SelectTrigger>
+          <SelectContent>
+            {TIPOS.map((t) => (
+              <SelectItem key={t.orderindex} value={String(t.orderindex)}>{TIPOS_FULL[t.orderindex]}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="flex flex-col gap-1.5">
