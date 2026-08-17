@@ -13,6 +13,12 @@ dist-ssr
 dev-dist
 *.local
 
+# Suíte E2E (Playwright, 2026-08-17) — artefatos de execução, não código
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

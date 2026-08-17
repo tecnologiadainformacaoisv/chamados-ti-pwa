@@ -1,0 +1,54 @@
+name: Testes E2E do Frontend (Playwright)
+
+# Suíte permanente (2026-08-17, pedido explícito do usuário) — roda contra o build
+# real de produção (`npm run build`), rede toda mockada (page.route), cobrindo os
+# fluxos principais dos dois apps (solicitante + admin) e as regressões visuais já
+# achadas nesta sessão (scrollbar, overflow de texto livre, bottom-sheet mobile).
+#
+# De propósito NÃO bloqueia o deploy (decisão explícita do usuário) — workflow
+# separado do deploy-frontend.yml, sem nenhum `needs:` ligando os dois. Se um teste
+# falhar, o GitHub Pages publica normalmente mesmo assim; a falha só fica visível
+# aqui (aba Actions) como um segundo par de olhos automático, não um gate.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/e2e-frontend.yml"
+  pull_request:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/e2e-frontend.yml"
+  workflow_dispatch: {} # permite rodar manualmente em Actions → Run workflow, se precisar
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar dependências
+        working-directory: frontend
+        run: npm ci
+
+      - name: Instalar navegador do Playwright (só Chromium)
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Rodar suíte E2E (build real + rede mockada)
+        working-directory: frontend
+        run: npm run test:e2e
+
+      - name: Publicar relatório (só quando algum teste falha)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 14
