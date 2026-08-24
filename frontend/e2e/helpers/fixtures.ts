@@ -114,6 +114,7 @@ export async function mockAdminRoutes(
   await on(page, /\/admin\/tasks\/[^/]+\/eventos/, "GET", (route) => fulfillJson(route, { eventos }))
   await on(page, /\/admin\/tasks\/[^/]+\/eventos/, "POST", (route) => fulfillJson(route, { evento: { id: "ev-nova", tipo: "nota", autor: "x", texto: "y", de_valor: null, para_valor: null, created_at: Date.now() } }))
   await on(page, /\/admin\/tasks\/bulk/, "POST", (route) => fulfillJson(route, { total: 0, sucesso: 0, falha: 0, results: [] }))
+  await on(page, /\/admin\/tasks\/[^/]+\/delete$/, "POST", (route) => fulfillJson(route, { ok: true }))
   await on(page, /\/admin\/tasks\/[^/]+$/, "POST", (route) => {
     const body = route.request().postDataJSON() as Record<string, unknown>
     return fulfillJson(route, makeTask({ status: { status: body.status ?? "aberto" } }))

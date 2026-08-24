@@ -93,6 +93,25 @@ export async function postTaskUpdate(secret: string, taskId: string, body: Updat
   return res.json()
 }
 
+// Exclusão de verdade (2026-08-17, pedido do usuário) — DESTRUTIVO e IRREVERSÍVEL,
+// apaga o chamado + anexos (D1 e R2) + histórico no servidor (ver d1DeleteChamado em
+// push-worker.js). POST (não DELETE) por convenção — esta API nunca usou o verbo
+// DELETE em lugar nenhum. Sem confirmação em duas etapas no servidor — quem chama
+// confirma antes (ver task-modal.tsx).
+export async function deleteTask(secret: string, taskId: string): Promise<void> {
+  const res = await fetch(`${ADMIN_BASE}/tasks/${taskId}/delete`, {
+    method: "POST",
+    headers: { "X-Admin-Secret": secret },
+  })
+  if (res.status === 403) {
+    throw new AdminApiError("Segredo de admin inválido ou expirado. Entre de novo.", 403)
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}) as { error?: string })
+    throw new AdminApiError(data.error || `Erro HTTP ${res.status}`, res.status)
+  }
+}
+
 // Histórico + comentários por chamado (Fase B do roadmap pós-MVP-visual, 2026-08-14)
 // — mesmo conceito do drawer de detalhe já validado no Artifact do MVP visual.
 // `tipo: 'nota'` = escrita manual pela TI (autor/texto preenchidos); `'status'`/

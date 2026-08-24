@@ -151,6 +151,13 @@ export default {
       if (pathname === '/admin/tasks/bulk') return handleAdminBulkUpdateTasks(request, env);
       const eventoPostMatch = pathname.match(/^\/admin\/tasks\/([^/]+)\/eventos$/);
       if (eventoPostMatch) return handleAdminCreateEvento(request, env, eventoPostMatch[1]);
+      // Exclusão (2026-08-17) — checado ANTES do match genérico de single-id logo
+      // abaixo, mesmo motivo do /eventos acima (senão bateria com o regex de
+      // single-segment, que não tem essa sub-rota). POST (não DELETE) por convenção:
+      // esta API nunca usou o verbo DELETE em lugar nenhum (CORS só libera GET/POST/
+      // OPTIONS, ver const CORS) — toda mutação aqui é POST num path específico.
+      const adminDeleteMatch = pathname.match(/^\/admin\/tasks\/([^/]+)\/delete$/);
+      if (adminDeleteMatch) return handleAdminDeleteTask(request, env, adminDeleteMatch[1]);
       if (pathname === '/admin/migrate-schema-chamado-eventos') return handleAdminMigrateSchemaChamadoEventos(request, env);
       const adminUpdateMatch = pathname.match(/^\/admin\/tasks\/([^/]+)$/);
       if (adminUpdateMatch) return handleAdminUpdateTask(request, env, adminUpdateMatch[1]);
@@ -1262,6 +1269,45 @@ async function d1UpdateChamado(env, id, patch, assigneeIdsForSync) {
   return d1GetChamado(env, id);
 }
 
+// Exclusão de verdade (2026-08-17, pedido do usuário: "fiz uns testes e gostaria de
+// excluí-los a partir do admin") — DESTRUTIVO e IRREVERSÍVEL, de propósito diferente
+// do resto do painel, que sempre preferiu "desativar"/"sem atribuição" a apagar de vez
+// (ver solicitantes.ativo, "Sem atribuição" no lugar de excluir operador). Sem
+// FOREIGN KEY nenhuma no schema (ver d1/schema.sql), então limpa as 3 tabelas
+// relacionadas manualmente, na mesma transação (.batch()) da linha principal — mesmo
+// padrão de atomicidade que d1UpdateChamado já usa com assigneeIdsForSync. Anexos no
+// R2 são apagados ANTES do D1, best-effort (Promise.allSettled — um objeto que já não
+// existe mais no bucket, ou uma falha pontual do R2, não pode travar a exclusão do
+// chamado em si; o pior caso vira um arquivo órfão no bucket, não um chamado que
+// devia ter sumido e não sumiu).
+async function d1DeleteChamado(env, id) {
+  const anexos = await d1ListAnexos(env, id);
+  await Promise.allSettled(anexos.map(a => r2DeleteAnexo(env, a.r2_key)));
+
+  await env.CHAMADOS_DB.batch([
+    env.CHAMADOS_DB.prepare('DELETE FROM chamados WHERE id = ?').bind(id),
+    env.CHAMADOS_DB.prepare('DELETE FROM chamado_assignees WHERE chamado_id = ?').bind(id),
+    env.CHAMADOS_DB.prepare('DELETE FROM chamado_anexos WHERE chamado_id = ?').bind(id),
+    env.CHAMADOS_DB.prepare('DELETE FROM chamado_eventos WHERE chamado_id = ?').bind(id),
+  ]);
+}
+
+// =====================================================================
+// POST /admin/tasks/:id/delete — apaga um chamado de vez. Protegido por ADMIN_SECRET,
+// mesmo padrão de toda rota /admin/*. Sem confirmação em duas etapas no servidor — o
+// frontend confirma antes de chamar (ver task-modal.tsx); aqui só confere que o
+// chamado existe antes de apagar (404 se não).
+// =====================================================================
+async function handleAdminDeleteTask(request, env, taskId) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+
+  const chamado = await d1GetChamado(env, taskId);
+  if (!chamado) return jsonRes({ error: 'chamado não encontrado' }, 404);
+
+  await d1DeleteChamado(env, taskId);
+  return jsonRes({ ok: true });
+}
+
 // Mesmo shape de resposta de handleAdminMetrics (porStatus/porTipo/porSetor/sla/
 // tempoMedioPorOperador) — de propósito, pra um dia trocar a fonte sem quebrar o
 // contrato que admin.js já consome. nome vem null (D1 não guarda nome do operador,
@@ -1944,4 +1990,4 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
   return updated;
 }
 
-export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees, d1ListSolicitantes, d1IsSolicitanteAtivo, d1CreateSolicitante, d1SetSolicitanteAtivo, d1ListAnexos, d1GetAnexoRow, d1LogEvento, d1CreateEvento, d1ListEventos };
+export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1DeleteChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees, d1ListSolicitantes, d1IsSolicitanteAtivo, d1CreateSolicitante, d1SetSolicitanteAtivo, d1ListAnexos, d1GetAnexoRow, d1LogEvento, d1CreateEvento, d1ListEventos };

@@ -77,6 +77,59 @@ test.describe("Modal 'Gerenciar' — edição", () => {
   })
 })
 
+// Exclusão de verdade (2026-08-17, pedido do usuário: "fiz uns testes e gostaria de
+// excluí-los a partir do admin") — DESTRUTIVA e IRREVERSÍVEL, com confirm() nativo
+// antes de chamar o servidor (ver task-modal.tsx).
+test.describe("Modal 'Gerenciar' — exclusão", () => {
+  test("confirmar excluir chama POST /admin/tasks/:id/delete e fecha o modal", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga" })] })
+    await gotoAdminLoggedIn(page)
+    await abrirModal(page)
+
+    let deleteCalled = false
+    await page.route(/\/admin\/tasks\/t1\/delete$/, (route) => {
+      if (route.request().method() === "OPTIONS") return route.fallback()
+      deleteCalled = true
+      return route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' })
+    })
+    page.on("dialog", (d) => d.accept())
+    await page.getByRole("button", { name: "Excluir" }).click()
+
+    await expect.poll(() => deleteCalled).toBe(true)
+    await expect(page.getByRole("dialog")).not.toBeVisible()
+  })
+
+  test("cancelar a confirmação não chama o servidor nem fecha o modal", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga" })] })
+    let deleteCalled = false
+    await page.route(/\/admin\/tasks\/t1\/delete$/, (route) => {
+      deleteCalled = true
+      return route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' })
+    })
+    await gotoAdminLoggedIn(page)
+    await abrirModal(page)
+    page.on("dialog", (d) => d.dismiss())
+    await page.getByRole("button", { name: "Excluir" }).click()
+    await page.waitForTimeout(300)
+    expect(deleteCalled).toBe(false)
+    await expect(page.getByRole("dialog")).toBeVisible()
+  })
+
+  test("erro do servidor ao excluir mostra alerta e mantém o modal aberto", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga" })] })
+    await page.route(/\/admin\/tasks\/t1\/delete$/, (route) => {
+      if (route.request().method() === "OPTIONS") return route.fallback()
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Não foi possível excluir agora." }) })
+    })
+    await gotoAdminLoggedIn(page)
+    await abrirModal(page)
+    page.on("dialog", (d) => d.accept())
+    await page.getByRole("button", { name: "Excluir" }).click()
+    await expect(page.getByText("Não foi possível excluir agora.")).toBeVisible()
+    await expect(page.getByRole("dialog")).toBeVisible()
+  })
+})
+
 test.describe("Modal 'Gerenciar' — histórico e notas", () => {
   test("mostra timeline com evento automático e nota manual", async ({ page }) => {
     const eventos = [

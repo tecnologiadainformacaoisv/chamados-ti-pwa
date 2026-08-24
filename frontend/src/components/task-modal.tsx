@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { OPERADORES, SOLUCAO_FIELD_ID, STATUS_MAP, STATUS_ORDER } from "@/lib/constants"
-import { getCF, fetchEventos, postEvento, isSessionError, fmtDate, type ChamadoEvento, type Task, type UpdatePayload } from "@/lib/api"
+import { getCF, fetchEventos, postEvento, deleteTask, isSessionError, fmtDate, type ChamadoEvento, type Task, type UpdatePayload } from "@/lib/api"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 
 const SEM_ATRIBUICAO = "__sem__"
@@ -63,6 +63,31 @@ export function TaskModal({
   const [notaAutor, setNotaAutor] = useState(SEM_ATRIBUICAO)
   const [notaTexto, setNotaTexto] = useState("")
   const [notaError, setNotaError] = useState<string | null>(null)
+
+  // Exclusão de verdade (2026-08-17, pedido do usuário) — DESTRUTIVA e IRREVERSÍVEL,
+  // de propósito diferente do resto do painel (que sempre preferiu "desativar"/"sem
+  // atribuição" a apagar de vez). Confirmação via confirm() nativo — mesmo padrão já
+  // usado pra "Sair"/"Desconectar" (app-header.tsx/SolicitanteApp.tsx), sem introduzir
+  // um componente de diálogo de confirmação novo só pra isso.
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteTask(secret, task!.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-tasks"] })
+      queryClient.invalidateQueries({ queryKey: ["admin-open-count"] })
+      onClose()
+    },
+    onError: (err) => {
+      if (isSessionError(err)) { logout(); return }
+      setDeleteError(err instanceof Error ? err.message : "Não foi possível excluir o chamado.")
+    },
+  })
+  function handleDelete() {
+    if (!task) return
+    if (!confirm(`Excluir o chamado "${task.name || "(sem título)"}" de vez? Essa ação não pode ser desfeita.`)) return
+    setDeleteError(null)
+    deleteMutation.mutate()
+  }
   const notaMutation = useMutation({
     mutationFn: () => {
       const nomeAutor = OPERADORES[notaAutor] ?? notaAutor
@@ -88,6 +113,7 @@ export function TaskModal({
     setNotaAutor(SEM_ATRIBUICAO)
     setNotaTexto("")
     setNotaError(null)
+    setDeleteError(null)
     const statusKey = (task.status?.status || "").toLowerCase()
     if (Object.prototype.hasOwnProperty.call(STATUS_MAP, statusKey)) {
       setStatus(statusKey)
@@ -259,7 +285,25 @@ export function TaskModal({
         </div>
         </div>
 
+        {deleteError && (
+          <Alert variant="destructive">
+            <AlertDescription>{deleteError}</AlertDescription>
+          </Alert>
+        )}
+
         <DialogFooter>
+          {/* Excluir separado dos outros dois (mr-auto empurra pra esquerda em telas
+              maiores; primeiro no DOM = último visualmente no empilhamento mobile,
+              longe do polegar de quem só quer Cancelar/Salvar). Ação destrutiva e
+              irreversível, de propósito num variant/posição diferente do resto. */}
+          <Button
+            variant="destructive"
+            className="sm:mr-auto"
+            onClick={handleDelete}
+            disabled={saving || deleteMutation.isPending}
+          >
+            {deleteMutation.isPending ? "Excluindo…" : "Excluir"}
+          </Button>
           <Button variant="outline" onClick={onClose} disabled={saving}>
             Cancelar
           </Button>

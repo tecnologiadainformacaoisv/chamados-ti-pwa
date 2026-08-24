@@ -1046,6 +1046,64 @@ async function test(name, fn) {
     assert.deepStrictEqual(results, [], 'assigneeId:null deveria remover todo mundo da tabela de junção também');
   });
 
+  console.log('--- POST /admin/tasks/:id/delete (exclusão de verdade, 2026-08-17) ---');
+  await test('sem X-Admin-Secret dá 403', async () => {
+    const id = await criarChamadoTeste();
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}/delete`), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('chamado inexistente dá 404', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks/nao-existe-no-d1/delete', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+    }), env);
+    assert.strictEqual(res.status, 404);
+  });
+  await test('apaga o chamado — some do D1, GET /admin/tasks/:id vira 404', async () => {
+    const id = await criarChamadoTeste();
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}/delete`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+    }), env);
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(await res.json(), { ok: true });
+    assert.strictEqual(await d1GetChamado(env, id), null);
+  });
+  await test('apaga também assignees, anexos (D1 + R2) e eventos — sem deixar rastro órfão', async () => {
+    const id = await criarChamadoTeste({ assignee_id: 170628721, assignee_ids: [170628721, 200498355] });
+    // nota manual (evento) + anexo de verdade (R2), pra confirmar que a exclusão em
+    // cascata limpa TUDO que está ligado a este chamado, não só a linha principal.
+    await worker.fetch(req('POST', `/admin/tasks/${id}/eventos`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ autor: 'Henrique', texto: 'nota de teste' }),
+    }), env);
+    const uploadRes = await worker.fetch(req('POST', `/api/tasks/${id}/attachment`, {
+      headers: { 'X-App-Secret': env.SUBSCRIBE_SECRET, 'X-Session-Token': token },
+      body: fakeAnexoFormData(),
+    }), env);
+    assert.strictEqual(uploadRes.status, 200, 'pré-condição: upload do anexo de teste precisa ter dado certo');
+    const anexosAntes = await d1ListAnexos(env, id);
+    assert.strictEqual(anexosAntes.length, 1);
+    const r2Key = anexosAntes[0].r2_key;
+    assert.ok(await env.ANEXOS.get(r2Key), 'pré-condição: objeto precisa existir no R2 antes de apagar');
+
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}/delete`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+    }), env);
+    assert.strictEqual(res.status, 200);
+
+    assert.strictEqual(await d1GetChamado(env, id), null, 'linha principal deveria ter sumido');
+    const { results: assignees } = await env.CHAMADOS_DB.prepare('SELECT * FROM chamado_assignees WHERE chamado_id = ?').bind(id).all();
+    assert.deepStrictEqual(assignees, [], 'chamado_assignees deveria ter sido limpo');
+    assert.deepStrictEqual(await d1ListAnexos(env, id), [], 'chamado_anexos deveria ter sido limpo');
+    assert.deepStrictEqual(await d1ListEventos(env, id), [], 'chamado_eventos deveria ter sido limpo');
+    assert.strictEqual(await env.ANEXOS.get(r2Key), null, 'objeto do R2 deveria ter sido apagado junto, não deixado órfão no bucket');
+  });
+  await test('chamado apagado some de GET /admin/tasks (não sobra fantasma na listagem)', async () => {
+    const id = await criarChamadoTeste({ name: 'Vou sumir da lista' });
+    await worker.fetch(req('POST', `/admin/tasks/${id}/delete`, { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const res = await worker.fetch(req('GET', '/admin/tasks', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const data = await res.json();
+    assert.ok(!data.tasks.some(t => t.id === id), 'chamado apagado não deveria mais aparecer em GET /admin/tasks');
+  });
+
   console.log('--- histórico + comentários / ação em lote (Fase B pós-MVP-visual, 2026-08-14) ---');
   await test('mudar status via POST /admin/tasks/:id grava um evento automático na timeline', async () => {
     const id = await criarChamadoTeste({ status: 'aberto' });
