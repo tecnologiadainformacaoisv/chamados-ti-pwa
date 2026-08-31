@@ -61,7 +61,9 @@ test.describe("Encerrar exige solução — Tabela (select inline)", () => {
     await page.getByRole("button", { name: "Encerrar chamado" }).click()
 
     await expect.poll(() => posted).toEqual({ status: "encerrado", solucao: "Reiniciei o notebook e atualizei o driver." })
-    await expect(page.getByText("Encerrar chamado")).not.toBeVisible()
+    // "Encerrar chamado" aparece tanto no título do popup quanto no botão de
+    // confirmar — checar o dialog inteiro sumir evita ambiguidade de locator.
+    await expect(page.getByRole("dialog", { name: "Encerrar chamado" })).not.toBeVisible()
   })
 
   test("cancelar não chama o servidor", async ({ page }) => {
@@ -78,7 +80,7 @@ test.describe("Encerrar exige solução — Tabela (select inline)", () => {
     await row.locator('[data-slot="select-trigger"]').nth(1).click()
     await page.getByRole("option", { name: "Encerrado" }).click()
     await page.getByRole("button", { name: "Cancelar" }).click()
-    await expect(page.getByText("Encerrar chamado")).not.toBeVisible()
+    await expect(page.getByRole("dialog", { name: "Encerrar chamado" })).not.toBeVisible()
     expect(posted).toBe(false)
   })
 
