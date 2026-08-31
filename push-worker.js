@@ -670,6 +670,22 @@ async function applyAdminTaskUpdate(env, taskId, body) {
   const chamado = await d1GetChamado(env, taskId);
   if (!chamado) return { error: 'chamado não encontrado', statusCode: 404 };
 
+  // Regra de negócio (2026-08-24, pedido do usuário): a solução precisa estar
+  // descrita toda vez que um chamado é encerrado — não dá pra fechar "em branco".
+  // `solucaoFinal` é o que a solução VAI SER depois desta atualização: usa o que
+  // veio no corpo se `solucao` foi mandado nesta mesma request (caso do popup do
+  // Quadro/Tabela e do modal "Gerenciar", que sempre mandam os dois juntos), senão
+  // cai pro que já estava salvo (caso de alguém chamar só `{status:'encerrado'}`
+  // direto, sem passar pelo popup — ex.: um chamado que já tinha solução escrita
+  // antes e só está tendo o status confirmado). Checado ANTES de qualquer
+  // sub-mutação rodar — não dá pra "meio-encerrar" sem solução.
+  if (body.status === 'encerrado') {
+    const solucaoFinal = body.solucao !== undefined ? body.solucao : chamado.solucao;
+    if (!solucaoFinal || !solucaoFinal.trim()) {
+      return { error: 'não é possível encerrar um chamado sem preencher a solução', statusCode: 400 };
+    }
+  }
+
   const updated = {};
 
   if (body.status !== undefined) {

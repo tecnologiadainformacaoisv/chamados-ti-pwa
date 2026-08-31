@@ -131,6 +131,11 @@ export function TaskModal({
 
   const assignees = task.assignees ?? []
   const multiplosOperadores = assignees.length > 1
+  // Solução obrigatória pra encerrar (2026-08-24, pedido do usuário) — mesma regra
+  // que o servidor já recusa (`applyAdminTaskUpdate` em push-worker.js) e que o
+  // popup do Quadro/Tabela também aplica (encerrar-com-solucao-dialog.tsx); aqui só
+  // bloqueia o botão Salvar antes de gastar um round-trip com o servidor.
+  const precisaSolucaoParaEncerrar = status === "encerrado" && !solucao.trim()
 
   function handleSave() {
     const body: UpdatePayload = { status, solucao }
@@ -206,8 +211,11 @@ export function TaskModal({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label>Solução</Label>
+            <Label>Solução{status === "encerrado" && " *"}</Label>
             <Textarea rows={4} placeholder="Descreva a solução aplicada..." value={solucao} onChange={(e) => setSolucao(e.target.value)} />
+            {precisaSolucaoParaEncerrar && (
+              <p className="text-xs text-amber-600">⚠ Obrigatório pra encerrar o chamado.</p>
+            )}
           </div>
 
           {error && (
@@ -307,7 +315,7 @@ export function TaskModal({
           <Button variant="outline" onClick={onClose} disabled={saving}>
             Cancelar
           </Button>
-          <Button onClick={handleSave} disabled={saving}>
+          <Button onClick={handleSave} disabled={saving || precisaSolucaoParaEncerrar}>
             {saving ? "Salvando…" : "Salvar"}
           </Button>
         </DialogFooter>

@@ -89,11 +89,13 @@ test.describe("Gestão — Tabela", () => {
     await page.locator('tr:has-text("Dois") input[type="checkbox"]').check()
     await expect(page.getByText("2 selecionados")).toBeVisible()
 
-    // Barra flutuante de ação em lote — Select "Mudar status"
+    // Barra flutuante de ação em lote — Select "Mudar status". "Encerrado" não é uma
+    // opção aqui de propósito (regra de 2026-08-24: encerrar exige solução, e não dá
+    // pra pedir uma por chamado numa ação em massa — ver admin-encerrar-solucao.spec.ts).
     await page.getByText("Mudar status").click()
-    await page.getByRole("option", { name: "Encerrado" }).click()
+    await page.getByRole("option", { name: "Pendente" }).click()
 
-    await expect.poll(() => bulkBody).toEqual({ ids: ["t1", "t2"], status: "encerrado" })
+    await expect.poll(() => bulkBody).toEqual({ ids: ["t1", "t2"], status: "pendente" })
     await expect(page.getByText("2 chamados atualizados.")).toBeVisible()
   })
 

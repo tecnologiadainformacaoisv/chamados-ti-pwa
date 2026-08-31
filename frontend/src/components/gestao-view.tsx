@@ -7,8 +7,10 @@ import { FiltersBar } from "@/components/filters-bar"
 import { KanbanBoard } from "@/components/kanban-board"
 import { TasksTable } from "@/components/tasks-table"
 import { TaskModal } from "@/components/task-modal"
+import { EncerrarComSolucaoDialog } from "@/components/encerrar-com-solucao-dialog"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
-import { fetchSolicitanteNomes, fetchTasks, isSessionError, postTaskUpdate, postBulkUpdate, type Filtros, type Task, type UpdatePayload } from "@/lib/api"
+import { getCF, fetchSolicitanteNomes, fetchTasks, isSessionError, postTaskUpdate, postBulkUpdate, type Filtros, type Task, type UpdatePayload } from "@/lib/api"
+import { SOLUCAO_FIELD_ID } from "@/lib/constants"
 
 type ViewMode = "quadro" | "tabela"
 
@@ -22,6 +24,14 @@ export function GestaoView() {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [bulkMessage, setBulkMessage] = useState<string | null>(null)
+
+  // Solução obrigatória pra encerrar (2026-08-24, pedido do usuário) — dispara ao
+  // arrastar um card pro Quadro ou trocar status pra Encerrado direto na Tabela (os
+  // dois jeitos de mudar status sem passar pelo modal "Gerenciar", que já valida isso
+  // na própria tela — ver task-modal.tsx). `solucaoAtual` pré-preenche o popup se o
+  // chamado já tinha uma solução escrita antes (ex.: via o modal, sem ter encerrado).
+  const [encerrarPendente, setEncerrarPendente] = useState<{ taskId: string; nomeTask: string; solucaoAtual: string } | null>(null)
+  const [encerrarError, setEncerrarError] = useState<string | null>(null)
 
   function changeViewMode(mode: ViewMode) {
     setViewMode(mode)
@@ -86,6 +96,20 @@ export function GestaoView() {
       if (isSessionError(err)) logout()
     },
   })
+
+  // Intercepta qualquer tentativa de status->"encerrado" vinda do Quadro (drag) ou da
+  // Tabela (select inline) — abre o popup pedindo a solução em vez de mandar a
+  // mutação direto. Qualquer outro status segue o caminho de sempre, sem popup.
+  function pedirStatus(taskId: string, body: UpdatePayload) {
+    if (body.status === "encerrado") {
+      const task = tasks.find((t) => t.id === taskId)
+      const solucaoAtual = (task && (getCF(task, SOLUCAO_FIELD_ID) as string | null)) || ""
+      setEncerrarError(null)
+      setEncerrarPendente({ taskId, nomeTask: task?.name || "(sem título)", solucaoAtual })
+      return
+    }
+    quickUpdateMutation.mutate({ taskId, body })
+  }
 
   // Ação em lote (Fase B, mesmo dia) — mesmo conceito do Artifact do MVP visual,
   // via POST /admin/tasks/bulk (nova rota). Sem transação entre chamados — o servidor
@@ -152,7 +176,7 @@ export function GestaoView() {
         <KanbanBoard
           tasks={lastVisible}
           onOpenTask={setSelectedTask}
-          onDropStatus={(taskId, status) => quickUpdateMutation.mutate({ taskId, body: { status } })}
+          onDropStatus={(taskId, status) => pedirStatus(taskId, { status })}
         />
       ) : (
         <>
@@ -167,7 +191,7 @@ export function GestaoView() {
           <TasksTable
             tasks={lastVisible}
             onOpenTask={setSelectedTask}
-            onQuickUpdate={(taskId, body) => quickUpdateMutation.mutate({ taskId, body })}
+            onQuickUpdate={pedirStatus}
             onBulkUpdate={(taskIds, body) => { setBulkMessage(null); bulkMutation.mutate({ ids: taskIds, body }) }}
           />
         </>
@@ -182,6 +206,34 @@ export function GestaoView() {
         onSave={(body) => updateMutation.mutate(body)}
         saving={updateMutation.isPending}
         error={saveError}
+      />
+
+      <EncerrarComSolucaoDialog
+        aberto={!!encerrarPendente}
+        nomeTask={encerrarPendente?.nomeTask ?? ""}
+        solucaoInicial={encerrarPendente?.solucaoAtual ?? ""}
+        saving={quickUpdateMutation.isPending}
+        error={encerrarError}
+        onCancel={() => {
+          setEncerrarPendente(null)
+          setEncerrarError(null)
+        }}
+        onConfirm={(solucao) => {
+          if (!encerrarPendente) return
+          quickUpdateMutation.mutate(
+            { taskId: encerrarPendente.taskId, body: { status: "encerrado", solucao } },
+            {
+              onSuccess: () => {
+                setEncerrarPendente(null)
+                setEncerrarError(null)
+              },
+              onError: (err) => {
+                if (isSessionError(err)) return // onError do useMutation já desloga
+                setEncerrarError(err instanceof Error ? err.message : "Não foi possível encerrar o chamado.")
+              },
+            }
+          )
+        }}
       />
     </div>
   )

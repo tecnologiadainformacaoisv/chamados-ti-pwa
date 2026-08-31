@@ -16,6 +16,13 @@ import { getCF, isAtrasado, fmtDate, type Task, type UpdatePayload } from "@/lib
 
 const SEM_ATRIBUICAO = "__sem__"
 
+// Encerrado exige solução (2026-08-24, regra de negócio) — não dá pra pedir uma
+// solução por chamado de forma que faça sentido numa ação em lote, então "Encerrado"
+// fica de fora do "Mudar status" em massa; continua disponível no select inline por
+// linha (dispara o popup de solução, ver gestao-view.tsx/pedirStatus) e no modal
+// "Gerenciar" (campo já na tela).
+const BULK_STATUS_OPTIONS = STATUS_ORDER.filter((s) => s !== "encerrado")
+
 const GROUP_TABLE_LIMIT = 200 // mesmo teto por grupo que admin.js já usa
 const STORAGE_KEY = "admin_group_collapsed_react"
 
@@ -203,7 +210,7 @@ export function TasksTable({
               <SelectValue placeholder="Mudar status" />
             </SelectTrigger>
             <SelectContent>
-              {STATUS_ORDER.map((s) => (
+              {BULK_STATUS_OPTIONS.map((s) => (
                 <SelectItem key={s} value={s}>{STATUS_MAP[s].label}</SelectItem>
               ))}
             </SelectContent>

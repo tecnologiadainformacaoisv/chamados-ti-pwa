@@ -932,6 +932,65 @@ async function test(name, fn) {
     }), env);
     assert.strictEqual(res.status, 404);
   });
+
+  console.log('--- solução obrigatória pra encerrar (regra de negócio, 2026-08-24) ---');
+  await test('encerrar sem mandar solução (chamado nunca teve uma) dá 400, nada muda', async () => {
+    const id = await criarChamadoTeste({ status: 'em atendimento' });
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'encerrado' })
+    }), env);
+    assert.strictEqual(res.status, 400);
+    const linha = await d1GetChamado(env, id);
+    assert.strictEqual(linha.status, 'em atendimento', 'status não deveria ter mudado');
+  });
+  await test('encerrar mandando solução em branco (só espaço) dá 400', async () => {
+    const id = await criarChamadoTeste({ status: 'em atendimento' });
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'encerrado', solucao: '   ' })
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('encerrar mandando status + solução juntos (fluxo do popup/modal) funciona', async () => {
+    const id = await criarChamadoTeste({ status: 'em atendimento' });
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ status: 'encerrado', solucao: 'Resolvido trocando o cabo.' }),
+    }), env);
+    assert.strictEqual(res.status, 200);
+    const linha = await d1GetChamado(env, id);
+    assert.strictEqual(linha.status, 'encerrado');
+    assert.strictEqual(linha.solucao, 'Resolvido trocando o cabo.');
+  });
+  await test('encerrar SEM mandar solução, mas o chamado já tinha uma salva antes, funciona', async () => {
+    const id = await criarChamadoTeste({ status: 'em atendimento', solucao: 'Já resolvido mais cedo.' });
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'encerrado' })
+    }), env);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual((await d1GetChamado(env, id)).status, 'encerrado');
+  });
+  await test('mudar pra QUALQUER outro status continua sem exigir solução', async () => {
+    const id = await criarChamadoTeste({ status: 'aberto' });
+    const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'em atendimento' })
+    }), env);
+    assert.strictEqual(res.status, 200);
+  });
+  await test('ação em lote também recusa encerrar sem solução (mesma regra, sem caso especial)', async () => {
+    const idComSolucao = await criarChamadoTeste({ status: 'em atendimento', solucao: 'Já resolvido.' });
+    const idSemSolucao = await criarChamadoTeste({ status: 'em atendimento' });
+    const res = await worker.fetch(req('POST', '/admin/tasks/bulk', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ ids: [idComSolucao, idSemSolucao], status: 'encerrado' }),
+    }), env);
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    const porId = Object.fromEntries(data.results.map(r => [r.id, r]));
+    assert.strictEqual(porId[idComSolucao].ok, true);
+    assert.strictEqual(porId[idSemSolucao].ok, false);
+    assert.strictEqual((await d1GetChamado(env, idSemSolucao)).status, 'em atendimento', 'não deveria ter encerrado sem solução');
+  });
+
   await test('muda status, escreve solução e reatribui operador — grava tudo direto no D1, sem tocar na ClickUp', async () => {
     const id = await criarChamadoTeste();
     const previousFetch = globalThis.fetch;
@@ -977,8 +1036,11 @@ async function test(name, fn) {
   await test('status "encerrado" -> d1TransitionStatus grava date_closed', async () => {
     const id = await criarChamadoTeste({ status: 'em atendimento' });
     const before = Date.now();
+    // solução obrigatória pra encerrar (regra de 2026-08-24, ver bloco de testes
+    // dedicado acima) — mandada junto aqui só pra não travar no 400 e continuar
+    // testando o que este teste sempre testou (date_closed).
     const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
-      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'encerrado' })
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'encerrado', solucao: 'Resolvido.' })
     }), env);
     assert.strictEqual(res.status, 200);
     const linha = await d1GetChamado(env, id);
