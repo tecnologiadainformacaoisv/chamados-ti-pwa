@@ -115,6 +115,39 @@ test.describe("Modal 'Gerenciar' — exclusão", () => {
     await expect(page.getByRole("dialog")).toBeVisible()
   })
 
+  // Sugestão de baixa prioridade do revisor (2026-09-11): o backend já cobre
+  // exclusão com 2+ operadores/anexos (tests/push-worker.test.js), mas nenhum
+  // E2E confirmava que o botão "Excluir" também funciona nesse caso pelo lado
+  // do frontend — a UI não depende de quantos operadores/anexos o chamado tem,
+  // mas fecha o ciclo ponta-a-ponta em vez de assumir isso.
+  test("confirmar excluir funciona também com chamado com múltiplos operadores e anexo", async ({ page }) => {
+    await mockAdminRoutes(page, {
+      tasks: [
+        makeTask({
+          id: "t1",
+          name: "Notebook não liga",
+          assignees: [{ id: 170628721 }, { id: 200498355 }],
+          attachments: [{ url: "https://chamados-ti-push.tecnologiadainformacao-isv.workers.dev/api/anexos/anexo-1", title: "print.png", name: "print.png", extension: "png" }],
+        }),
+      ],
+    })
+    await gotoAdminLoggedIn(page)
+    await abrirModal(page)
+    await expect(page.getByText(/2 operadores atribuídos/)).toBeVisible()
+
+    let deleteCalled = false
+    await page.route(/\/admin\/tasks\/t1\/delete$/, (route) => {
+      if (route.request().method() === "OPTIONS") return route.fallback()
+      deleteCalled = true
+      return route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' })
+    })
+    page.on("dialog", (d) => d.accept())
+    await page.getByRole("button", { name: "Excluir" }).click()
+
+    await expect.poll(() => deleteCalled).toBe(true)
+    await expect(page.getByRole("dialog")).not.toBeVisible()
+  })
+
   test("erro do servidor ao excluir mostra alerta e mantém o modal aberto", async ({ page }) => {
     await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga" })] })
     await page.route(/\/admin\/tasks\/t1\/delete$/, (route) => {

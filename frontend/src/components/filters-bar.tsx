@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react"
 import { Search, X } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
@@ -109,11 +110,12 @@ function CompactSelect({
 }) {
   return (
     <Select value={value} onValueChange={onChange}>
-      {/* max-w-48 — achado do revisor (2026-08-17): SelectTrigger é w-fit por padrão;
-          nome de solicitante (cadastro livre em usuarios-view.tsx, sem limite) podia
-          alargar o chip indefinidamente na barra de filtros. line-clamp-1 já herdado
-          do SelectTrigger cuida da reticência dentro dessa largura. */}
-      <SelectTrigger size="sm" className="h-8 max-w-48 bg-transparent text-xs font-medium">
+      {/* truncate-chip — achado do revisor (2026-08-17, consolidado em 2026-09-11):
+          SelectTrigger é w-fit por padrão; nome de solicitante (cadastro livre em
+          usuarios-view.tsx, sem limite) podia alargar o chip indefinidamente na
+          barra de filtros. Utilitário compartilhado com a coluna Solicitante da
+          Tabela (ver .truncate-chip em index.css) em vez de max-w-* ad-hoc. */}
+      <SelectTrigger size="sm" className="h-8 truncate-chip bg-transparent text-xs font-medium" style={{ "--truncate-chip-w": "12rem" } as CSSProperties}>
         <SelectValue placeholder={placeholder}>{value === TODOS ? placeholder : undefined}</SelectValue>
       </SelectTrigger>
       <SelectContent>
