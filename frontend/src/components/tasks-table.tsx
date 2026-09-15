@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useState } from "react"
-import { ChevronDown, Check, Circle, Flag, TriangleAlert } from "lucide-react"
+import { Fragment, useEffect, useState, type CSSProperties } from "react"
+import { ChevronDown, ChevronRight, Check, Circle, Flag, TriangleAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { CriarChamadoInline } from "@/components/criar-chamado-inline"
@@ -116,7 +116,11 @@ export function TasksTable({
   return (
     <div className="flex flex-col gap-3">
       <div className="overflow-x-auto rounded-lg border border-border bg-card shadow-sm">
-        <table className="w-full min-w-[960px] text-sm">
+        {/* Sem min-w forçado (2026-09-15) — o usuário reportou barra de scroll
+            horizontal aparecendo com a sidebar expandida; um chão artificial de
+            960px obrigava largura mesmo quando o conteúdo real caberia em menos
+            (o navegador já respeita o mínimo de conteúdo de cada célula sozinho). */}
+        <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
               <th className="w-8 px-3 py-1.5" />
@@ -324,7 +328,7 @@ function TaskRow({
           onChange={(e) => onToggleSelected(e.target.checked)}
         />
       </td>
-      <td className="max-w-64 truncate px-3 py-1 font-medium" title={task.name}>
+      <td className="max-w-48 truncate px-3 py-1 font-medium" title={task.name}>
         {task.name || "(sem título)"}
       </td>
       <td className="px-3 py-1">
@@ -355,7 +359,7 @@ function TaskRow({
           "—"
         )}
       </td>
-      <td className="truncate-chip px-3 py-1" title={solNome}>{solNome}</td>
+      <td className="truncate-chip px-3 py-1" style={{ "--truncate-chip-w": "7rem" } as CSSProperties} title={solNome}>{solNome}</td>
       <td className="px-3 py-1" onClick={(e) => e.stopPropagation()}>
         {/* Edição inline (Fase A, 2026-08-14) — pré-seleciona só o 1º operador, mesma
             simplificação que o modal "Gerenciar" já faz; escolher aqui substitui quem
@@ -418,10 +422,13 @@ function TaskRow({
         {task.due_date ? fmtDate(task.due_date) : "—"}
         {atrasado ? " ⚠" : ""}
       </td>
-      <td className="px-3 py-1">
-        <Button size="xs" variant="outline" onClick={onOpen}>
-          Gerenciar
-        </Button>
+      {/* Botão "Gerenciar" (texto) virou só um ícone (2026-09-15) — clicar na linha
+          já abre o modal (item 7 do pedido do usuário), o botão explícito ficou
+          redundante e ocupava espaço horizontal real; o chevron só indica "isso é
+          clicável", sem competir por largura com as colunas de dado de verdade
+          (motivo de o usuário ter pedido pra reduzir o scroll horizontal). */}
+      <td className="w-6 px-2 py-1 text-muted-foreground">
+        <ChevronRight className="h-4 w-4" />
       </td>
     </tr>
   )
