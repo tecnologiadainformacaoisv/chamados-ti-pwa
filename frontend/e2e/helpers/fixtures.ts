@@ -124,6 +124,7 @@ export async function mockAdminRoutes(
   await on(page, "**/admin/solicitantes", "POST", (route) => fulfillJson(route, { ok: true }))
   await on(page, /\/admin\/solicitantes\/[^/]+\/ativo/, "POST", (route) => fulfillJson(route, { ok: true }))
   await on(page, "**/admin/subscribe", "POST", (route) => fulfillJson(route, { ok: true }))
+  await on(page, "**/admin/subscribe/test", "POST", (route) => fulfillJson(route, { ok: true }))
   await on(page, "**/api/solicitantes", "GET", (route) => fulfillJson(route, { names: SOLICITANTES }))
 }
 

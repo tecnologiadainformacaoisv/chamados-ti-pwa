@@ -174,6 +174,7 @@ export default {
       const solAtivoMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/ativo$/);
       if (solAtivoMatch) return handleAdminSetSolicitanteAtivo(request, env, solAtivoMatch[1]);
       if (pathname === '/admin/migrate-schema-anexos') return handleAdminMigrateSchemaAnexos(request, env);
+      if (pathname === '/admin/subscribe/test') return handleAdminSubscribeTest(request, env);
       if (pathname === '/admin/subscribe') return handleAdminSubscribe(request, env);
     }
 
@@ -847,6 +848,47 @@ async function handleAdminSubscribe(request, env) {
 
   await env.SUBSCRIPTIONS.put(`adminsub_${id}`, JSON.stringify(body.subscription));
   return jsonRes({ ok: true });
+}
+
+// =====================================================================
+// POST /admin/subscribe/test (2026-09-15) — pedido do usuário ("não estou sendo
+// notificado"): dispara um push REAL pra UM device específico (não pra todo mundo,
+// diferente de notifyAdminsNovoChamado), pelo mesmo caminho de sendWebPush que um
+// chamado novo usaria. Devolve erro explícito em vez de engolir em silêncio — é
+// exatamente o diagnóstico que faltava: até agora, uma subscription podre só era
+// descoberta (e limpa) na próxima vez que um chamado de verdade fosse criado, sem
+// ninguém ver o erro. Body: { id: string } — mesmo id de handleAdminSubscribe.
+// =====================================================================
+async function handleAdminSubscribeTest(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  const id = typeof body.id === 'string' ? body.id.trim() : '';
+  if (!id) return jsonRes({ error: 'id é obrigatório' }, 400);
+
+  const subJson = await env.SUBSCRIPTIONS.get(`adminsub_${id}`);
+  if (!subJson) return jsonRes({ error: 'nenhuma inscrição salva pra esse device — clique em "Ativar" primeiro' }, 404);
+
+  const payload = JSON.stringify({
+    title: 'Teste de notificação — Chamados de TI',
+    body:  'Se você está vendo isso, as notificações estão funcionando. 🎉',
+    data:  { type: 'teste' },
+  });
+
+  try {
+    await sendWebPush(JSON.parse(subJson), payload, env);
+    return jsonRes({ ok: true });
+  } catch (err) {
+    // Subscription morta (404/410) — mesma limpeza de notifyAdminsNovoChamado, já
+    // que o teste acabou de confirmar isso na prática: o próximo "Ativar" gera uma
+    // inscrição nova do zero em vez de ficar preso numa referência velha.
+    if (/^Push endpoint (404|410):/.test(err.message)) {
+      await env.SUBSCRIPTIONS.delete(`adminsub_${id}`);
+      return jsonRes({ error: 'inscrição expirada/inválida (removida) — clique em "Ativar" de novo' }, 410);
+    }
+    return jsonRes({ error: `falha ao enviar: ${err.message}` }, 502);
+  }
 }
 
 // =====================================================================

@@ -413,6 +413,83 @@ async function test(name, fn) {
   // (precisa ser um ponto EC P-256 válido, não qualquer string) — mesmas chaves
   // "descartáveis mas válidas" já usadas em tests/d1-layer.test.js pro mesmo motivo.
   const FAKE_PUSH_KEYS = { p256dh: 'BMgcsTAUEhUr-dau-LaPhTHktmCZ90q4GXFF6CX0p3IvmeB51v68JqZLeuKrO3swUcSXKiNhQ6Ur5I74fm6tp2Q', auth: 'dGVzdC1hdXRoLTE2Yg' };
+
+  console.log('--- POST /admin/subscribe/test (2026-09-15, diagnóstico de "não estou sendo notificado") ---');
+  await test('sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/admin/subscribe/test', {
+      body: JSON.stringify({ id: 'qualquer' }),
+    }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('sem id dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/admin/subscribe/test', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({}),
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('id sem inscrição salva dá 404 com mensagem acionável', async () => {
+    const res = await worker.fetch(req('POST', '/admin/subscribe/test', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ id: 'device-nunca-inscrito' }),
+    }), env);
+    assert.strictEqual(res.status, 404);
+    const body = await res.json();
+    assert.match(body.error, /Ativar/);
+  });
+  await test('dispositivo inscrito de verdade: manda o push real e devolve ok', async () => {
+    await worker.fetch(req('POST', '/admin/subscribe', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ id: 'device-teste-ok', subscription: { endpoint: 'https://fake-push-endpoint.test/teste-ok', keys: FAKE_PUSH_KEYS } }),
+    }), env);
+    adminPushCalls.length = 0;
+    const res = await worker.fetch(req('POST', '/admin/subscribe/test', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ id: 'device-teste-ok' }),
+    }), env);
+    assert.strictEqual(res.status, 200);
+    const call = adminPushCalls.find(c => c.url === 'https://fake-push-endpoint.test/teste-ok');
+    assert.ok(call, 'deveria ter mandado o push de teste pro endpoint certo');
+  });
+  await test('inscrição expirada (410): devolve erro acionável E limpa a inscrição podre do KV', async () => {
+    await worker.fetch(req('POST', '/admin/subscribe', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ id: 'device-teste-morto', subscription: { endpoint: 'https://fake-push-endpoint.test/teste-morto', keys: FAKE_PUSH_KEYS } }),
+    }), env);
+    failingPushEndpoints.set('https://fake-push-endpoint.test/teste-morto', 410);
+    try {
+      const res = await worker.fetch(req('POST', '/admin/subscribe/test', {
+        headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+        body: JSON.stringify({ id: 'device-teste-morto' }),
+      }), env);
+      assert.strictEqual(res.status, 410);
+      const body = await res.json();
+      assert.match(body.error, /Ativar/);
+      const stored = await env.SUBSCRIPTIONS.get('adminsub_device-teste-morto');
+      assert.strictEqual(stored, null, '410 no teste deveria limpar a inscrição, igual notifyAdminsNovoChamado já faz');
+    } finally {
+      failingPushEndpoints.delete('https://fake-push-endpoint.test/teste-morto');
+    }
+  });
+  await test('outra falha de envio (nem 404 nem 410) devolve 502 SEM apagar a inscrição', async () => {
+    await worker.fetch(req('POST', '/admin/subscribe', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ id: 'device-teste-500', subscription: { endpoint: 'https://fake-push-endpoint.test/teste-500', keys: FAKE_PUSH_KEYS } }),
+    }), env);
+    failingPushEndpoints.set('https://fake-push-endpoint.test/teste-500', 500);
+    try {
+      const res = await worker.fetch(req('POST', '/admin/subscribe/test', {
+        headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+        body: JSON.stringify({ id: 'device-teste-500' }),
+      }), env);
+      assert.strictEqual(res.status, 502);
+      const stored = await env.SUBSCRIPTIONS.get('adminsub_device-teste-500');
+      assert.ok(stored, 'uma falha transitória (não 404/410) não deveria apagar a inscrição');
+    } finally {
+      failingPushEndpoints.delete('https://fake-push-endpoint.test/teste-500');
+    }
+  });
+
   await test('criar chamado dispara push pro admin inscrito', async () => {
     await worker.fetch(req('POST', '/admin/subscribe', {
       headers: { 'X-Admin-Secret': env.ADMIN_SECRET },

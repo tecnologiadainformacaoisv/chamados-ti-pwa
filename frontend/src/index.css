@@ -271,7 +271,7 @@ body.app-solicitante::-webkit-scrollbar {
 
 /* Utilitário pra truncar texto livre (nome de solicitante, sem limite de tamanho
    no cadastro — ver usuarios-view.tsx) em vez de cada componente reinventar seu
-   próprio max-w-*/truncate (achado do revisor, 2026-09-11: já tinha sido corrigido
+   próprio "max-w- + truncate" (achado do revisor, 2026-09-11: já tinha sido corrigido
    separadamente em filters-bar.tsx e tasks-table.tsx). Largura configurável via
    --truncate-chip-w (default 10rem); a reticência/overflow ficam fixos aqui. */
 .truncate-chip {

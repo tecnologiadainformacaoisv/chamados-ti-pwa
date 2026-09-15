@@ -235,6 +235,15 @@ export async function subscribeAdminPush(secret: string, id: string, subscriptio
   await adminMutate(secret, "/subscribe", { id, subscription })
 }
 
+// Diagnóstico de "não estou sendo notificado" (2026-09-15, pedido do usuário) — dispara
+// um push REAL de teste pra esse device, pelo mesmo caminho que um chamado novo usaria
+// (ver handleAdminSubscribeTest em push-worker.js). Joga o erro pra cima (AdminApiError,
+// com a mensagem já pronta pro usuário) em vez de engolir — é o oposto do
+// `.catch(console.warn)` que subscribeToAdminPush sempre usou.
+export async function testAdminPush(secret: string, id: string): Promise<void> {
+  await adminMutate(secret, "/subscribe/test", { id })
+}
+
 export function isAtrasado(task: Task): boolean {
   if (!task.due_date) return false
   const status = (task.status?.status || "").toLowerCase()
