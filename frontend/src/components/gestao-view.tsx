@@ -152,13 +152,15 @@ export function GestaoView() {
           congelada... quando eu scrollar, descer só os chamados") — filtros +
           contador + toggle Quadro/Tabela grudam logo abaixo do header (também
           sticky, ver app-header.tsx) enquanto só a lista de chamados rola por
-          baixo. `-mx-6 px-6`/`bg-background` (ver AdminApp.tsx, <main> tem p-6):
-          estica o fundo até a borda do card pra nada "vazar" por trás ao rolar. */}
-      {/* bg-background sólido (não bg-muted/30, que é o fundo real da página, mas
-          TRANSPARENTE — achado testando o scroll de verdade: com opacidade, o
-          conteúdo rolando por baixo vazava através da barra fixa) — bg-background é
-          opaco o bastante pra mascarar de verdade o que passa por baixo. */}
-      <div className="sticky top-16 z-10 -mx-6 flex flex-col gap-4 bg-background px-6 pt-2 pb-3">
+          baixo. `bg-background` sólido (não `bg-muted/30`, que é o fundo real da
+          página, mas TRANSPARENTE — achado testando o scroll de verdade: com
+          opacidade, o conteúdo rolando por baixo vazava através da barra fixa).
+          SEM `-mx-6`/margem negativa (2026-09-15, 2ª rodada) — achado real: isso
+          alargava o `<main>` (e a PÁGINA INTEIRA) 24px além da viewport de cada
+          lado, criando um scroll horizontal fantasma que não tinha nada a ver com
+          a largura da tabela em si (o que pareceu ser "a tabela ainda não cabe"
+          era na real esse truque de margem). */}
+      <div className="sticky top-16 z-10 flex flex-col gap-4 bg-background pt-2 pb-3">
         <FiltersBar
           filtros={filtros}
           onChange={setFiltros}
