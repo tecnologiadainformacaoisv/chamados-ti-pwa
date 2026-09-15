@@ -616,6 +616,13 @@ async function handleAdminListTasks(request, env) {
 // nasce pendente/encerrado — deixar criar direto em outro status abriria uma exceção
 // silenciosa a todas essas regras. O frontend só mostra "+ Adicionar Chamado" no
 // grupo Aberto por esse motivo (ver tasks-table.tsx).
+//
+// 🐛 Achado real (2026-09-15, testando notificação com o usuário): esta rota NUNCA
+// chamou `notifyAdminsNovoChamado` — só `handleCreateTask` (fluxo do solicitante)
+// chamava. Um chamado criado por aqui (a TI, por um operador, em nome de alguém)
+// nunca avisava o OUTRO operador (ex.: Everson cria, Henrique nunca fica sabendo).
+// Passou despercebido até agora porque "+ Adicionar Chamado" é uso recente — corrigido
+// chamando a mesma função, mesmo padrão best-effort (nunca derruba a criação).
 async function handleAdminCreateTask(request, env) {
   if (!(await isAdmin(request, env))) return unauthorized();
 
@@ -653,6 +660,14 @@ async function handleAdminCreateTask(request, env) {
     });
   } catch (err) {
     return jsonRes({ error: `não foi possível criar o chamado: ${err.message}` }, 400);
+  }
+
+  // Avisa quem mais está inscrito pro push de admin — mesmo best-effort de
+  // handleCreateTask, nunca derruba a resposta se o push falhar.
+  try {
+    await notifyAdminsNovoChamado(env, row);
+  } catch (err) {
+    console.error(`handleAdminCreateTask: falha ao notificar admins do chamado ${row.id}: ${err.message}`);
   }
 
   return jsonRes(d1RowToTaskShape(row));

@@ -1029,6 +1029,24 @@ async function test(name, fn) {
     assert.strictEqual(res.status, 200, JSON.stringify(data));
     assert.strictEqual(data.priority.priority, 'normal');
   });
+  // 🐛 Achado real (2026-09-15, testando com o usuário): esta rota nunca chamava
+  // notifyAdminsNovoChamado — um chamado criado por um operador via "+ Adicionar
+  // Chamado" nunca avisava OUTROS operadores inscritos. Corrigido; este teste trava
+  // a regressão.
+  await test('dispara push pro admin inscrito, igual o fluxo do solicitante', async () => {
+    await worker.fetch(req('POST', '/admin/subscribe', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ id: 'dispositivo-criado-pela-ti', subscription: { endpoint: 'https://fake-push-endpoint.test/criado-pela-ti', keys: FAKE_PUSH_KEYS } }),
+    }), env);
+    adminPushCalls.length = 0
+    const res = await worker.fetch(req('POST', '/admin/tasks', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ name: 'Chamado criado pela TI pra outro operador ver', solicitante: 'Michael Vasconcelos', tipo: 0 }),
+    }), env);
+    assert.strictEqual(res.status, 200)
+    const call = adminPushCalls.find(c => c.url === 'https://fake-push-endpoint.test/criado-pela-ti')
+    assert.ok(call, 'POST /admin/tasks deveria disparar push pros admins inscritos, igual POST /api/tasks já faz')
+  });
 
   console.log('--- POST /admin/tasks/:id — a TI trabalha por aqui, direto no D1 (Fase M4, 2026-08-13) ---');
   // Fase M4: handleAdminUpdateTask parou de chamar a ClickUp — grava direto no D1
