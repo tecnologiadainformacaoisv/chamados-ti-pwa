@@ -57,6 +57,57 @@ test.describe("Gestão — Tabela", () => {
     await expect.poll(() => postedBody).toEqual({ status: "em atendimento" })
   })
 
+  // Itens 6/7/8 do pedido do usuário (2026-09-15, "veja o exemplo da lista de
+  // chamados no ClickUp") — checkbox só no hover, clicar na linha abre Gerenciar
+  // (igual o Quadro já fazia), e cada rota interativa (checkbox/selects) não deve
+  // abrir o modal por acidente.
+  test("clicar na linha (fora dos controles) abre o modal Gerenciar", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga" })] })
+    await gotoAdminLoggedIn(page)
+    await page.getByRole("button", { name: "Tabela" }).click()
+    await page.getByText("Notebook não liga").click()
+    await expect(page.getByRole("dialog")).toBeVisible()
+  })
+
+  test("clicar no checkbox ou nos selects inline NÃO abre o modal Gerenciar", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Não deve abrir modal" })] })
+    await gotoAdminLoggedIn(page)
+    await page.getByRole("button", { name: "Tabela" }).click()
+    const row = page.locator("tr", { hasText: "Não deve abrir modal" })
+
+    await row.locator('input[type="checkbox"]').click()
+    await expect(page.getByRole("dialog")).not.toBeVisible()
+
+    await row.locator('[data-slot="select-trigger"]').first().click() // Operador
+    await page.keyboard.press("Escape")
+    await expect(page.getByRole("dialog")).not.toBeVisible()
+  })
+
+  test("checkbox da linha só aparece no hover (ou se já tiver seleção no grupo)", async ({ page }, testInfo) => {
+    // Hover de verdade (CSS :hover) não é um conceito que existe em touch/mobile —
+    // mesmo padrão já usado pro teste de drag-and-drop do Quadro (ver testInfo.skip
+    // mais abaixo no arquivo, se houver). Num toque real, a linha inteira já abre o
+    // Gerenciar de qualquer jeito (teste "clicar na linha... abre o modal Gerenciar").
+    testInfo.skip(testInfo.project.name === "mobile", "hover CSS não existe em touch — mobile abre a linha inteira no toque")
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Chamado qualquer" })] })
+    await gotoAdminLoggedIn(page)
+    await page.getByRole("button", { name: "Tabela" }).click()
+    const checkbox = page.locator('tr:has-text("Chamado qualquer") input[type="checkbox"]')
+    await expect(checkbox).toHaveCSS("opacity", "0")
+    await page.locator('tr:has-text("Chamado qualquer")').hover()
+    await expect(checkbox).toHaveCSS("opacity", "1")
+  })
+
+  test("select de status mostra a cor certa por status (pill colorida)", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Chamado pendente", status: { status: "pendente" } })] })
+    await gotoAdminLoggedIn(page)
+    await page.getByRole("button", { name: "Tabela" }).click()
+    const trigger = page.locator('tr:has-text("Chamado pendente") [data-slot="select-trigger"]').nth(1)
+    // Cor de "pendente" em STATUS_MAP (constants.ts) — mesma cor já usada no
+    // cabeçalho de grupo/Quadro/Dashboard.
+    await expect(trigger).toHaveCSS("color", "rgb(182, 96, 224)")
+  })
+
   test("busca por título filtra a lista visível", async ({ page }) => {
     await mockAdminRoutes(page, {
       tasks: [makeTask({ id: "t1", name: "Impressora sem tinta" }), makeTask({ id: "t2", name: "Rede lenta" })],

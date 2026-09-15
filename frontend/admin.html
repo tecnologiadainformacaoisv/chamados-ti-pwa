@@ -3,6 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/favicon-isv.png" />
+    <!-- PWA instalável (2026-09-15, pedido do usuário: contagem de chamados abertos
+         no ícone do app — só existe via Badging API, que exige um PWA instalado de
+         verdade). Reverte a decisão anterior ("admin.html nunca deve ser PWA", ver
+         CLAUDE.md) — manifest e Service Worker PRÓPRIOS (admin-manifest.webmanifest/
+         admin-sw.js), inteiramente separados do app do solicitante (manifest.webmanifest/
+         sw.ts, injetado pelo vite-plugin-pwa) — scope="admin.html" evita qualquer
+         colisão com o scope do outro SW (ver comentário em admin-sw.js). -->
+    <link rel="manifest" href="/admin-manifest.webmanifest" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Painel de Admin – Chamados TI ISV</title>
   </head>

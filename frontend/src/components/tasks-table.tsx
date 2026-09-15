@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useState } from "react"
-import { ChevronDown, Check, Circle, TriangleAlert } from "lucide-react"
+import { ChevronDown, Check, Circle, Flag, TriangleAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { CriarChamadoInline } from "@/components/criar-chamado-inline"
 import {
   SETORES,
   SETOR_FIELD_ID,
@@ -12,7 +13,8 @@ import {
   OPERADORES,
   PRIORITY_MAP,
 } from "@/lib/constants"
-import { getCF, isAtrasado, fmtDate, type Task, type UpdatePayload } from "@/lib/api"
+import { getCF, isAtrasado, fmtDate, type CreateTaskPayload, type Task, type UpdatePayload } from "@/lib/api"
+import type { StatusKey } from "@/lib/constants"
 
 const SEM_ATRIBUICAO = "__sem__"
 
@@ -50,11 +52,19 @@ export function TasksTable({
   onOpenTask,
   onQuickUpdate,
   onBulkUpdate,
+  solicitantes,
+  onCreateTask,
+  creatingTask,
+  createTaskError,
 }: {
   tasks: Task[]
   onOpenTask: (task: Task) => void
   onQuickUpdate: (taskId: string, body: UpdatePayload) => void
   onBulkUpdate: (taskIds: string[], body: UpdatePayload) => void
+  solicitantes: string[]
+  onCreateTask: (payload: CreateTaskPayload) => void
+  creatingTask: boolean
+  createTaskError: string | null
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -109,17 +119,18 @@ export function TasksTable({
         <table className="w-full min-w-[960px] text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <th className="w-8 px-3 py-2" />
-              <th className="px-3 py-2 font-medium">Chamado</th>
-              <th className="px-3 py-2 font-medium">Prioridade</th>
-              <th className="px-3 py-2 font-medium">Tipo</th>
-              <th className="px-3 py-2 font-medium">Setor</th>
-              <th className="px-3 py-2 font-medium">Solicitante</th>
-              <th className="px-3 py-2 font-medium">Operador</th>
-              <th className="px-3 py-2 font-medium">Status</th>
-              <th className="px-3 py-2 font-medium">Prazo</th>
-              <th className="px-3 py-2 font-medium">Criado em</th>
-              <th className="px-3 py-2 font-medium" />
+              <th className="w-8 px-3 py-1.5" />
+              <th className="px-3 py-1.5 font-medium">Chamado</th>
+              <th className="px-3 py-1.5 font-medium">Prioridade</th>
+              <th className="px-3 py-1.5 font-medium">Tipo</th>
+              <th className="px-3 py-1.5 font-medium">Setor</th>
+              <th className="px-3 py-1.5 font-medium">Solicitante</th>
+              <th className="px-3 py-1.5 font-medium">Operador</th>
+              <th className="px-3 py-1.5 font-medium">Status</th>
+              <th className="px-3 py-1.5 font-medium">Criado em</th>
+              <th className="px-3 py-1.5 font-medium">Data inicial</th>
+              <th className="px-3 py-1.5 font-medium">Prazo</th>
+              <th className="px-3 py-1.5 font-medium" />
             </tr>
           </thead>
           <tbody>
@@ -143,7 +154,7 @@ export function TasksTable({
                         />
                       )}
                     </td>
-                    <td colSpan={9} className="p-0">
+                    <td colSpan={10} className="p-0">
                       <button
                         type="button"
                         onClick={() => toggle(statusKey)}
@@ -167,11 +178,30 @@ export function TasksTable({
                   </tr>
                   {!isCollapsed &&
                     (list.length === 0 ? (
-                      <tr>
-                        <td colSpan={11} className="px-3 py-4 text-center text-xs text-muted-foreground">
-                          Nenhum chamado.
-                        </td>
-                      </tr>
+                      <>
+                        {statusKey !== "aberto" && (
+                          <tr>
+                            <td colSpan={12} className="px-3 py-4 text-center text-xs text-muted-foreground">
+                              Nenhum chamado.
+                            </td>
+                          </tr>
+                        )}
+                        {/* "Adicionar Chamado" (2026-09-15) — só no grupo Aberto, ver
+                            comentário em handleAdminCreateTask (push-worker.js) pro
+                            porquê: todo chamado sempre nasce aberto. */}
+                        {statusKey === "aberto" && (
+                          <tr>
+                            <td colSpan={12} className="p-0">
+                              <CriarChamadoInline
+                                solicitantes={solicitantes}
+                                onCreate={onCreateTask}
+                                creating={creatingTask}
+                                error={createTaskError}
+                              />
+                            </td>
+                          </tr>
+                        )}
+                      </>
                     ) : (
                       <>
                         {list.slice(0, GROUP_TABLE_LIMIT).map((task) => (
@@ -179,6 +209,7 @@ export function TasksTable({
                             key={task.id}
                             task={task}
                             selected={selected.has(task.id)}
+                            groupHasSelection={visibleIds.some((id) => selected.has(id))}
                             onToggleSelected={(checked) => toggleSelected(task.id, checked)}
                             onOpen={() => onOpenTask(task)}
                             onQuickUpdate={(body) => onQuickUpdate(task.id, body)}
@@ -186,8 +217,20 @@ export function TasksTable({
                         ))}
                         {list.length > GROUP_TABLE_LIMIT && (
                           <tr>
-                            <td colSpan={11} className="px-3 py-3 text-center text-xs text-muted-foreground">
+                            <td colSpan={12} className="px-3 py-3 text-center text-xs text-muted-foreground">
                               +{list.length - GROUP_TABLE_LIMIT} chamado(s) — refine os filtros/busca pra ver todos
+                            </td>
+                          </tr>
+                        )}
+                        {statusKey === "aberto" && (
+                          <tr>
+                            <td colSpan={12} className="p-0">
+                              <CriarChamadoInline
+                                solicitantes={solicitantes}
+                                onCreate={onCreateTask}
+                                creating={creatingTask}
+                                error={createTaskError}
+                              />
                             </td>
                           </tr>
                         )}
@@ -238,12 +281,14 @@ export function TasksTable({
 function TaskRow({
   task,
   selected,
+  groupHasSelection,
   onToggleSelected,
   onOpen,
   onQuickUpdate,
 }: {
   task: Task
   selected: boolean
+  groupHasSelection: boolean
   onToggleSelected: (checked: boolean) => void
   onOpen: () => void
   onQuickUpdate: (body: UpdatePayload) => void
@@ -261,29 +306,38 @@ function TaskRow({
   const statusAtual = (task.status?.status || "").toLowerCase()
 
   return (
-    <tr className="border-b border-border last:border-0 hover:bg-muted/30">
-      <td className="px-3 py-2">
+    // Clicar na linha abre "Gerenciar" (2026-09-15, pedido do usuário: "igual ao
+    // ClickUp") — mesmo comportamento que o card do Quadro já tinha, só que a Tabela
+    // dependia só do botão até agora. `group/row` + `stopPropagation()` nos controles
+    // interativos (checkbox, selects inline) impedem que interagir com ELES também
+    // abra o modal por cima.
+    <tr className="group/row cursor-pointer border-b border-border last:border-0 hover:bg-muted/30" onClick={onOpen}>
+      <td className="px-3 py-1" onClick={(e) => e.stopPropagation()}>
+        {/* Checkbox só aparece no hover da linha (2026-09-15, mesma mecânica da
+            ClickUp) — ou permanece visível se JÁ selecionada, ou se qualquer outra
+            linha do mesmo grupo já estiver selecionada (não "pisca" escondendo o
+            controle bem no meio de uma seleção em lote em andamento). */}
         <input
           type="checkbox"
-          className="h-3.5 w-3.5 accent-primary"
+          className={`h-3.5 w-3.5 accent-primary ${selected || groupHasSelection ? "opacity-100" : "opacity-0 group-hover/row:opacity-100"}`}
           checked={selected}
           onChange={(e) => onToggleSelected(e.target.checked)}
         />
       </td>
-      <td className="max-w-64 truncate px-3 py-2 font-medium" title={task.name}>
+      <td className="max-w-64 truncate px-3 py-1 font-medium" title={task.name}>
         {task.name || "(sem título)"}
       </td>
-      <td className="px-3 py-2">
+      <td className="px-3 py-1">
         {prioridade ? (
           <span className="inline-flex items-center gap-1.5 text-xs font-medium" style={{ color: prioridade.color }}>
-            <span className="h-1.5 w-1.5 rounded-full" style={{ background: prioridade.color }} />
+            <Flag className="h-3 w-3 shrink-0" style={{ fill: prioridade.color }} strokeWidth={0} />
             {prioridade.label}
           </span>
         ) : (
           <span className="text-muted-foreground">—</span>
         )}
       </td>
-      <td className="px-3 py-2">
+      <td className="px-3 py-1">
         {tipo ? (
           <span className="rounded-full px-2 py-0.5 text-xs font-medium" style={{ background: `${tipo.color}22`, color: tipo.color }}>
             {tipo.name}
@@ -292,7 +346,7 @@ function TaskRow({
           "—"
         )}
       </td>
-      <td className="px-3 py-2">
+      <td className="px-3 py-1">
         {setor ? (
           <span className="rounded-full px-2 py-0.5 text-xs font-medium" style={{ background: `${setor.color}22`, color: setor.color }}>
             {setor.name}
@@ -301,15 +355,17 @@ function TaskRow({
           "—"
         )}
       </td>
-      <td className="truncate-chip px-3 py-2" title={solNome}>{solNome}</td>
-      <td className="px-3 py-2">
+      <td className="truncate-chip px-3 py-1" title={solNome}>{solNome}</td>
+      <td className="px-3 py-1" onClick={(e) => e.stopPropagation()}>
         {/* Edição inline (Fase A, 2026-08-14) — pré-seleciona só o 1º operador, mesma
             simplificação que o modal "Gerenciar" já faz; escolher aqui substitui quem
             estava atribuído por completo (mesmo comportamento de sempre da rota),
-            avisado pelo ícone quando há mais de 1. */}
+            avisado pelo ícone quando há mais de 1. `stopPropagation` (2026-09-15) —
+            senão abrir o select também dispararia o "clicar na linha abre Gerenciar"
+            (ver onClick da <tr>). */}
         <div className="flex items-center gap-1.5">
           <Select value={operadorAtual} onValueChange={(v) => onQuickUpdate({ assigneeId: v === SEM_ATRIBUICAO ? null : Number(v) })}>
-            <SelectTrigger size="sm" className="h-7 border-none bg-transparent px-1.5 shadow-none hover:bg-muted">
+            <SelectTrigger size="sm" className="h-6 border-none bg-transparent px-1.5 shadow-none hover:bg-muted">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -329,25 +385,41 @@ function TaskRow({
           )}
         </div>
       </td>
-      <td className="px-3 py-2">
+      <td className="px-3 py-1" onClick={(e) => e.stopPropagation()}>
+        {/* Pill colorida (2026-09-15, pedido do usuário) — mesma cor de STATUS_MAP já
+            usada no cabeçalho de grupo/Quadro/Dashboard, só que aplicada aqui no
+            select inline também (antes era texto puro sem cor nenhuma). */}
         <Select value={statusAtual} onValueChange={(v) => onQuickUpdate({ status: v })}>
-          <SelectTrigger size="sm" className="h-7 border-none bg-transparent px-1.5 shadow-none hover:bg-muted">
+          <SelectTrigger
+            size="sm"
+            className="h-6 rounded-full border-none px-2 text-xs font-medium shadow-none"
+            style={{ background: `${STATUS_MAP[statusAtual as StatusKey]?.dot ?? "#888"}1a`, color: STATUS_MAP[statusAtual as StatusKey]?.dot }}
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             {STATUS_ORDER.map((s) => (
-              <SelectItem key={s} value={s}>{STATUS_MAP[s].label}</SelectItem>
+              <SelectItem key={s} value={s}>
+                <span className="flex items-center gap-1.5">
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: STATUS_MAP[s].dot }} />
+                  {STATUS_MAP[s].label}
+                </span>
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
       </td>
-      <td className={`px-3 py-2 ${atrasado ? "font-medium text-destructive" : ""}`}>
+      <td className="px-3 py-1 text-muted-foreground">{task.date_created ? fmtDate(task.date_created) : "—"}</td>
+      {/* Data inicial (2026-09-15, pedido do usuário) — quando o chamado entrou em
+          "Em Atendimento" (start_date), gravado por d1TransitionStatus. Fica "—" pra
+          quem nunca saiu de "Aberto" — não é um erro, é a ausência real do dado. */}
+      <td className="px-3 py-1 text-muted-foreground">{task.start_date ? fmtDate(task.start_date) : "—"}</td>
+      <td className={`px-3 py-1 ${atrasado ? "font-medium text-destructive" : ""}`}>
         {task.due_date ? fmtDate(task.due_date) : "—"}
         {atrasado ? " ⚠" : ""}
       </td>
-      <td className="px-3 py-2 text-muted-foreground">{task.date_created ? fmtDate(task.date_created) : "—"}</td>
-      <td className="px-3 py-2">
-        <Button size="sm" variant="outline" onClick={onOpen}>
+      <td className="px-3 py-1">
+        <Button size="xs" variant="outline" onClick={onOpen}>
           Gerenciar
         </Button>
       </td>

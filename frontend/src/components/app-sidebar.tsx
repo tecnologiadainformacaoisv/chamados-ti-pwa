@@ -10,6 +10,8 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
+import { SidebarControl } from "@/components/sidebar-control"
+import type { SidebarMode } from "@/hooks/use-sidebar-mode"
 import logoIsv from "@/assets/logo-isv.svg"
 import iconIsv from "@/assets/icon-isv.svg"
 // Versão declarada em package.json (ver CLAUDE.md, "Padrões de desenvolvimento") —
@@ -36,14 +38,24 @@ const NAV_ITEMS: { id: Secao; label: string; icon: typeof ClipboardList }[] = [
 export function AppSidebar({
   secaoAtiva,
   onSecaoChange,
+  sidebarMode,
+  onSidebarModeChange,
+  onMouseEnter,
+  onMouseLeave,
 }: {
   secaoAtiva: Secao
   onSecaoChange: (s: Secao) => void
+  sidebarMode: SidebarMode
+  onSidebarModeChange: (m: SidebarMode) => void
+  onMouseEnter?: () => void
+  onMouseLeave?: () => void
 }) {
   return (
     <Sidebar
       collapsible="icon"
       className="bg-sidebar-gradient border-sidebar-border text-sidebar-foreground"
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       {/* 2026-08-13: sidebar abre colapsada por padrão (defaultOpen={false} em
           AdminApp.tsx). 2026-08-14: logo-isv.svg é um lockup largo (~3.3:1) —
@@ -96,8 +108,13 @@ export function AppSidebar({
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarFooter className="group-data-[collapsible=icon]:hidden">
-        <span className="px-2 text-xs text-sidebar-foreground/50">v{version}</span>
+      {/* Controle de sidebar estilo Supabase (2026-09-15, pedido do usuário) — o ícone
+          de controle fica sempre visível, mesmo colapsada (é o único jeito de voltar
+          pro modo expandido sem depender do trigger do header) — só a versão que
+          continua escondendo no modo ícone (não cabe, mesma regra de sempre). */}
+      <SidebarFooter className="flex-row items-center justify-between gap-1 group-data-[collapsible=icon]:justify-center">
+        <span className="px-2 text-xs text-sidebar-foreground/50 group-data-[collapsible=icon]:hidden">v{version}</span>
+        <SidebarControl mode={sidebarMode} onChange={onSidebarModeChange} />
       </SidebarFooter>
     </Sidebar>
   )

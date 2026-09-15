@@ -77,6 +77,29 @@ export async function fetchTasks(secret: string, filtros: Filtros): Promise<{ ta
 
 export type UpdatePayload = { status?: string; solucao?: string; assigneeId?: number | null }
 
+// "Adicionar Chamado" inline na Tabela (2026-09-15, pedido do usuário, mesma mecânica
+// da ClickUp) — a TI cria um chamado em nome de um solicitante já cadastrado, direto
+// do painel. Diferente do fluxo do solicitante (POST /api/tasks, sessão própria) — ver
+// handleAdminCreateTask em push-worker.js pro porquê disso ser uma rota separada.
+// Sempre nasce "aberto" (regra de negócio, não é escolha do cliente).
+export type CreateTaskPayload = { name: string; solicitante: string; tipo?: number; setor?: number; description?: string }
+
+export async function createAdminTask(secret: string, body: CreateTaskPayload): Promise<Task> {
+  const res = await fetch(`${ADMIN_BASE}/tasks`, {
+    method: "POST",
+    headers: { "X-Admin-Secret": secret, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (res.status === 403) {
+    throw new AdminApiError("Segredo de admin inválido ou expirado. Entre de novo.", 403)
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}) as { error?: string })
+    throw new AdminApiError(data.error || `Erro HTTP ${res.status}`, res.status)
+  }
+  return res.json()
+}
+
 export async function postTaskUpdate(secret: string, taskId: string, body: UpdatePayload): Promise<Task> {
   const res = await fetch(`${ADMIN_BASE}/tasks/${taskId}`, {
     method: "POST",

@@ -1,0 +1,16 @@
+{
+  "name": "Painel de Admin – Chamados TI ISV",
+  "short_name": "TI Admin",
+  "description": "Painel interno de gestão de chamados de TI da ISV — só pra quem trabalha nos chamados.",
+  "start_url": "admin.html",
+  "scope": "admin.html",
+  "display": "standalone",
+  "background_color": "#1a3a6b",
+  "theme_color": "#1a3a6b",
+  "lang": "pt-BR",
+  "categories": ["utilities", "productivity"],
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

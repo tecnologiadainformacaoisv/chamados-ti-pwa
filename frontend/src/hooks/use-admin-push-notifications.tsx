@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { VAPID_PUBLIC_KEY } from "@/lib/constants"
 import { subscribeAdminPush, testAdminPush } from "@/lib/api"
+import { registerAdminSW, waitForAdminSWActivation } from "@/lib/admin-sw"
 
 const DISMISS_KEY = "admin_notif_dismissed_at"
 const DISMISS_WINDOW_MS = 86400000 // 24h — mesma janela de use-push-notifications.tsx
@@ -24,47 +25,9 @@ function urlB64ToUint8Array(b64: string): Uint8Array {
   return Uint8Array.from(raw, (c) => c.charCodeAt(0))
 }
 
-// Registro manual — admin-sw.js é um arquivo estático em public/, não passa pelo
-// vite-plugin-pwa/Workbox (esse é só do app de solicitantes, ver src/sw.ts). Sem
-// manifest nenhum aqui — só o essencial pra Web Push funcionar (ver comentário no
-// próprio admin-sw.js pro porquê de ser um arquivo separado).
-//
-// 🛡️ Achado do revisor (2026-08-13, mesmo dia): admin.html e index.html são MPA, lado
-// a lado no MESMO diretório — registrar admin-sw.js com o escopo padrão (`base`, o
-// diretório inteiro) colidia com o escopo de sw.js (também `base`), e só pode existir
-// 1 registration ativa por escopo: quem registrasse por último sobrescrevia o outro
-// silenciosamente (ex.: TI abre index.html como qualquer colaborador antes/depois de
-// abrir admin.html no mesmo navegador). Corrigido com um escopo PRÓPRIO, sub-caminho
-// que nenhuma página realmente visita (`${base}admin-push-scope/`) — só reserva um
-// namespace separado no registro do navegador, sem colidir com sw.js. Isso funciona
-// porque push/notificação não dependem deste SW "controlar" admin.html (controle de
-// página só importa pra interceptar fetch, que este SW nunca faz).
-const ADMIN_SW_SCOPE_SUFFIX = "admin-push-scope/"
-
-async function registerAdminSW(): Promise<ServiceWorkerRegistration | null> {
-  if (!("serviceWorker" in navigator)) return null
-  const base = import.meta.env.BASE_URL
-  return navigator.serviceWorker.register(`${base}admin-sw.js`, { scope: `${base}${ADMIN_SW_SCOPE_SUFFIX}` })
-}
-
-// Como o escopo é deliberadamente "fake" (não inclui admin.html), este SW nunca
-// "controla" a página — `navigator.serviceWorker.ready` (que resolve pro worker que
-// CONTROLA a página atual) nunca resolveria pra ele, ou pior, resolveria pro SW do
-// app de solicitantes se ele estiver ativo na mesma aba. Espera a própria
-// registration ficar ativa direto, sem depender de `.ready`.
-function waitForActivation(reg: ServiceWorkerRegistration): Promise<void> {
-  if (reg.active) return Promise.resolve()
-  const worker = reg.installing || reg.waiting
-  if (!worker) return Promise.resolve()
-  return new Promise((resolve) => {
-    worker.addEventListener("statechange", function onStateChange() {
-      if (worker.state === "activated") {
-        worker.removeEventListener("statechange", onStateChange)
-        resolve()
-      }
-    })
-  })
-}
+// registerAdminSW/waitForAdminSWActivation vivem em @/lib/admin-sw agora — extraído
+// porque o hook do badge (use-admin-app-badge.tsx) também precisa registrar o mesmo SW
+// (ver comentário lá pro porquê disso ser seguro/idempotente).
 
 // Compara a chave que a subscription já existente foi criada com (o navegador guarda
 // isso em `sub.options.applicationServerKey`) contra a VAPID_PUBLIC_KEY atual —
@@ -90,7 +53,7 @@ async function subscribeToAdminPush(secret: string): Promise<void> {
 
   const reg = await registerAdminSW()
   if (!reg) throw new Error("Não foi possível registrar o Service Worker.")
-  await waitForActivation(reg)
+  await waitForAdminSWActivation(reg)
 
   let sub = await reg.pushManager.getSubscription()
   if (sub && !chaveBate(sub)) {

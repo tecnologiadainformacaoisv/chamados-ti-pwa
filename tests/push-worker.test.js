@@ -968,6 +968,68 @@ async function test(name, fn) {
     assert.strictEqual(res.status, 400);
   });
 
+  console.log('--- POST /admin/tasks (TI cria chamado em nome de um solicitante, 2026-09-15) ---');
+  await test('sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks', {
+      body: JSON.stringify({ name: 'x', solicitante: 'Michael Vasconcelos' }),
+    }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('sem name dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ solicitante: 'Michael Vasconcelos' }),
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('sem solicitante dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ name: 'Impressora sem tinta' }),
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('solicitante inexistente/não cadastrado dá 400 (não cria em nome de qualquer string)', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ name: 'Impressora sem tinta', solicitante: 'Alguém Que Não Existe' }),
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('cria com sucesso: status sempre aberto, prioridade automática pelo tipo, solicitante do body', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ name: 'Impressora sem tinta', solicitante: 'Ariele Santo', tipo: 0, setor: 1, description: 'trocar o toner' }),
+    }), env);
+    const data = await res.json();
+    assert.strictEqual(res.status, 200, JSON.stringify(data));
+    assert.strictEqual(data.status.status, 'aberto');
+    assert.strictEqual(data.priority.priority, 'urgent', 'tipo 0 (Notebooks) mapeia pra urgent em CATEGORIA_PRIORIDADE');
+    const row = await d1GetChamado(env, data.id);
+    assert.strictEqual(row.solicitante, 'Ariele Santo');
+    assert.strictEqual(row.description, 'trocar o toner');
+    assert.ok(row.due_date > Date.now(), 'due_date deveria ter sido calculado automaticamente, no futuro');
+  });
+  await test('chamado criado pela TI aparece em GET /admin/tasks igual a qualquer outro', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ name: 'Chamado criado pela TI pra teste de listagem', solicitante: 'Bruno Guilherme', tipo: 3 }),
+    }), env);
+    const created = await res.json();
+    const list = await worker.fetch(req('GET', '/admin/tasks?status=aberto', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const data = await list.json();
+    assert.ok(data.tasks.some(t => t.id === created.id), 'chamado recém-criado pela TI deveria aparecer na listagem');
+  });
+  await test('tipo/setor ausentes: cria mesmo assim, prioridade cai no padrão (3=normal)', async () => {
+    const res = await worker.fetch(req('POST', '/admin/tasks', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ name: 'Chamado sem tipo/setor', solicitante: 'Michael Vasconcelos' }),
+    }), env);
+    const data = await res.json();
+    assert.strictEqual(res.status, 200, JSON.stringify(data));
+    assert.strictEqual(data.priority.priority, 'normal');
+  });
+
   console.log('--- POST /admin/tasks/:id — a TI trabalha por aqui, direto no D1 (Fase M4, 2026-08-13) ---');
   // Fase M4: handleAdminUpdateTask parou de chamar a ClickUp — grava direto no D1
   // (d1TransitionStatus/d1UpdateChamado). `criarChamadoTeste` semeia um chamado fresco

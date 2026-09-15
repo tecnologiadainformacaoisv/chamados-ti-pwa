@@ -9,7 +9,7 @@ import { TasksTable } from "@/components/tasks-table"
 import { TaskModal } from "@/components/task-modal"
 import { EncerrarComSolucaoDialog } from "@/components/encerrar-com-solucao-dialog"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
-import { getCF, fetchSolicitanteNomes, fetchTasks, isSessionError, postTaskUpdate, postBulkUpdate, type Filtros, type Task, type UpdatePayload } from "@/lib/api"
+import { getCF, fetchSolicitanteNomes, fetchTasks, isSessionError, postTaskUpdate, postBulkUpdate, createAdminTask, type CreateTaskPayload, type Filtros, type Task, type UpdatePayload } from "@/lib/api"
 import { SOLUCAO_FIELD_ID } from "@/lib/constants"
 
 type ViewMode = "quadro" | "tabela"
@@ -32,6 +32,7 @@ export function GestaoView() {
   // chamado já tinha uma solução escrita antes (ex.: via o modal, sem ter encerrado).
   const [encerrarPendente, setEncerrarPendente] = useState<{ taskId: string; nomeTask: string; solucaoAtual: string } | null>(null)
   const [encerrarError, setEncerrarError] = useState<string | null>(null)
+  const [createError, setCreateError] = useState<string | null>(null)
 
   function changeViewMode(mode: ViewMode) {
     setViewMode(mode)
@@ -130,16 +131,56 @@ export function GestaoView() {
     },
   })
 
+  // "Adicionar Chamado" inline (2026-09-15) — ver criar-chamado-inline.tsx/
+  // handleAdminCreateTask. Erro fica junto do próprio popover (não um Alert solto na
+  // página) — o mesmo padrão do resto do formulário de criação.
+  const createMutation = useMutation({
+    mutationFn: (payload: CreateTaskPayload) => createAdminTask(secret, payload),
+    onSuccess: () => {
+      setCreateError(null)
+      queryClient.invalidateQueries({ queryKey: ["admin-tasks"] })
+    },
+    onError: (err) => {
+      if (isSessionError(err)) { logout(); return }
+      setCreateError(err instanceof Error ? err.message : "Não foi possível criar o chamado.")
+    },
+  })
+
   return (
     <div className="flex flex-col gap-4">
-      <FiltersBar
-        filtros={filtros}
-        onChange={setFiltros}
-        solicitantes={solicitantesQuery.data ?? []}
-        busca={busca}
-        onBuscaChange={setBusca}
-        mostrarStatus={viewMode === "tabela"}
-      />
+      {/* Bloco fixo (2026-09-15, pedido do usuário: "a parte de cima fixa e
+          congelada... quando eu scrollar, descer só os chamados") — filtros +
+          contador + toggle Quadro/Tabela grudam logo abaixo do header (também
+          sticky, ver app-header.tsx) enquanto só a lista de chamados rola por
+          baixo. `-mx-6 px-6`/`bg-background` (ver AdminApp.tsx, <main> tem p-6):
+          estica o fundo até a borda do card pra nada "vazar" por trás ao rolar. */}
+      {/* bg-background sólido (não bg-muted/30, que é o fundo real da página, mas
+          TRANSPARENTE — achado testando o scroll de verdade: com opacidade, o
+          conteúdo rolando por baixo vazava através da barra fixa) — bg-background é
+          opaco o bastante pra mascarar de verdade o que passa por baixo. */}
+      <div className="sticky top-16 z-10 -mx-6 flex flex-col gap-4 bg-background px-6 pt-2 pb-3">
+        <FiltersBar
+          filtros={filtros}
+          onChange={setFiltros}
+          solicitantes={solicitantesQuery.data ?? []}
+          busca={busca}
+          onBuscaChange={setBusca}
+          mostrarStatus={viewMode === "tabela"}
+        />
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-medium text-foreground">
+            Chamados {busca ? `(${lastVisible.length} de ${tasks.length})` : `(${tasks.length})`}
+          </p>
+          <div className="flex gap-1 rounded-md border border-border p-1">
+            <Button size="sm" variant={viewMode === "quadro" ? "default" : "ghost"} onClick={() => changeViewMode("quadro")}>
+              <LayoutGrid className="h-4 w-4" /> Quadro
+            </Button>
+            <Button size="sm" variant={viewMode === "tabela" ? "default" : "ghost"} onClick={() => changeViewMode("tabela")}>
+              <List className="h-4 w-4" /> Tabela
+            </Button>
+          </div>
+        </div>
+      </div>
 
       {tasksQuery.data?.truncated && (
         <Alert>
@@ -155,20 +196,6 @@ export function GestaoView() {
           <AlertDescription>{tasksQuery.error instanceof Error ? tasksQuery.error.message : "Erro ao carregar chamados."}</AlertDescription>
         </Alert>
       )}
-
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-medium text-foreground">
-          Chamados {busca ? `(${lastVisible.length} de ${tasks.length})` : `(${tasks.length})`}
-        </p>
-        <div className="flex gap-1 rounded-md border border-border p-1">
-          <Button size="sm" variant={viewMode === "quadro" ? "default" : "ghost"} onClick={() => changeViewMode("quadro")}>
-            <LayoutGrid className="h-4 w-4" /> Quadro
-          </Button>
-          <Button size="sm" variant={viewMode === "tabela" ? "default" : "ghost"} onClick={() => changeViewMode("tabela")}>
-            <List className="h-4 w-4" /> Tabela
-          </Button>
-        </div>
-      </div>
 
       {tasksQuery.isLoading ? (
         <p className="py-12 text-center text-sm text-muted-foreground">Carregando chamados…</p>
@@ -193,6 +220,10 @@ export function GestaoView() {
             onOpenTask={setSelectedTask}
             onQuickUpdate={pedirStatus}
             onBulkUpdate={(taskIds, body) => { setBulkMessage(null); bulkMutation.mutate({ ids: taskIds, body }) }}
+            solicitantes={solicitantesQuery.data ?? []}
+            onCreateTask={(payload) => createMutation.mutate(payload)}
+            creatingTask={createMutation.isPending}
+            createTaskError={createError}
           />
         </>
       )}

@@ -12,6 +12,9 @@ import { UsuariosView } from "@/components/usuarios-view"
 import { AdminNotifBanner } from "@/components/admin-notif-banner"
 import { NovoChamadoAlert } from "@/components/novo-chamado-alert"
 import { useNovosChamados } from "@/hooks/use-novos-chamados"
+import { useAdminAppBadge } from "@/hooks/use-admin-app-badge"
+import { useEmAtendimentoCount } from "@/hooks/use-em-atendimento-count"
+import { useSidebarMode } from "@/hooks/use-sidebar-mode"
 import { isSessionError } from "@/lib/api"
 import { version } from "../package.json"
 
@@ -51,11 +54,37 @@ function AdminShell() {
   // em qualquer lugar do painel, não só dentro de Gestão. Ver comentário no próprio
   // hook pro porquê de countAberto/fila serem coisas distintas.
   const { countAberto, fila, removerDaFila } = useNovosChamados(secret, logout)
+  // Contagem no ícone do app instalado (2026-09-15) — pedido explícito: aberto +
+  // em atendimento (não só aberto). Diferente de propósito do sino do header
+  // (`countAberto`, só "aberto" — ver use-novos-chamados.tsx) — o badge do ícone
+  // representa "precisa de atenção ativa", não "nunca foi tocado".
+  const emAtendimento = useEmAtendimentoCount(secret)
+  useAdminAppBadge(countAberto + emAtendimento)
+
+  // Controle de sidebar estilo Supabase (2026-09-15, pedido do usuário) — 3 modos
+  // persistidos (ver use-sidebar-mode.tsx). `hovering` só importa no modo "hover":
+  // a sidebar abre visualmente enquanto o mouse está em cima, sem persistir nada.
+  const [sidebarMode, setSidebarMode] = useSidebarMode()
+  const [hovering, setHovering] = useState(false)
+  const sidebarOpen = sidebarMode === "expanded" ? true : sidebarMode === "collapsed" ? false : hovering
 
   return (
     <TooltipProvider delayDuration={200}>
-      <SidebarProvider defaultOpen={false}>
-        <AppSidebar secaoAtiva={secaoAtiva} onSecaoChange={setSecaoAtiva} />
+      <SidebarProvider
+        open={sidebarOpen}
+        // Clicar no trigger de sempre (topo do header) continua funcionando, mesmo em
+        // modo "hover" — sai do hover e vira um modo fixo explícito, gesto do usuário
+        // sempre vence sobre o modo ambiente.
+        onOpenChange={(v) => setSidebarMode(v ? "expanded" : "collapsed")}
+      >
+        <AppSidebar
+          secaoAtiva={secaoAtiva}
+          onSecaoChange={setSecaoAtiva}
+          sidebarMode={sidebarMode}
+          onSidebarModeChange={setSidebarMode}
+          onMouseEnter={() => sidebarMode === "hover" && setHovering(true)}
+          onMouseLeave={() => sidebarMode === "hover" && setHovering(false)}
+        />
         <SidebarInset>
           <AppHeader countAberto={countAberto} />
           <main className="flex-1 space-y-6 bg-muted/30 p-6">

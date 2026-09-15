@@ -19,7 +19,10 @@ export function AppHeader({ countAberto }: { countAberto?: number }) {
   const queryClient = useQueryClient()
 
   return (
-    <header className="bg-brand-gradient flex h-16 shrink-0 items-center justify-between px-4 text-primary-foreground shadow-[0_2px_12px_rgba(0,0,0,0.2)]">
+    // sticky (2026-09-15, pedido do usuário: "a parte de cima fixa, só os chamados
+    // descem") — h-16 fixo é o que permite o bloco de filtros/toggle (ver
+    // gestao-view.tsx) saber exatamente onde grudar por baixo (top-16).
+    <header className="bg-brand-gradient sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between px-4 text-primary-foreground shadow-[0_2px_12px_rgba(0,0,0,0.2)]">
       <div className="flex items-center gap-3">
         <SidebarTrigger className="text-primary-foreground hover:bg-white/10 hover:text-primary-foreground" />
         {/* w-auto (não w-10): logo-isv.svg é um lockup largo (~3.3:1, ícone + texto

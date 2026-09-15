@@ -176,6 +176,7 @@ export default {
       if (pathname === '/admin/migrate-schema-anexos') return handleAdminMigrateSchemaAnexos(request, env);
       if (pathname === '/admin/subscribe/test') return handleAdminSubscribeTest(request, env);
       if (pathname === '/admin/subscribe') return handleAdminSubscribe(request, env);
+      if (pathname === '/admin/tasks') return handleAdminCreateTask(request, env);
     }
 
     if (request.method === 'GET') {
@@ -590,6 +591,71 @@ async function handleAdminListTasks(request, env) {
   const tasks = rows.map(d1RowToTaskShape);
 
   return jsonRes({ total: tasks.length, tasks, truncated: false });
+}
+
+// =====================================================================
+// POST /admin/tasks (2026-09-15, pedido do usuário: "Adicionar Chamado" inline na
+// Tabela, como a ClickUp tem) — cria um chamado NOVO em nome de um solicitante,
+// disparado pela TI direto do painel (diferente de POST /api/tasks, que é o
+// solicitante criando o próprio chamado autenticado por SESSÃO). Protegida por
+// ADMIN_SECRET, mesma proteção de toda rota /admin/*.
+//
+// Reaproveita exatamente a mesma lógica de handleCreateTask pra prioridade/prazo
+// automáticos (regra de negócio: "prioridade é sempre automática, nunca manual" vale
+// aqui também — a TI não escolhe prioridade na mão, só o tipo). Diferente de
+// handleCreateTask: `solicitante` vem do BODY (não de sessão nenhuma, o admin não tem
+// login por pessoa) — mas só é aceito se já existir e estiver ativo na tabela
+// `solicitantes` (mesma validação de handleRegister), pra não criar um chamado em
+// nome de alguém que não existe/foi desativado.
+//
+// Sempre cria como "aberto", mesmo se o botão "+ Adicionar Chamado" foi clicado
+// dentro de um grupo diferente (Pendente/Encerrado) na Tabela — decisão deliberada:
+// todo o resto do sistema (SLA de aceitação, `start_date`/`date_closed`,
+// "solução obrigatória pra encerrar") pressupõe que um chamado sempre COMEÇA aberto e
+// muda de status através de `d1TransitionStatus` (POST /admin/tasks/:id), nunca já
+// nasce pendente/encerrado — deixar criar direto em outro status abriria uma exceção
+// silenciosa a todas essas regras. O frontend só mostra "+ Adicionar Chamado" no
+// grupo Aberto por esse motivo (ver tasks-table.tsx).
+async function handleAdminCreateTask(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  const solicitante = typeof body.solicitante === 'string' ? body.solicitante.trim() : '';
+  if (!name) return jsonRes({ error: 'nome do chamado é obrigatório' }, 400);
+  if (!solicitante) return jsonRes({ error: 'solicitante é obrigatório' }, 400);
+  if (!(await d1IsSolicitanteAtivo(env, solicitante))) {
+    return jsonRes({ error: 'solicitante não encontrado ou inativo' }, 400);
+  }
+
+  // Mesmo cálculo de handleCreateTask — não duplicar a regra de negócio, só o
+  // caminho de autenticação/origem do payload é diferente.
+  const tipoIdx  = body.tipo != null ? Number(body.tipo) : null;
+  const setorIdx = body.setor != null ? Number(body.setor) : null;
+  const prio     = CATEGORIA_PRIORIDADE[tipoIdx] ?? 3;
+  const dueDate  = Date.now() + (PRIORITY_SLA_MS[prio] ?? PRIORITY_SLA_MS[3]);
+
+  let row;
+  try {
+    row = await d1CreateChamado(env, {
+      name,
+      description: typeof body.description === 'string' ? body.description : null,
+      status: 'aberto',
+      priority: prio,
+      tipo: tipoIdx,
+      setor: setorIdx,
+      solicitante,
+      due_date: dueDate,
+      assignee_id: null,
+      assignee_ids: [],
+    });
+  } catch (err) {
+    return jsonRes({ error: `não foi possível criar o chamado: ${err.message}` }, 400);
+  }
+
+  return jsonRes(d1RowToTaskShape(row));
 }
 
 // =====================================================================
