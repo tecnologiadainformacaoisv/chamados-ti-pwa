@@ -14,7 +14,11 @@ import logoIsv from "@/assets/logo-isv.svg"
 import iconIsv from "@/assets/icon-isv.svg"
 // Versão declarada em package.json (ver CLAUDE.md, "Padrões de desenvolvimento") —
 // Vite resolve import de JSON nativamente, sem precisar duplicar o número aqui.
-import pkg from "../../package.json"
+// Named import (não `import pkg from "..."`) de propósito — achado do revisor
+// (2026-09-15): o default import bundlava o package.json INTEIRO no admin.js de
+// produção (scripts/dependencies/devDependencies, tudo), não só o version. Named
+// import permite o Rollup fazer tree-shaking do resto.
+import { version } from "../../package.json"
 
 export type Secao = "gestao" | "dashboard" | "usuarios"
 
@@ -93,7 +97,7 @@ export function AppSidebar({
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="group-data-[collapsible=icon]:hidden">
-        <span className="px-2 text-xs text-sidebar-foreground/50">v{pkg.version}</span>
+        <span className="px-2 text-xs text-sidebar-foreground/50">v{version}</span>
       </SidebarFooter>
     </Sidebar>
   )
