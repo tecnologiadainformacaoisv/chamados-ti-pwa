@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar"
 import { AppSidebar, type Secao } from "@/components/app-sidebar"
@@ -13,6 +13,7 @@ import { AdminNotifBanner } from "@/components/admin-notif-banner"
 import { NovoChamadoAlert } from "@/components/novo-chamado-alert"
 import { useNovosChamados } from "@/hooks/use-novos-chamados"
 import { isSessionError } from "@/lib/api"
+import { version } from "../package.json"
 
 // Nunca insiste tentando de novo (com backoff) quando o segredo foi revogado — isso só
 // atrasaria voltar pro gate. Continua tentando normalmente pra qualquer outro erro
@@ -85,7 +86,19 @@ function AuthGate() {
   return <GateScreen />
 }
 
+// Versão no título da aba (não só no rodapé da sidebar, ver app-sidebar.tsx) —
+// pedido do usuário (2026-09-15) pra conseguir confirmar visualmente que o
+// navegador já pegou o deploy mais recente sem precisar logar/abrir a sidebar
+// expandida. Roda antes do login (fora do AuthGate) de propósito, pra servir
+// como conferência mesmo na tela de gate.
+function useVersionInTitle() {
+  useEffect(() => {
+    document.title = `Painel de Admin (v${version}) – Chamados TI ISV`
+  }, [])
+}
+
 export function AdminApp() {
+  useVersionInTitle()
   return (
     <QueryClientProvider client={queryClient}>
       <AdminAuthProvider>
