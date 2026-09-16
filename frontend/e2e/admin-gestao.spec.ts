@@ -181,3 +181,38 @@ test.describe("Gestão — Filtros", () => {
     await expect(page.getByText(/bateu no teto de páginas/)).toBeVisible()
   })
 })
+
+// Regressão de 2026-09-15/16: 3 rodadas seguidas de bug de scroll horizontal na
+// Tabela (min-w forçado, depois margem negativa -mx-6 da barra sticky, depois
+// SidebarInset sem min-w-0 — o clássico "flex item não encolhe abaixo do
+// min-content" do flexbox). Trava numericamente (scrollWidth === clientWidth), não
+// só visualmente, pra não repetir a mesma investigação pela 4ª vez.
+test.describe("Gestão — layout (sem scroll horizontal de página)", () => {
+  test("sidebar expandida + tabela com conteúdo real não estoura a largura da página", async ({ page }, testInfo) => {
+    // Em mobile a sidebar sempre vira um Sheet (overlay full-width, ver
+    // use-mobile.ts) — o conceito de "expandida ocupando espaço reservado ao lado
+    // do conteúdo" (a causa raiz real do bug, ver comentário do describe) só existe
+    // em desktop.
+    testInfo.skip(testInfo.project.name === "mobile", "sidebar em mobile é um Sheet overlay, não reserva espaço lateral")
+    const tasks = [
+      makeTask({ id: "t1", name: "ERRO NA IMPRESSÃO — urgente por favor resolver hoje mesmo se possível", solicitante: "Maria Clara Assunção de Oliveira", status: { status: "pendente" } }),
+      makeTask({ id: "t2", name: "Solicitação de acesso ao sistema de gestão financeira e contábil", solicitante: "João Mário", status: { status: "pendente" } }),
+      makeTask({ id: "t3", name: "Notebook não liga mais desde ontem à noite", solicitante: "Tereza D'avila", status: { status: "pendente" } }),
+    ]
+    await mockAdminRoutes(page, { tasks })
+    await gotoAdminLoggedIn(page)
+    await page.getByRole("button", { name: "Tabela" }).click()
+
+    // Expande a sidebar — foi exatamente esse estado (mais espaço reservado pra
+    // ela, menos sobrando pro conteúdo) que expôs o bug real.
+    await page.locator('[title="Controle da sidebar"]').click()
+    await page.getByText("Expandida").click()
+    await page.waitForTimeout(200)
+
+    const overflow = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    }))
+    expect(overflow.scrollWidth).toBe(overflow.clientWidth)
+  })
+})

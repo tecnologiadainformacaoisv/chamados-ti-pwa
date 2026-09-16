@@ -85,9 +85,19 @@ function AdminShell() {
           onMouseEnter={() => sidebarMode === "hover" && setHovering(true)}
           onMouseLeave={() => sidebarMode === "hover" && setHovering(false)}
         />
-        <SidebarInset>
+        {/* min-w-0 (2026-09-16, causa raiz real dos 2 bugs de scroll horizontal de
+            ontem) — SidebarInset é flex-1, mas um flex item nunca encolhe abaixo da
+            largura mínima do PRÓPRIO CONTEÚDO por padrão (min-width:auto implícito
+            do flexbox) — mesmo sobrando menos espaço que isso quando a sidebar
+            expande. Confirmado medindo: <main> ficava fixo em 1200px mesmo com só
+            1179px disponíveis (viewport - sidebar expandida), demonstrando
+            scrollWidth > clientWidth do documento inteiro. min-w-0 é o fix padrão
+            pra esse padrão clássico de flexbox — deixa o item realmente encolher e
+            o conteúdo interno (tabela, sticky bar) rolar por conta própria em vez
+            de empurrar a página inteira pra largura. */}
+        <SidebarInset className="min-w-0">
           <AppHeader countAberto={countAberto} />
-          <main className="flex-1 space-y-6 bg-muted/30 p-6">
+          <main className="min-w-0 flex-1 space-y-6 bg-muted/30 p-6">
             <AdminNotifBanner secret={secret} />
             <div>
               <h1 className="text-xl font-semibold text-foreground">{meta.titulo}</h1>
