@@ -158,7 +158,10 @@ export function TasksTable({
                         />
                       )}
                     </td>
-                    <td colSpan={10} className="p-0">
+                    {/* colSpan=11 (checkbox + 11 = 12 colunas do thead) — achado do
+                        revisor (2026-09-15): estava em 10, faltando cobrir a
+                        última coluna (~24px de fundo faltando, cosmético). */}
+                    <td colSpan={11} className="p-0">
                       <button
                         type="button"
                         onClick={() => toggle(statusKey)}
