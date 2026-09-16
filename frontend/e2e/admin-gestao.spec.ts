@@ -1,5 +1,5 @@
 import { test, expect } from "./helpers/fixtures"
-import { mockAdminRoutes, gotoAdminLoggedIn } from "./helpers/fixtures"
+import { mockAdminRoutes, gotoAdminLoggedIn, abrirSecaoAdmin } from "./helpers/fixtures"
 import { makeTask } from "./helpers/mock-data"
 
 test.describe("Gestão — Quadro (Kanban)", () => {
@@ -215,4 +215,28 @@ test.describe("Gestão — layout (sem scroll horizontal de página)", () => {
     }))
     expect(overflow.scrollWidth).toBe(overflow.clientWidth)
   })
+
+  // Sugestão do revisor (2026-09-16): o fix (min-w-0 em SidebarInset, AdminApp.tsx)
+  // está no componente PAI compartilhado por todas as seções, então cobrir só
+  // Gestão já garante a correção na prática — mas testar Dashboard/Usuários também
+  // protege contra o caso "amanhã alguém adiciona um card/tabela largos numa dessas
+  // seções e reintroduz o mesmo bug fora da Tabela".
+  for (const secao of ["Dashboard", "Usuários"] as const) {
+    test(`${secao} com sidebar expandida também não estoura a largura da página`, async ({ page }, testInfo) => {
+      testInfo.skip(testInfo.project.name === "mobile", "sidebar em mobile é um Sheet overlay, não reserva espaço lateral")
+      await mockAdminRoutes(page, { tasks: [] })
+      await gotoAdminLoggedIn(page)
+      await abrirSecaoAdmin(page, secao)
+
+      await page.locator('[title="Controle da sidebar"]').click()
+      await page.getByText("Expandida").click()
+      await page.waitForTimeout(200)
+
+      const overflow = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      }))
+      expect(overflow.scrollWidth).toBe(overflow.clientWidth)
+    })
+  }
 })

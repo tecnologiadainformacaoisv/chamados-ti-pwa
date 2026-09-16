@@ -97,7 +97,12 @@ function AdminShell() {
             de empurrar a página inteira pra largura. */}
         <SidebarInset className="min-w-0">
           <AppHeader countAberto={countAberto} />
-          <main className="min-w-0 flex-1 space-y-6 bg-muted/30 p-6">
+          {/* <div>, não <main> (achado do revisor, 2026-09-16) — SidebarInset já
+              renderiza o landmark <main> de verdade por baixo (ver ui/sidebar.tsx);
+              ter outro <main> aninhado aqui dentro é semanticamente inválido em
+              HTML (landmark não deveria aninhar), embora não afetasse nada
+              funcionalmente. */}
+          <div className="min-w-0 flex-1 space-y-6 bg-muted/30 p-6">
             <AdminNotifBanner secret={secret} />
             <div>
               <h1 className="text-xl font-semibold text-foreground">{meta.titulo}</h1>
@@ -111,7 +116,7 @@ function AdminShell() {
             ) : (
               <UsuariosView />
             )}
-          </main>
+          </div>
         </SidebarInset>
       </SidebarProvider>
       <NovoChamadoAlert fila={fila} onFechar={removerDaFila} />
