@@ -131,6 +131,14 @@ function req(method, path, { body, headers = {} } = {}) {
   return new Request('https://worker.local' + path, { method, headers, body });
 }
 
+// Login por e-mail (2026-09-16) — e-mail sintético e determinístico pra cada nome
+// de teste, só pra bater name<->email nos testes (não representa e-mail real de
+// ninguém). Usado tanto pra semear `solicitantes.email` (d1CreateSolicitante)
+// quanto no corpo de /auth/register e /auth/login.
+function emailFor(nome) {
+  return nome.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z]+/g, '.').replace(/^\.|\.$/g, '') + '@institutosaovicente.com.br';
+}
+
 let passed = 0, failed = 0;
 async function test(name, fn) {
   try { await fn(); passed++; console.log(`  ok  - ${name}`); }
@@ -221,50 +229,74 @@ async function test(name, fn) {
   // usados pelos testes de auth/isolamento abaixo, mesma função real de produção
   // (d1CreateSolicitante), não uma reimplementação paralela.
   for (const nome of ['Michael Vasconcelos', 'Ariele Santo', 'Bruno Guilherme']) {
-    await d1CreateSolicitante(env, nome);
+    await d1CreateSolicitante(env, nome, emailFor(nome));
   }
 
   console.log('--- registro e login ---');
   let token;
   await test('registra senha nova com sucesso e já devolve token', async () => {
-    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Michael Vasconcelos', password: 'senha123' }) }), env);
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), password: 'senha123' }) }), env);
     if (res.status !== 200) throw new Error(`status ${res.status}: ${await res.text()}`);
     const data = await res.json();
     if (!data.token) throw new Error('sem token na resposta');
     token = data.token;
   });
   await test('registrar de novo o mesmo nome falha com 409', async () => {
-    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Michael Vasconcelos', password: 'outrasenha' }) }), env);
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), password: 'outrasenha' }) }), env);
     assert.strictEqual(res.status, 409);
   });
   await test('senha curta demais é rejeitada', async () => {
-    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Nova Pessoa', password: '12' }) }), env);
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Nova Pessoa'), password: '12' }) }), env);
     assert.strictEqual(res.status, 400);
   });
   await test('registrar com nome que não está na lista de solicitantes dá 403 (Fase M1, 2026-08-13)', async () => {
-    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Alguém Que Não Existe', password: 'senhaboa123' }) }), env);
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Alguém Que Não Existe'), password: 'senhaboa123' }) }), env);
     assert.strictEqual(res.status, 403);
   });
   await test('login com senha certa funciona', async () => {
-    const res = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Michael Vasconcelos', password: 'senha123' }) }), env);
+    const res = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), password: 'senha123' }) }), env);
     assert.strictEqual(res.status, 200);
   });
   await test('login com senha errada dá 401', async () => {
-    const res = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Michael Vasconcelos', password: 'errada' }) }), env);
+    const res = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), password: 'errada' }) }), env);
     assert.strictEqual(res.status, 401);
   });
   await test('login pra nome sem senha cadastrada dá 404', async () => {
-    const res = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Alguém Sem Conta', password: 'x' }) }), env);
+    const res = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Alguém Sem Conta'), password: 'x' }) }), env);
     assert.strictEqual(res.status, 404);
   });
   await test('após 5 tentativas erradas, a 6ª fica bloqueada por lockout (429)', async () => {
-    await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Ariele Santo', password: 'senhadaariele' }) }), env);
+    await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Ariele Santo'), password: 'senhadaariele' }) }), env);
     for (let i = 0; i < 5; i++) {
-      const r = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Ariele Santo', password: 'errada' }) }), env);
+      const r = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Ariele Santo'), password: 'errada' }) }), env);
       assert.strictEqual(r.status, 401, `tentativa ${i + 1} deveria dar 401`);
     }
-    const res = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Ariele Santo', password: 'errada' }) }), env);
+    const res = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Ariele Santo'), password: 'errada' }) }), env);
     assert.strictEqual(res.status, 429);
+  });
+
+  console.log('--- login por e-mail (2026-09-16, pedido da diretoria) ---');
+  await test('login funciona com o e-mail em CAIXA ALTA/mista (normalizado)', async () => {
+    const email = emailFor('Michael Vasconcelos').toUpperCase();
+    const res = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ email, password: 'senha123' }) }), env);
+    assert.strictEqual(res.status, 200);
+  });
+  await test('login com e-mail cercado de espaço (trim) funciona', async () => {
+    const email = `  ${emailFor('Michael Vasconcelos')}  `;
+    const res = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ email, password: 'senha123' }) }), env);
+    assert.strictEqual(res.status, 200);
+  });
+  await test('e-mail desconhecido (não é de nenhum solicitante) dá 404 no login — mesma resposta de "sem senha ainda" (não vaza se o e-mail existe)', async () => {
+    const res = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ email: 'ninguem@teste.local', password: 'x' }) }), env);
+    assert.strictEqual(res.status, 404);
+  });
+  await test('registrar com e-mail desconhecido dá 403 (diferente do 404 de login — aqui sim distingue, é intencional: só o registro precisa saber se vale a pena)', async () => {
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: 'ninguem@teste.local', password: 'senhaboa123' }) }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('sem e-mail no corpo dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ password: 'x' }) }), env);
+    assert.strictEqual(res.status, 400);
   });
 
   console.log('--- isolamento entre pessoas (o motivo de tudo isso) ---');
@@ -340,7 +372,7 @@ async function test(name, fn) {
     // Usa uma sessão do Bruno (recém-registrado aqui), não a do Michael — ele acabou de criar
     // um chamado no teste anterior e cairia no throttle de 10s (429), que não é o que este
     // teste quer verificar. A Ariele não serve: ficou bloqueada pelo lockout do teste anterior.
-    const brunoRegister = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Bruno Guilherme', password: 'senhadobruno' }) }), env);
+    const brunoRegister = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Bruno Guilherme'), password: 'senhadobruno' }) }), env);
     brunoToken = (await brunoRegister.json()).token;
     const tipoNotebooks = 0; // Urgente (1h) em CATEGORIA_PRIORIDADE
     const before = Date.now();
@@ -530,8 +562,8 @@ async function test(name, fn) {
   });
   await test('sem nenhum admin inscrito, criar chamado não falha (só não manda push nenhum)', async () => {
     const solitaryEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1(), VAPID_PRIVATE_JWK: vapidPrivateJwkAdmin, VAPID_PUBLIC_KEY: 'fake-vapid-public-key' };
-    await d1CreateSolicitante(solitaryEnv, 'Michael Vasconcelos');
-    const reg = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Michael Vasconcelos', password: 'senha123' }) }), solitaryEnv);
+    await d1CreateSolicitante(solitaryEnv, 'Michael Vasconcelos', emailFor('Michael Vasconcelos'));
+    const reg = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), password: 'senha123' }) }), solitaryEnv);
     const soloToken = (await reg.json()).token;
     adminPushCalls.length = 0;
     const res = await worker.fetch(req('POST', '/api/tasks', {
@@ -664,7 +696,7 @@ async function test(name, fn) {
     const before = (await worker.fetch(req('GET', '/admin/users', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json()))
       .users.find(u => u.name === 'Michael Vasconcelos').lastLoginAt;
     await new Promise(r => setTimeout(r, 5));
-    await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Michael Vasconcelos', password: 'senha123' }) }), env);
+    await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), password: 'senha123' }) }), env);
     const after = (await worker.fetch(req('GET', '/admin/users', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json()))
       .users.find(u => u.name === 'Michael Vasconcelos').lastLoginAt;
     assert.ok(after > before, 'lastLoginAt deveria ter avançado após novo login');
@@ -723,7 +755,7 @@ async function test(name, fn) {
   });
   await test('POST /admin/solicitantes cria um solicitante novo', async () => {
     const res = await worker.fetch(req('POST', '/admin/solicitantes', {
-      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Carlos Eduardo' }),
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Carlos Eduardo', email: emailFor('Carlos Eduardo') }),
     }), env);
     assert.strictEqual(res.status, 200);
     const res2 = await worker.fetch(req('GET', '/api/solicitantes', { headers: SECRET_HEADERS }), env);
@@ -767,11 +799,215 @@ async function test(name, fn) {
     await worker.fetch(req('POST', `/admin/solicitantes/${encodeURIComponent('Carlos Eduardo')}/ativo`, {
       headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ ativo: false }),
     }), env);
-    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ name: 'Carlos Eduardo', password: 'senhaboa123' }) }), env);
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Carlos Eduardo'), password: 'senhaboa123' }) }), env);
     assert.strictEqual(res.status, 403);
   });
   // Fase M5 (2026-08-13): POST /admin/migrate-solicitantes removida (já rodou em
   // produção, ver CLAUDE.md) — sem rota, sem teste.
+
+  console.log('--- POST /admin/users/:nome/reset-senha (2026-09-16) ---');
+  await test('sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', `/admin/users/${encodeURIComponent('Michael Vasconcelos')}/reset-senha`, {}), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('reseta: some de GET /admin/users, e o próximo login vira registro (404)', async () => {
+    const antes = await worker.fetch(req('GET', '/admin/users', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json());
+    assert.ok(antes.users.some(u => u.name === 'Michael Vasconcelos'), 'Michael deveria ter senha cadastrada antes do reset (testes anteriores registraram)');
+
+    const res = await worker.fetch(req('POST', `/admin/users/${encodeURIComponent('Michael Vasconcelos')}/reset-senha`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+    }), env);
+    assert.strictEqual(res.status, 200);
+
+    const depois = await worker.fetch(req('GET', '/admin/users', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json());
+    assert.ok(!depois.users.some(u => u.name === 'Michael Vasconcelos'), 'Michael não deveria mais ter senha cadastrada');
+
+    const login = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), password: 'senha123' }) }), env);
+    assert.strictEqual(login.status, 404, 'login com a senha antiga deveria falhar — foi resetada');
+
+    // E consegue cadastrar uma senha nova, normalmente.
+    const registro = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), password: 'senhaNovaDepoisDoReset' }) }), env);
+    assert.strictEqual(registro.status, 200);
+  });
+  await test('resetar quem nunca teve senha é um no-op (200, não é erro)', async () => {
+    const res = await worker.fetch(req('POST', `/admin/users/${encodeURIComponent('Ninguém Nunca Registrou')}/reset-senha`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+    }), env);
+    assert.strictEqual(res.status, 200);
+  });
+  await test('reset limpa o lockout de tentativas erradas também', async () => {
+    // Ariele já tem 5 tentativas erradas acumuladas de um teste anterior (lockout
+    // ativo) — resetar a senha dela deveria destravar o lockout também, não só
+    // apagar a senha.
+    const bloqueada = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Ariele Santo'), password: 'senhadaariele' }) }), env);
+    assert.strictEqual(bloqueada.status, 429, 'devia estar bloqueada por lockout antes do reset (setup do teste)');
+
+    await worker.fetch(req('POST', `/admin/users/${encodeURIComponent('Ariele Santo')}/reset-senha`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+    }), env);
+
+    const res = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Ariele Santo'), password: 'qualquer' }) }), env);
+    assert.strictEqual(res.status, 404, 'sem lockout, sem senha (foi resetada) — 404, não 429');
+  });
+
+  console.log('--- e-mail dos solicitantes (2026-09-16, login por e-mail) ---');
+  await test('POST /admin/migrate-schema-solicitantes-email sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/admin/migrate-schema-solicitantes-email', {}), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('POST /admin/migrate-schema-solicitantes-email é idempotente (coluna já existe)', async () => {
+    // freshD1() já roda o schema.sql atual (com a coluna email desde o início) — este
+    // teste confirma que rodar a migração DE NOVO num banco que já tem a coluna não
+    // quebra (trata "duplicate column name" como sucesso, não como erro).
+    const res = await worker.fetch(req('POST', '/admin/migrate-schema-solicitantes-email', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+    }), env);
+    const data = await res.json();
+    assert.strictEqual(res.status, 200, JSON.stringify(data));
+    assert.strictEqual(data.ok, true);
+  });
+  await test('GET /admin/solicitantes devolve o e-mail de cada um', async () => {
+    const res = await worker.fetch(req('GET', '/admin/solicitantes', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    const { solicitantes } = await res.json();
+    const michael = solicitantes.find(s => s.name === 'Michael Vasconcelos');
+    assert.strictEqual(michael.email, emailFor('Michael Vasconcelos'));
+  });
+  await test('POST /admin/solicitantes com e-mail já usado por outro solicitante dá 409', async () => {
+    const res = await worker.fetch(req('POST', '/admin/solicitantes', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Pessoa Nova Com Email Duplicado', email: emailFor('Michael Vasconcelos') }),
+    }), env);
+    assert.strictEqual(res.status, 409);
+  });
+  await test('POST /admin/solicitantes/:nome/email edita o e-mail de um solicitante existente', async () => {
+    await worker.fetch(req('POST', '/admin/solicitantes', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Pessoa Sem Email Ainda' }),
+    }), env);
+    const novoEmail = 'pessoa.sem.email.ainda@institutosaovicente.com.br';
+    const res = await worker.fetch(req('POST', `/admin/solicitantes/${encodeURIComponent('Pessoa Sem Email Ainda')}/email`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: novoEmail }),
+    }), env);
+    assert.strictEqual(res.status, 200);
+
+    // E o login já funciona com o e-mail recém-cadastrado.
+    const reg = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: novoEmail, password: 'senhaboa123' }) }), env);
+    assert.strictEqual(reg.status, 200);
+  });
+  await test('POST /admin/solicitantes/:nome/email pra nome inexistente dá 404', async () => {
+    const res = await worker.fetch(req('POST', `/admin/solicitantes/${encodeURIComponent('Fantasma')}/email`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'fantasma@institutosaovicente.com.br' }),
+    }), env);
+    assert.strictEqual(res.status, 404);
+  });
+  await test('POST /admin/solicitantes/:nome/email pra e-mail já usado por outro dá 409, sem sobrescrever nada', async () => {
+    const res = await worker.fetch(req('POST', `/admin/solicitantes/${encodeURIComponent('Bruno Guilherme')}/email`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: emailFor('Michael Vasconcelos') }),
+    }), env);
+    assert.strictEqual(res.status, 409);
+    const admin = await worker.fetch(req('GET', '/admin/solicitantes', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json());
+    const bruno = admin.solicitantes.find(s => s.name === 'Bruno Guilherme');
+    assert.notStrictEqual(bruno.email, emailFor('Michael Vasconcelos'), 'não deveria ter sobrescrito o e-mail do Bruno');
+  });
+
+  console.log('--- domínio institucional obrigatório (2026-09-16, "muita gente usa o gmail ainda") ---');
+  await test('POST /admin/solicitantes com e-mail fora do domínio dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/admin/solicitantes', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Pessoa Com Gmail', email: 'pessoa@gmail.com' }),
+    }), env);
+    assert.strictEqual(res.status, 400);
+    const { error } = await res.json();
+    assert.match(error, /institutosaovicente\.com\.br/);
+  });
+  await test('POST /admin/solicitantes com e-mail do domínio certo funciona', async () => {
+    const res = await worker.fetch(req('POST', '/admin/solicitantes', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Pessoa Com Email Institucional', email: 'pessoa.institucional@institutosaovicente.com.br' }),
+    }), env);
+    assert.strictEqual(res.status, 200);
+  });
+  await test('POST /admin/solicitantes/:nome/email com gmail dá 400, não sobrescreve nada', async () => {
+    const res = await worker.fetch(req('POST', `/admin/solicitantes/${encodeURIComponent('Bruno Guilherme')}/email`, {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'bruno@gmail.com' }),
+    }), env);
+    assert.strictEqual(res.status, 400);
+    const admin = await worker.fetch(req('GET', '/admin/solicitantes', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json());
+    const bruno = admin.solicitantes.find(s => s.name === 'Bruno Guilherme');
+    assert.notStrictEqual(bruno.email, 'bruno@gmail.com');
+  });
+  await test('POST /admin/solicitantes/emails/bulk rejeita item com gmail (400 por item), sem derrubar os outros do lote', async () => {
+    await worker.fetch(req('POST', '/admin/solicitantes', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Pessoa Bulk Gmail' }),
+    }), env);
+    await worker.fetch(req('POST', '/admin/solicitantes', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Pessoa Bulk Institucional' }),
+    }), env);
+    const res = await worker.fetch(req('POST', '/admin/solicitantes/emails/bulk', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        emails: [
+          { name: 'Pessoa Bulk Gmail', email: 'pessoa.bulk@gmail.com' },
+          { name: 'Pessoa Bulk Institucional', email: 'pessoa.bulk.institucional@institutosaovicente.com.br' },
+        ],
+      }),
+    }), env);
+    const data = await res.json();
+    assert.strictEqual(data.sucesso, 1);
+    assert.strictEqual(data.falha, 1);
+    assert.match(data.results[0].error, /institutosaovicente\.com\.br/);
+    assert.strictEqual(data.results[1].ok, true);
+  });
+
+  console.log('--- POST /admin/solicitantes/emails/bulk (migração da lista real, 2026-09-16) ---');
+  await test('sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/admin/solicitantes/emails/bulk', { body: JSON.stringify({ emails: [] }) }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('sem "emails" (array) dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/admin/solicitantes/emails/bulk', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('aplica vários de uma vez, reporta sucesso/falha por nome — um e-mail duplicado não derruba os outros', async () => {
+    await worker.fetch(req('POST', '/admin/solicitantes', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Pessoa Bulk Um' }),
+    }), env);
+    await worker.fetch(req('POST', '/admin/solicitantes', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Pessoa Bulk Dois' }),
+    }), env);
+    const res = await worker.fetch(req('POST', '/admin/solicitantes/emails/bulk', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        emails: [
+          { name: 'Pessoa Bulk Um', email: 'pessoa.bulk.um@institutosaovicente.com.br' },
+          { name: 'Pessoa Bulk Dois', email: emailFor('Michael Vasconcelos') }, // duplicado, deve falhar
+          { name: 'Pessoa Que Não Existe', email: 'x@institutosaovicente.com.br' }, // nome inexistente, deve falhar
+        ],
+      }),
+    }), env);
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.strictEqual(data.total, 3);
+    assert.strictEqual(data.sucesso, 1);
+    assert.strictEqual(data.falha, 2);
+    assert.strictEqual(data.results[0].ok, true);
+    assert.strictEqual(data.results[1].ok, false);
+    assert.strictEqual(data.results[2].ok, false);
+
+    const admin = await worker.fetch(req('GET', '/admin/solicitantes', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json());
+    const um = admin.solicitantes.find(s => s.name === 'Pessoa Bulk Um');
+    assert.strictEqual(um.email, 'pessoa.bulk.um@institutosaovicente.com.br');
+  });
 
   console.log('--- GET /api/my-tasks lê do D1, não bate na ClickUp (Fase B7, 2026-08-12) ---');
   await test('devolve o que o D1 tem pro solicitante, sem nenhuma chamada à ClickUp', async () => {

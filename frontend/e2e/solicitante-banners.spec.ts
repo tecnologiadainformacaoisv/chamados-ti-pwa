@@ -27,6 +27,9 @@ test.describe("Banners do app do solicitante", () => {
   test("banner de instalar app aparece no beforeinstallprompt e some ao instalar", async ({ page }) => {
     await mockSolicitanteRoutes(page)
     await gotoSolicitanteLoggedIn(page)
+    // o listener de beforeinstallprompt só existe depois que a shell (pós-boot) monta —
+    // esperar a aba "Novo Chamado" aparecer evita perder o evento numa corrida com o boot()
+    await expect(page.getByRole("tab", { name: "Novo Chamado" })).toBeVisible()
     await expect(page.getByText("Instalar app")).not.toBeVisible()
 
     await page.evaluate(() => {
@@ -45,6 +48,8 @@ test.describe("Banners do app do solicitante", () => {
   test("banner de instalar some ao clicar 'Agora não' sem instalar", async ({ page }) => {
     await mockSolicitanteRoutes(page)
     await gotoSolicitanteLoggedIn(page)
+    // mesma corrida do teste acima — esperar a shell montar antes de disparar o evento
+    await expect(page.getByRole("tab", { name: "Novo Chamado" })).toBeVisible()
     await page.evaluate(() => {
       class FakeBIP extends Event {
         constructor() { super("beforeinstallprompt", { cancelable: true }) }

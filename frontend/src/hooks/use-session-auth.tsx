@@ -13,7 +13,7 @@ type SessionAuthValue = {
   nomes: string[]
   bootError: string | null
   retryBoot: () => void
-  login: (name: string, password: string) => Promise<void>
+  login: (email: string, password: string) => Promise<void>
   logout: () => void
   // Chamado quando qualquer requisição à API devolve 401 — mesmo efeito do
   // location.reload() da versão vanilla (limpa a sessão morta, volta pro login).
@@ -60,8 +60,8 @@ export function SessionAuthProvider({ children }: { children: ReactNode }) {
     boot()
   }, [boot])
 
-  const login = useCallback(async (name: string, password: string) => {
-    const result = await loginOrRegister(name, password)
+  const login = useCallback(async (email: string, password: string) => {
+    const result = await loginOrRegister(email, password)
     localStorage.setItem(TOKEN_KEY, result.token)
     localStorage.setItem(NAME_KEY, result.name)
     setSessionToken(result.token)

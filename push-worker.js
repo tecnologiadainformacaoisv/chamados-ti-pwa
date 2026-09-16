@@ -170,9 +170,15 @@ export default {
       if (pathname === '/admin/migrate-schema-nullable-tipo-setor') return handleAdminMigrateSchemaNullableTipoSetor(request, env);
       if (pathname === '/admin/migrate-schema-chamado-assignees') return handleAdminMigrateSchemaChamadoAssignees(request, env);
       if (pathname === '/admin/migrate-schema-solicitantes') return handleAdminMigrateSchemaSolicitantes(request, env);
+      if (pathname === '/admin/migrate-schema-solicitantes-email') return handleAdminMigrateSchemaSolicitantesEmail(request, env);
       if (pathname === '/admin/solicitantes') return handleAdminCreateSolicitante(request, env);
+      if (pathname === '/admin/solicitantes/emails/bulk') return handleAdminBulkSetSolicitanteEmails(request, env);
       const solAtivoMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/ativo$/);
       if (solAtivoMatch) return handleAdminSetSolicitanteAtivo(request, env, solAtivoMatch[1]);
+      const solEmailMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/email$/);
+      if (solEmailMatch) return handleAdminSetSolicitanteEmail(request, env, solEmailMatch[1]);
+      const resetSenhaMatch = pathname.match(/^\/admin\/users\/([^/]+)\/reset-senha$/);
+      if (resetSenhaMatch) return handleAdminResetSenha(request, env, resetSenhaMatch[1]);
       if (pathname === '/admin/migrate-schema-anexos') return handleAdminMigrateSchemaAnexos(request, env);
       if (pathname === '/admin/subscribe/test') return handleAdminSubscribeTest(request, env);
       if (pathname === '/admin/subscribe') return handleAdminSubscribe(request, env);
@@ -421,28 +427,53 @@ async function createSession(name, env) {
 // /auth/register — cria a senha de alguém que ainda não tem uma (primeiro acesso).
 // Body: { name, password, secret }
 // =====================================================================
+// Login por e-mail (2026-09-16, pedido da diretoria) — substitui por completo o
+// login por nome-escolhido-numa-lista. `name` continua sendo a identidade interna
+// de verdade (chave de `chamados.solicitante`, sessão, `auth_<nome>` no KV) — só o
+// PONTO DE ENTRADA mudou; resolvido aqui via d1GetSolicitanteByEmail antes de cair
+// no mesmo fluxo de sempre. E-mail normalizado (trim + minúsculas) tanto na escrita
+// (aqui, handleAdminCreateSolicitante, handleAdminSetSolicitanteEmail) quanto na
+// leitura — login não depende de bater maiúsculas/minúsculas.
+function normalizeEmail(v) {
+  return typeof v === 'string' ? v.trim().toLowerCase() : '';
+}
+
+// Domínio institucional obrigatório (2026-09-16, pedido do usuário) — "mta gente
+// usa o gmail ainda (devido a facilidade com o google drive)", mas o login do
+// sistema exige o e-mail oficial do instituto. Checado só nos 3 pontos onde um
+// e-mail é GRAVADO num solicitante (handleAdminCreateSolicitante,
+// handleAdminSetSolicitanteEmail, handleAdminBulkSetSolicitanteEmails) — não no
+// login/registro em si, porque ali o e-mail só é CONSULTADO (se nunca foi possível
+// gravar um gmail, login nunca vai encontrar um gmail cadastrado de qualquer jeito).
+const EMAIL_DOMAIN = 'institutosaovicente.com.br';
+
+function isEmailDoDominio(email) {
+  return email.endsWith(`@${EMAIL_DOMAIN}`);
+}
+
 async function handleRegister(request, env) {
   if (!hasValidSecret(request, env)) return unauthorized();
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
 
-  const name = body.name;
+  const email = normalizeEmail(body.email);
   const password = body.password;
-  if (!name || !password || password.length < 8) {
-    return jsonRes({ error: 'Nome e senha (mínimo 8 caracteres) são obrigatórios' }, 400);
+  if (!email || !password || password.length < 8) {
+    return jsonRes({ error: 'E-mail e senha (mínimo 8 caracteres) são obrigatórios' }, 400);
   }
 
-  // Fase M1 (2026-08-13, migração de saída da ClickUp): antes desta checagem, QUALQUER
-  // string virava conta — não existia validação nenhuma de que `name` era um solicitante
-  // de verdade (a única "trava" era o dropdown da UI, que confia no cliente). Agora exige
-  // que o nome esteja cadastrado e ativo na tabela `solicitantes` do D1 antes de deixar
-  // criar senha — fecha essa lacuna real de segurança.
-  if (!(await d1IsSolicitanteAtivo(env, name))) {
-    return jsonRes({ error: 'Nome não encontrado na lista de solicitantes. Fale com a TI.' }, 403);
+  // Mesma proteção que já existia baseada em nome (Fase M1, 2026-08-13) — agora via
+  // e-mail: só deixa criar senha se o e-mail já estiver cadastrado e ativo na
+  // tabela `solicitantes` (a TI cadastra o e-mail de cada um antes, tela
+  // "Usuários") — sem isso, qualquer e-mail viraria conta.
+  const solicitante = await d1GetSolicitanteByEmail(env, email);
+  if (!solicitante || solicitante.ativo !== 1) {
+    return jsonRes({ error: 'E-mail não encontrado na lista de solicitantes. Fale com a TI.' }, 403);
   }
+  const name = solicitante.name;
 
   if (await env.SUBSCRIPTIONS.get(`auth_${name}`)) {
-    return jsonRes({ error: 'Já existe uma senha cadastrada pra esse nome. Se esqueceu, peça pro TI resetar.' }, 409);
+    return jsonRes({ error: 'Já existe uma senha cadastrada pra esse e-mail. Se esqueceu, peça pro TI resetar.' }, 409);
   }
 
   await setAuthRecord(name, password, env);
@@ -452,16 +483,25 @@ async function handleRegister(request, env) {
 
 // =====================================================================
 // /auth/login — valida senha existente e devolve um token de sessão.
-// Body: { name, password, secret }
+// Body: { email, password, secret }
 // =====================================================================
 async function handleLogin(request, env) {
   if (!hasValidSecret(request, env)) return unauthorized();
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
 
-  const name = body.name;
+  const email = normalizeEmail(body.email);
   const password = body.password;
-  if (!name || !password) return jsonRes({ error: 'Nome e senha são obrigatórios' }, 400);
+  if (!email || !password) return jsonRes({ error: 'E-mail e senha são obrigatórios' }, 400);
+
+  const solicitante = await d1GetSolicitanteByEmail(env, email);
+  const name = solicitante?.name;
+  // Sem solicitante encontrado pra esse e-mail: mesma resposta 404 de "sem senha
+  // cadastrada ainda" — não distingue "e-mail desconhecido" de "e-mail válido sem
+  // senha" (o frontend cai pro fluxo de registro em qualquer um dos dois casos, e
+  // handleRegister rejeita de vez um e-mail que não corresponde a solicitante
+  // nenhum — ver comentário lá).
+  if (!name) return jsonRes({ error: 'Sem senha cadastrada pra esse e-mail ainda' }, 404);
 
   const failKey = `loginfail_${name}`;
   const failCount = parseInt(await env.SUBSCRIPTIONS.get(failKey) || '0');
@@ -470,7 +510,7 @@ async function handleLogin(request, env) {
   }
 
   const raw = await env.SUBSCRIPTIONS.get(`auth_${name}`);
-  if (!raw) return jsonRes({ error: 'Sem senha cadastrada pra esse nome ainda' }, 404);
+  if (!raw) return jsonRes({ error: 'Sem senha cadastrada pra esse e-mail ainda' }, 404);
   const record = JSON.parse(raw);
 
   const ok = await verifyPassword(password, record);
@@ -543,6 +583,24 @@ async function handleAdminListUsers(request, env) {
 
   users.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
   return jsonRes({ total: users.length, users });
+}
+
+// =====================================================================
+// POST /admin/users/:nome/reset-senha (2026-09-16, pedido do usuário: "ver os
+// cadastros e possivelmente resetar a senha de acesso dos usuários") — apaga a
+// senha atual (`auth_<nome>` no KV) e qualquer lockout de tentativas erradas
+// (`loginfail_<nome>`) pra essa pessoa. Não exige que o nome exista em
+// `solicitantes` nem que já tenha senha — resetar quem não tem senha nenhuma é só
+// um no-op idempotente (nada pra apagar), não um erro. Mesmo efeito prático que
+// apagar a chave manualmente no painel da Cloudflare (ver SEGREDOS-LOCAIS.md/
+// CLAUDE.md), só que sem precisar de acesso ao dashboard da Cloudflare pra isso.
+// =====================================================================
+async function handleAdminResetSenha(request, env, name) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  const decoded = decodeURIComponent(name);
+  await env.SUBSCRIPTIONS.delete(`auth_${decoded}`);
+  await env.SUBSCRIPTIONS.delete(`loginfail_${decoded}`);
+  return jsonRes({ ok: true });
 }
 
 // Fase M5 (2026-08-13): `cfValue`/`fetchAllTasks` foram removidas — só existiam pra
@@ -1617,8 +1675,8 @@ async function handleAdminCreateEvento(request, env, taskId) {
 // depois de buscar (volume é pequeno, dezenas de nomes, sem custo real).
 async function d1ListSolicitantes(env, { ativos = false } = {}) {
   const sql = ativos
-    ? 'SELECT name, ativo, created_at FROM solicitantes WHERE ativo = 1'
-    : 'SELECT name, ativo, created_at FROM solicitantes';
+    ? 'SELECT name, email, ativo, created_at FROM solicitantes WHERE ativo = 1'
+    : 'SELECT name, email, ativo, created_at FROM solicitantes';
   const { results } = await env.CHAMADOS_DB.prepare(sql).all();
   return (results || []).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
 }
@@ -1628,18 +1686,40 @@ async function d1IsSolicitanteAtivo(env, name) {
   return !!row && row.ativo === 1;
 }
 
+// Login por e-mail (2026-09-16, pedido da diretoria: "não quer usuários vendo
+// chamados de outros usuários" — a isolação em si já era garantida no servidor
+// desde sempre, mas escolher o NOME de outra pessoa numa lista era possível; email
+// é único por pessoa e não dá pra "escolher sem querer" o de outro). E-mail sempre
+// comparado em minúsculas (normalizado na escrita, ver handleRegister/
+// handleAdminCreateSolicitante/handleAdminSetSolicitanteEmail) — não depende de
+// quem digita bater exatamente maiúsculas/minúsculas no login.
+async function d1GetSolicitanteByEmail(env, email) {
+  const row = await env.CHAMADOS_DB.prepare('SELECT name, ativo FROM solicitantes WHERE email = ?').bind(email).first();
+  return row || null;
+}
+
 // INSERT OR IGNORE — idempotente, mesmo padrão do resto da camada D1 (rodar a
 // migração de novo, ou tentar cadastrar um nome que já existe, não duplica nem falha).
-async function d1CreateSolicitante(env, name) {
+async function d1CreateSolicitante(env, name, email = null) {
   const result = await env.CHAMADOS_DB.prepare(
-    'INSERT OR IGNORE INTO solicitantes (name, ativo, created_at) VALUES (?, 1, ?)'
-  ).bind(name, Date.now()).run();
+    'INSERT OR IGNORE INTO solicitantes (name, email, ativo, created_at) VALUES (?, ?, 1, ?)'
+  ).bind(name, email, Date.now()).run();
   return { inserted: (result.meta?.changes ?? 0) > 0 };
 }
 
 async function d1SetSolicitanteAtivo(env, name, ativo) {
   const result = await env.CHAMADOS_DB.prepare('UPDATE solicitantes SET ativo = ? WHERE name = ?')
     .bind(ativo ? 1 : 0, name).run();
+  return { updated: (result.meta?.changes ?? 0) > 0 };
+}
+
+// Índice único parcial em `email` (ver handleAdminMigrateSchemaSolicitantesEmail)
+// faz esse UPDATE lançar "UNIQUE constraint failed" se o e-mail já pertence a outro
+// solicitante — quem chama trata isso (ver handleAdminSetSolicitanteEmail/
+// handleAdminBulkSetSolicitanteEmails).
+async function d1SetSolicitanteEmail(env, name, email) {
+  const result = await env.CHAMADOS_DB.prepare('UPDATE solicitantes SET email = ? WHERE name = ?')
+    .bind(email, name).run();
   return { updated: (result.meta?.changes ?? 0) > 0 };
 }
 
@@ -1670,11 +1750,85 @@ async function handleAdminCreateSolicitante(request, env) {
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
   const name = typeof body.name === 'string' ? body.name.trim() : '';
+  const email = normalizeEmail(body.email) || null;
   if (!name) return jsonRes({ error: 'nome é obrigatório' }, 400);
+  if (email && !isEmailDoDominio(email)) {
+    return jsonRes({ error: `e-mail precisa ser do domínio @${EMAIL_DOMAIN}` }, 400);
+  }
 
-  const { inserted } = await d1CreateSolicitante(env, name);
-  if (!inserted) return jsonRes({ error: 'já existe um solicitante com esse nome' }, 409);
-  return jsonRes({ ok: true, name });
+  try {
+    const { inserted } = await d1CreateSolicitante(env, name, email);
+    if (!inserted) return jsonRes({ error: 'já existe um solicitante com esse nome' }, 409);
+    return jsonRes({ ok: true, name, email });
+  } catch (err) {
+    // Índice único parcial em `email` (ver handleAdminMigrateSchemaSolicitantesEmail)
+    if (/unique/i.test(err.message)) return jsonRes({ error: 'já existe outro solicitante com esse e-mail' }, 409);
+    return jsonRes({ error: err.message }, 500);
+  }
+}
+
+// =====================================================================
+// POST /admin/solicitantes/:nome/email — edita o e-mail de um solicitante já
+// cadastrado (tela "Usuários", 2026-09-16 — login por e-mail exige que a TI
+// cadastre/edite o e-mail de cada um). `email: null` limpa o campo (solicitante
+// fica sem e-mail — não consegue logar/registrar até a TI preencher de novo).
+// =====================================================================
+async function handleAdminSetSolicitanteEmail(request, env, name) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  const email = normalizeEmail(body.email) || null;
+  if (email && !isEmailDoDominio(email)) {
+    return jsonRes({ error: `e-mail precisa ser do domínio @${EMAIL_DOMAIN}` }, 400);
+  }
+
+  try {
+    const { updated } = await d1SetSolicitanteEmail(env, decodeURIComponent(name), email);
+    if (!updated) return jsonRes({ error: 'solicitante não encontrado' }, 404);
+    return jsonRes({ ok: true });
+  } catch (err) {
+    if (/unique/i.test(err.message)) return jsonRes({ error: 'já existe outro solicitante com esse e-mail' }, 409);
+    return jsonRes({ error: err.message }, 500);
+  }
+}
+
+// =====================================================================
+// POST /admin/solicitantes/emails/bulk — preenche o e-mail de vários solicitantes
+// de uma vez (2026-09-16) — pensado pro momento da migração real: a TI tem uma
+// lista nome->email de todo mundo já cadastrado (hoje sem e-mail) e aplica tudo
+// numa chamada só, em vez de editar um por um na tela. Body: { emails: [{name,
+// email}] }. Mesmo espírito de POST /admin/tasks/bulk — sem transação entre itens,
+// reporta sucesso/falha por nome (um e-mail duplicado não derruba os outros).
+// =====================================================================
+async function handleAdminBulkSetSolicitanteEmails(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  const items = Array.isArray(body.emails) ? body.emails : [];
+  if (!items.length) return jsonRes({ error: '"emails" (array) é obrigatório' }, 400);
+  if (items.length > 200) return jsonRes({ error: 'máximo de 200 por vez' }, 400);
+
+  const results = [];
+  for (const item of items) {
+    const name = typeof item?.name === 'string' ? item.name.trim() : '';
+    const email = normalizeEmail(item?.email);
+    if (!name || !email) {
+      results.push({ name: name || '(sem nome)', ok: false, error: 'nome/e-mail inválido' });
+      continue;
+    }
+    if (!isEmailDoDominio(email)) {
+      results.push({ name, ok: false, error: `e-mail precisa ser do domínio @${EMAIL_DOMAIN}` });
+      continue;
+    }
+    try {
+      const { updated } = await d1SetSolicitanteEmail(env, name, email);
+      results.push(updated ? { name, ok: true } : { name, ok: false, error: 'solicitante não encontrado' });
+    } catch (err) {
+      results.push({ name, ok: false, error: /unique/i.test(err.message) ? 'e-mail já usado por outro solicitante' : err.message });
+    }
+  }
+  const sucesso = results.filter(r => r.ok).length;
+  return jsonRes({ total: results.length, sucesso, falha: results.length - sucesso, results });
 }
 
 async function handleAdminSetSolicitanteAtivo(request, env, name) {
@@ -1877,6 +2031,38 @@ async function handleAdminMigrateSchemaSolicitantes(request, env) {
   } catch (err) {
     return jsonRes({ error: `migração de schema falhou: ${err.message}` }, 500);
   }
+}
+
+// =====================================================================
+// POST /admin/migrate-schema-solicitantes-email — migração de schema ÚNICA
+// (2026-09-16, login por e-mail pedido pela diretoria) — adiciona a coluna `email`
+// na tabela `solicitantes` já existente. `ALTER TABLE ADD COLUMN` (não recria a
+// tabela — diferente de handleAdminMigrateSchemaNullableTipoSetor, que precisou
+// recriar por causa de NOT NULL; aqui a coluna nasce nullable, ADD COLUMN simples
+// resolve). SQLite não tem `ADD COLUMN IF NOT EXISTS` — roda de novo (idempotência)
+// tratando o erro "duplicate column name" como sucesso. Índice único PARCIAL
+// (`WHERE email IS NOT NULL`) — permite múltiplos solicitantes sem e-mail ainda
+// (estado normal logo após esta migração, antes da TI preencher a lista real) sem
+// violar unicidade, mas garante que dois solicitantes nunca dividam o mesmo e-mail
+// assim que preenchido.
+// =====================================================================
+async function handleAdminMigrateSchemaSolicitantesEmail(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  try {
+    await env.CHAMADOS_DB.prepare(`ALTER TABLE solicitantes ADD COLUMN email TEXT`).run();
+  } catch (err) {
+    if (!/duplicate column/i.test(err.message)) {
+      return jsonRes({ error: `migração de schema falhou (ADD COLUMN): ${err.message}` }, 500);
+    }
+  }
+  try {
+    await env.CHAMADOS_DB.prepare(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_solicitantes_email ON solicitantes(email) WHERE email IS NOT NULL`
+    ).run();
+  } catch (err) {
+    return jsonRes({ error: `migração de schema falhou (índice): ${err.message}` }, 500);
+  }
+  return jsonRes({ ok: true });
 }
 
 // =====================================================================
@@ -2129,4 +2315,4 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
   return updated;
 }
 
-export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1DeleteChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees, d1ListSolicitantes, d1IsSolicitanteAtivo, d1CreateSolicitante, d1SetSolicitanteAtivo, d1ListAnexos, d1GetAnexoRow, d1LogEvento, d1CreateEvento, d1ListEventos };
+export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1DeleteChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees, d1ListSolicitantes, d1IsSolicitanteAtivo, d1CreateSolicitante, d1SetSolicitanteAtivo, d1GetSolicitanteByEmail, d1SetSolicitanteEmail, d1ListAnexos, d1GetAnexoRow, d1LogEvento, d1CreateEvento, d1ListEventos };

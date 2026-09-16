@@ -71,11 +71,20 @@ CREATE INDEX IF NOT EXISTS idx_chamado_assignees_assignee ON chamado_assignees (
 -- ClickUp, que exigia orderindex). `ativo` desativa em vez de apagar — chamados
 -- antigos continuam referenciando o nome pelo histórico, mesmo que a pessoa não
 -- trabalhe mais aqui; só para de aparecer no dropdown de login/gestão.
+-- `email` (2026-09-16, pedido da diretoria: login por e-mail em vez de escolher o
+-- próprio nome numa lista) — nullable de propósito (nasce vazio; a TI preenche a
+-- lista real depois, ver POST /admin/solicitantes/emails/bulk); índice único
+-- PARCIAL (só valida unicidade quando preenchido) permite múltiplos NULL sem
+-- conflito. Em produção, essa coluna foi adicionada via `ALTER TABLE` (ver
+-- POST /admin/migrate-schema-solicitantes-email) numa tabela que já existia — este
+-- CREATE TABLE só importa pra um banco novo do zero.
 CREATE TABLE IF NOT EXISTS solicitantes (
   name       TEXT PRIMARY KEY,
+  email      TEXT,
   ativo      INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_solicitantes_email ON solicitantes (email) WHERE email IS NOT NULL;
 
 -- Anexos (Fase M2 da migração de saída da ClickUp, 2026-08-13) — até aqui, todo anexo
 -- de chamado morava só na ClickUp (upload direto pra lá, URL pública dela usada direto

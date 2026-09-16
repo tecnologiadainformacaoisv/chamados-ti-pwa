@@ -1,12 +1,15 @@
 import { test, expect } from "./helpers/fixtures"
 import { mockSolicitanteRoutes, gotoSolicitanteLoggedIn } from "./helpers/fixtures"
 
+// Login por e-mail (2026-09-16, pedido da diretoria: "não quer usuários vendo
+// chamados de outros usuários") — substitui o <Select> de escolher o próprio nome
+// numa lista. `#setup-email` (Input) no lugar de `[data-slot="select-trigger"]`.
 test.describe("Login/cadastro do solicitante", () => {
-  test("mostra erro se tentar entrar sem nome/senha", async ({ page }) => {
+  test("mostra erro se tentar entrar sem e-mail/senha", async ({ page }) => {
     await mockSolicitanteRoutes(page)
     await page.goto("/")
     await page.getByRole("button", { name: "Entrar" }).click()
-    await expect(page.getByText("Selecione seu nome para continuar")).toBeVisible()
+    await expect(page.getByText("Digite seu e-mail institucional para continuar")).toBeVisible()
   })
 
   test("primeiro acesso: login 404 cai pra registro automático", async ({ page }) => {
@@ -16,8 +19,7 @@ test.describe("Login/cadastro do solicitante", () => {
     await page.route("**/auth/login", (route) => route.fulfill({ status: 404, contentType: "application/json", body: "{}" }))
     await page.goto("/")
 
-    await page.locator('[data-slot="select-trigger"]').click()
-    await page.getByRole("option", { name: "Fulano de Tal" }).click()
+    await page.locator("#setup-email").fill("fulano@institutosaovicente.com.br")
     await page.locator("#setup-password").fill("senha12345")
     await page.getByRole("button", { name: "Entrar" }).click()
 
@@ -28,8 +30,7 @@ test.describe("Login/cadastro do solicitante", () => {
   test("login normal entra direto na tela principal", async ({ page }) => {
     await mockSolicitanteRoutes(page)
     await page.goto("/")
-    await page.locator('[data-slot="select-trigger"]').click()
-    await page.getByRole("option", { name: "Ciclana Souza" }).click()
+    await page.locator("#setup-email").fill("ciclana@institutosaovicente.com.br")
     await page.locator("#setup-password").fill("senha12345")
     await page.getByRole("button", { name: "Entrar" }).click()
     await expect(page.getByRole("tab", { name: "Novo Chamado" })).toBeVisible()
@@ -39,8 +40,7 @@ test.describe("Login/cadastro do solicitante", () => {
     await mockSolicitanteRoutes(page)
     await page.route("**/auth/login", (route) => route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "Senha incorreta." }) }))
     await page.goto("/")
-    await page.locator('[data-slot="select-trigger"]').click()
-    await page.getByRole("option", { name: "Fulano de Tal" }).click()
+    await page.locator("#setup-email").fill("fulano@institutosaovicente.com.br")
     await page.locator("#setup-password").fill("senhaerrada")
     await page.getByRole("button", { name: "Entrar" }).click()
     await expect(page.getByText("Senha incorreta.")).toBeVisible()
@@ -58,13 +58,16 @@ test.describe("Login/cadastro do solicitante", () => {
     await gotoSolicitanteLoggedIn(page)
     page.on("dialog", (d) => d.accept())
     await page.getByRole("button", { name: "Sair" }).click()
-    await expect(page.locator("#setup-name")).toBeVisible()
+    await expect(page.locator("#setup-email")).toBeVisible()
     expect(await page.evaluate(() => localStorage.getItem("session_token"))).toBeNull()
   })
 
   test("erro ao carregar lista de solicitantes mostra tela de boot-error com retry", async ({ page }) => {
     await mockSolicitanteRoutes(page)
     // Registrado DEPOIS dos defaults — tem prioridade (LIFO), sobrescreve só este endpoint.
+    // A lista de nomes ainda é buscada no boot (usada só pra validar sessão salva, ver
+    // use-session-auth.tsx) — deixou de alimentar um <Select>, mas o boot-error nesse
+    // cenário continua valendo.
     await page.route("**/api/solicitantes", (route) => {
       if (route.request().method() === "OPTIONS") return route.fallback()
       return route.fulfill({ status: 500, contentType: "application/json", body: "{}" })

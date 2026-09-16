@@ -221,10 +221,31 @@ export async function fetchSolicitanteNomes(): Promise<string[]> {
 
 // Gestão de solicitantes (Fase M1, 2026-08-13) — tela nova "Usuários" no admin, pra TI
 // adicionar/desativar quem pode logar no app, sem precisar mais editar isso na ClickUp.
-export type AdminSolicitante = { name: string; ativo: number; created_at: number }
+// `email` (2026-09-16, login por e-mail) — null até a TI cadastrar.
+export type AdminSolicitante = { name: string; email: string | null; ativo: number; created_at: number }
 
 export async function fetchAdminSolicitantes(secret: string): Promise<{ solicitantes: AdminSolicitante[] }> {
   return adminRequest(secret, "/solicitantes")
+}
+
+// GET /admin/users (2026-09-16, agora exposta na tela "Usuários") — quem JÁ tem
+// senha cadastrada (registrou pelo menos uma vez). Cruza com AdminSolicitante pra
+// mostrar "cadastro pendente" vs "já acessou" na mesma tabela — nunca devolve
+// hash/salt de senha, só metadados (ver handleAdminListUsers em push-worker.js).
+export type AdminUser = { name: string; createdAt: number | null; lastLoginAt: number | null }
+
+export async function fetchAdminUsers(secret: string): Promise<{ total: number; users: AdminUser[] }> {
+  return adminRequest(secret, "/users")
+}
+
+// "Resetar senha" (2026-09-16, pedido do usuário: "ver os cadastros e possivelmente
+// resetar a senha de acesso dos usuários") — apaga a senha atual (auth_<nome> no KV)
+// e qualquer lockout de tentativas erradas; a pessoa cadastra uma senha nova no
+// próximo login, mesmo fluxo de "primeira vez" de sempre. Antes disso só dava pra
+// fazer isso manualmente apagando a chave no painel da Cloudflare (ver
+// SEGREDOS-LOCAIS.md/CLAUDE.md) — agora é um botão na tela.
+export async function resetSenhaSolicitante(secret: string, name: string): Promise<void> {
+  await adminMutate(secret, `/users/${encodeURIComponent(name)}/reset-senha`, {})
 }
 
 async function adminMutate(secret: string, path: string, body: unknown): Promise<void> {
@@ -242,8 +263,12 @@ async function adminMutate(secret: string, path: string, body: unknown): Promise
   }
 }
 
-export async function createSolicitante(secret: string, name: string): Promise<void> {
-  await adminMutate(secret, "/solicitantes", { name })
+export async function createSolicitante(secret: string, name: string, email?: string): Promise<void> {
+  await adminMutate(secret, "/solicitantes", { name, email: email || undefined })
+}
+
+export async function setSolicitanteEmail(secret: string, name: string, email: string): Promise<void> {
+  await adminMutate(secret, `/solicitantes/${encodeURIComponent(name)}/email`, { email })
 }
 
 export async function setSolicitanteAtivo(secret: string, name: string, ativo: boolean): Promise<void> {

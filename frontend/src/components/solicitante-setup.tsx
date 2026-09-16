@@ -3,16 +3,21 @@ import { useSessionAuth } from "@/hooks/use-session-auth"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import iconIsv from "@/assets/icon-isv.svg"
 
 // Porta showSetup()/onSetupSubmit() de app.js — login e cadastro são a mesma tela e o
-// mesmo formulário: se /auth/login devolve 404 (sem senha pra esse nome), a senha
+// mesmo formulário: se /auth/login devolve 404 (sem senha pra esse e-mail), a senha
 // digitada agora vira a senha de acesso (ver loginOrRegister em app-api.ts).
+//
+// Login por e-mail (2026-09-16, pedido da diretoria) — antes disso era um <Select>
+// escolhendo o próprio nome numa lista de todo mundo (`nomes`, ainda usado aqui só
+// pra validar se a sessão salva continua correspondendo a alguém ativo, ver
+// use-session-auth.tsx). Trocar pra e-mail fecha o risco de escolher o nome de
+// OUTRA pessoa sem querer — cada um só sabe o próprio e-mail.
 export function SolicitanteSetup() {
-  const { nomes, bootError, retryBoot, login } = useSessionAuth()
-  const [name, setName] = useState("")
+  const { bootError, retryBoot, login } = useSessionAuth()
+  const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -31,8 +36,8 @@ export function SolicitanteSetup() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (!name) {
-      setError("Selecione seu nome para continuar")
+    if (!email) {
+      setError("Digite seu e-mail institucional para continuar")
       return
     }
     if (!password) {
@@ -42,7 +47,7 @@ export function SolicitanteSetup() {
     setSubmitting(true)
     setError(null)
     try {
-      await login(name, password)
+      await login(email, password)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível entrar. Verifique sua conexão.")
     } finally {
@@ -65,15 +70,15 @@ export function SolicitanteSetup() {
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
-            <Label htmlFor="setup-name">Seu nome *</Label>
-            <Select value={name} onValueChange={setName}>
-              <SelectTrigger id="setup-name"><SelectValue placeholder="Selecione seu nome..." /></SelectTrigger>
-              <SelectContent>
-                {nomes.map((n) => (
-                  <SelectItem key={n} value={n}>{n}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label htmlFor="setup-email">Seu e-mail institucional *</Label>
+            <Input
+              id="setup-email"
+              type="email"
+              autoComplete="username"
+              placeholder="voce@institutosaovicente.com.br"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
           </div>
 
           <div className="flex flex-col gap-2">

@@ -23,12 +23,17 @@ async function authRequest(path: string, body: unknown): Promise<{ token: string
   return data as { token: string; name: string }
 }
 
-export async function loginOrRegister(name: string, password: string): Promise<{ token: string; name: string }> {
+// Login por e-mail (2026-09-16, pedido da diretoria: "não quer usuários vendo
+// chamados de outros usuários") — troca o antigo "escolher o próprio nome numa
+// lista" por e-mail+senha. O servidor resolve email->nome internamente
+// (d1GetSolicitanteByEmail) e continua devolvendo `name` na resposta — a sessão em
+// si (token, identidade interna) não muda nada, só o campo de entrada do login.
+export async function loginOrRegister(email: string, password: string): Promise<{ token: string; name: string }> {
   try {
-    return await authRequest("/login", { name, password })
+    return await authRequest("/login", { email, password })
   } catch (err) {
     if (err instanceof AuthError && err.status === 404) {
-      return await authRequest("/register", { name, password })
+      return await authRequest("/register", { email, password })
     }
     throw err
   }
