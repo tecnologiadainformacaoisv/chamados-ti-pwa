@@ -51,6 +51,13 @@ export async function mockSolicitanteRoutes(
   await on(page, "**/api/solicitantes", "GET", (route) => fulfillJson(route, { names: solicitantes }))
   await on(page, "**/auth/login", "POST", (route) => fulfillJson(route, { token: "fake-session-token", name: "Fulano de Tal" }))
   await on(page, "**/auth/register", "POST", (route) => fulfillJson(route, { token: "fake-session-token", name: "Fulano de Tal" }))
+  // Autocadastro externo (2026-09-17) — devolve o nome que a pessoa digitou (diferente
+  // de login/register, que sempre respondem com o nome fixo "Fulano de Tal" — aqui o
+  // nome só existe porque veio no corpo da requisição, então o mock ecoa de volta).
+  await on(page, "**/auth/register-externo", "POST", async (route) => {
+    const body = route.request().postDataJSON() as { name?: string }
+    return fulfillJson(route, { token: "fake-session-token", name: body.name ?? "Externo Teste" })
+  })
   await on(page, "**/auth/logout", "POST", (route) => fulfillJson(route, { ok: true }))
   await on(page, "**/api/my-tasks", "GET", (route) => fulfillJson(route, { tasks }))
   await on(page, /\/api\/tasks$/, "POST", (route) => fulfillJson(route, makeTask({ id: "task-novo", name: "Chamado recém-criado" })))

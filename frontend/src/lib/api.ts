@@ -222,7 +222,17 @@ export async function fetchSolicitanteNomes(): Promise<string[]> {
 // Gestão de solicitantes (Fase M1, 2026-08-13) — tela nova "Usuários" no admin, pra TI
 // adicionar/desativar quem pode logar no app, sem precisar mais editar isso na ClickUp.
 // `email` (2026-09-16, login por e-mail) — null até a TI cadastrar.
-export type AdminSolicitante = { name: string; email: string | null; ativo: number; created_at: number }
+// `origem`/`telefone` (2026-09-17) — ver comentário em d1/schema.sql. `origem` pode
+// vir ausente em bancos onde a migração ainda não rodou (fallback pra "interno" no
+// componente, não aqui — mantém o tipo fiel ao que o servidor pode devolver).
+export type AdminSolicitante = {
+  name: string
+  email: string | null
+  ativo: number
+  created_at: number
+  origem?: "interno" | "externo"
+  telefone?: string | null
+}
 
 export async function fetchAdminSolicitantes(secret: string): Promise<{ solicitantes: AdminSolicitante[] }> {
   return adminRequest(secret, "/solicitantes")

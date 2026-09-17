@@ -78,11 +78,26 @@ CREATE INDEX IF NOT EXISTS idx_chamado_assignees_assignee ON chamado_assignees (
 -- conflito. Em produção, essa coluna foi adicionada via `ALTER TABLE` (ver
 -- POST /admin/migrate-schema-solicitantes-email) numa tabela que já existia — este
 -- CREATE TABLE só importa pra um banco novo do zero.
+-- `origem`/`telefone` (2026-09-17, pedido do usuário: "os chamados tbm estao sendo
+-- usados de forma externa... recebemos um chamado com a identificacao outros e nem
+-- sabemos de onde veio") — até aqui, quem não estava na lista pré-aprovada pela TI
+-- não tinha como logar de jeito nenhum; na prática isso empurrou todo mundo externo
+-- pra uma conta única compartilhada ("Outros"), misturando chamados de gente
+-- diferente sob a mesma identidade — o problema que a diretoria queria evitar com o
+-- login por e-mail (2026-09-16) voltou pela porta dos fundos. `origem` distingue
+-- 'interno' (cadastrado pela TI, e-mail @institutosaovicente.com.br obrigatório) de
+-- 'externo' (autocadastro via POST /auth/register-externo, e-mail de qualquer
+-- domínio, name+email digitados pela própria pessoa) — ver handleRegisterExterno.
+-- `telefone` só é preenchido no fluxo externo (ajuda a TI a identificar/contatar
+-- alguém que a TI nunca cadastrou). Em produção, adicionadas via `ALTER TABLE` (ver
+-- POST /admin/migrate-schema-solicitantes-origem) numa tabela que já existia.
 CREATE TABLE IF NOT EXISTS solicitantes (
   name       TEXT PRIMARY KEY,
   email      TEXT,
   ativo      INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  origem     TEXT NOT NULL DEFAULT 'interno',
+  telefone   TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_solicitantes_email ON solicitantes (email) WHERE email IS NOT NULL;
 

@@ -39,6 +39,22 @@ export async function loginOrRegister(email: string, password: string): Promise<
   }
 }
 
+// Autocadastro externo (2026-09-17, pedido do usuário: "os chamados tbm estao
+// sendo usados de forma externa... recebemos um chamado com a identificacao
+// outros e nem sabemos de onde veio") — pra quem não tem e-mail institucional e
+// não está na lista pré-aprovada pela TI. Diferente de loginOrRegister: name/email
+// digitados aqui mesmo (não resolvidos a partir de um cadastro prévio), sem
+// checagem de domínio (é justamente pra e-mail pessoal), telefone opcional. Ver
+// handleRegisterExterno em push-worker.js pro detalhe completo.
+export async function registerExterno(
+  name: string,
+  email: string,
+  password: string,
+  telefone?: string
+): Promise<{ token: string; name: string }> {
+  return authRequest("/register-externo", { name, email, password, telefone: telefone || undefined })
+}
+
 export async function logoutFromServer(sessionToken: string): Promise<void> {
   if (!sessionToken) return
   try {

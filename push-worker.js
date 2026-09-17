@@ -136,6 +136,7 @@ export default {
 
     if (request.method === 'POST') {
       if (pathname === '/auth/register') return handleRegister(request, env);
+      if (pathname === '/auth/register-externo') return handleRegisterExterno(request, env);
       if (pathname === '/auth/login')    return handleLogin(request, env);
       if (pathname === '/auth/logout')   return handleLogout(request, env);
       if (pathname === '/subscribe')     return handleSubscribe(request, env);
@@ -171,6 +172,7 @@ export default {
       if (pathname === '/admin/migrate-schema-chamado-assignees') return handleAdminMigrateSchemaChamadoAssignees(request, env);
       if (pathname === '/admin/migrate-schema-solicitantes') return handleAdminMigrateSchemaSolicitantes(request, env);
       if (pathname === '/admin/migrate-schema-solicitantes-email') return handleAdminMigrateSchemaSolicitantesEmail(request, env);
+      if (pathname === '/admin/migrate-schema-solicitantes-origem') return handleAdminMigrateSchemaSolicitantesOrigem(request, env);
       if (pathname === '/admin/solicitantes') return handleAdminCreateSolicitante(request, env);
       if (pathname === '/admin/solicitantes/emails/bulk') return handleAdminBulkSetSolicitanteEmails(request, env);
       const solAtivoMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/ativo$/);
@@ -474,6 +476,86 @@ async function handleRegister(request, env) {
 
   if (await env.SUBSCRIPTIONS.get(`auth_${name}`)) {
     return jsonRes({ error: 'Já existe uma senha cadastrada pra esse e-mail. Se esqueceu, peça pro TI resetar.' }, 409);
+  }
+
+  await setAuthRecord(name, password, env);
+  const token = await createSession(name, env);
+  return jsonRes({ token, name });
+}
+
+// Checagem simples de formato (não valida domínio — externo aceita qualquer um,
+// diferente de isEmailDoDominio). Só pra pegar erro de digitação óbvio antes de gravar.
+const EMAIL_FORMATO_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// =====================================================================
+// /auth/register-externo — autocadastro pra quem NÃO está na lista pré-aprovada
+// pela TI (visitante, parceiro, fornecedor — 2026-09-17, pedido do usuário: "os
+// chamados tbm estao sendo usados de forma externa, e agora recebemos um chamado
+// com a identificacao outros e nem sabemos de onde veio"). Até aqui, alguém sem
+// e-mail institucional não tinha NENHUMA forma de logar — na prática isso empurrou
+// todo mundo externo pra uma conta compartilhada única ("Outros" ou parecido),
+// misturando chamados de pessoas diferentes sob a mesma identidade — exatamente o
+// problema que o login por e-mail (2026-09-16) queria evitar, só que reintroduzido
+// pela porta dos fundos pra quem não está na lista da TI.
+// Diferenças deliberadas em relação a handleRegister:
+//   - name/email digitados aqui pela própria pessoa (handleRegister resolve o name
+//     a partir de um solicitante que a TI JÁ cadastrou; aqui não existe cadastro
+//     prévio nenhum — o INSERT acontece nesta própria chamada).
+//   - SEM exigência de domínio institucional (isEmailDoDominio nunca é chamada) —
+//     é justamente pra quem não tem e-mail @institutosaovicente.com.br.
+//   - telefone opcional, mas recomendado: e-mail pessoal é fácil de digitar errado
+//     e não dá pra confirmar por nenhuma lista prévia; telefone é uma segunda forma
+//     de identificar/contatar alguém que a TI nunca viu antes.
+//   - origem: 'externo' grava a distinção pra tela "Usuários" do admin poder
+//     filtrar/sinalizar visualmente quem entrou por esse caminho (ver usuarios-view.tsx).
+// Body: { name, email, password, telefone? }
+// =====================================================================
+async function handleRegisterExterno(request, env) {
+  if (!hasValidSecret(request, env)) return unauthorized();
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+
+  const name = typeof body.name === 'string' ? body.name.trim().replace(/\s+/g, ' ') : '';
+  const email = normalizeEmail(body.email);
+  const password = body.password;
+  const telefone = typeof body.telefone === 'string' && body.telefone.trim() ? body.telefone.trim() : null;
+
+  if (!name || name.split(' ').length < 2) {
+    return jsonRes({ error: 'Digite seu nome completo (nome e sobrenome)' }, 400);
+  }
+  if (!email || !EMAIL_FORMATO_REGEX.test(email)) {
+    return jsonRes({ error: 'E-mail inválido' }, 400);
+  }
+  // Domínio institucional é reservado pra conta criada/aprovada pela TI (handleRegister) —
+  // sem essa checagem, qualquer um poderia se autocadastrar como "externo" alegando
+  // um e-mail @institutosaovicente.com.br que a TI nunca cadastrou de verdade.
+  if (isEmailDoDominio(email)) {
+    return jsonRes({ error: 'E-mail institucional detectado — use a tela de entrada normal, não o cadastro externo' }, 400);
+  }
+  if (!password || password.length < 8) {
+    return jsonRes({ error: 'Senha (mínimo 8 caracteres) é obrigatória' }, 400);
+  }
+
+  const existente = await d1GetSolicitanteByEmail(env, email);
+  if (existente) {
+    return jsonRes({ error: 'Já existe um cadastro com esse e-mail. Tente entrar em vez de cadastrar de novo.' }, 409);
+  }
+
+  let inserted;
+  try {
+    ({ inserted } = await d1CreateSolicitante(env, name, email, { origem: 'externo', telefone }));
+  } catch (err) {
+    if (/unique/i.test(err.message)) {
+      return jsonRes({ error: 'Já existe outro cadastro com esse e-mail' }, 409);
+    }
+    return jsonRes({ error: err.message }, 500);
+  }
+  // name é PRIMARY KEY — colisão de nome (não de e-mail, já checado acima) é rara
+  // mas possível (duas pessoas diferentes digitando o mesmo nome completo). Pedir
+  // pra completar o nome em vez de mascarar com sufixo automático, que confundiria
+  // a TI olhando o Kanban/Tabela depois.
+  if (!inserted) {
+    return jsonRes({ error: 'Já existe um cadastro com esse nome. Inclua um sobrenome adicional ou fale com a TI.' }, 409);
   }
 
   await setAuthRecord(name, password, env);
@@ -1675,8 +1757,8 @@ async function handleAdminCreateEvento(request, env, taskId) {
 // depois de buscar (volume é pequeno, dezenas de nomes, sem custo real).
 async function d1ListSolicitantes(env, { ativos = false } = {}) {
   const sql = ativos
-    ? 'SELECT name, email, ativo, created_at FROM solicitantes WHERE ativo = 1'
-    : 'SELECT name, email, ativo, created_at FROM solicitantes';
+    ? 'SELECT name, email, ativo, created_at, origem, telefone FROM solicitantes WHERE ativo = 1'
+    : 'SELECT name, email, ativo, created_at, origem, telefone FROM solicitantes';
   const { results } = await env.CHAMADOS_DB.prepare(sql).all();
   return (results || []).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
 }
@@ -1700,10 +1782,13 @@ async function d1GetSolicitanteByEmail(env, email) {
 
 // INSERT OR IGNORE — idempotente, mesmo padrão do resto da camada D1 (rodar a
 // migração de novo, ou tentar cadastrar um nome que já existe, não duplica nem falha).
-async function d1CreateSolicitante(env, name, email = null) {
+// `origem`/`telefone` (2026-09-17) — ver comentário em d1/schema.sql. `origem`
+// default 'interno' preserva o comportamento de sempre pra quem chama com 2
+// argumentos (handleAdminCreateSolicitante, migração de solicitantes).
+async function d1CreateSolicitante(env, name, email = null, { origem = 'interno', telefone = null } = {}) {
   const result = await env.CHAMADOS_DB.prepare(
-    'INSERT OR IGNORE INTO solicitantes (name, email, ativo, created_at) VALUES (?, ?, 1, ?)'
-  ).bind(name, email, Date.now()).run();
+    'INSERT OR IGNORE INTO solicitantes (name, email, ativo, created_at, origem, telefone) VALUES (?, ?, 1, ?, ?, ?)'
+  ).bind(name, email, Date.now(), origem, telefone).run();
   return { inserted: (result.meta?.changes ?? 0) > 0 };
 }
 
@@ -2061,6 +2146,35 @@ async function handleAdminMigrateSchemaSolicitantesEmail(request, env) {
     ).run();
   } catch (err) {
     return jsonRes({ error: `migração de schema falhou (índice): ${err.message}` }, 500);
+  }
+  return jsonRes({ ok: true });
+}
+
+// =====================================================================
+// POST /admin/migrate-schema-solicitantes-origem — migração de schema ÚNICA
+// (2026-09-17, pedido do usuário: identificar quem abre chamado "de forma externa"
+// em vez de todo mundo cair na conta compartilhada "Outros") — adiciona `origem`
+// ('interno'/'externo') e `telefone` na tabela `solicitantes`. Mesmo padrão de
+// handleAdminMigrateSchemaSolicitantesEmail: ADD COLUMN, idempotente (SQLite não
+// tem ADD COLUMN IF NOT EXISTS — erro "duplicate column name" tratado como sucesso).
+// `NOT NULL DEFAULT 'interno'` num ADD COLUMN com valor constante já preenche as
+// linhas existentes na hora — sem precisar de um UPDATE de backfill separado.
+// =====================================================================
+async function handleAdminMigrateSchemaSolicitantesOrigem(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  try {
+    await env.CHAMADOS_DB.prepare(`ALTER TABLE solicitantes ADD COLUMN origem TEXT NOT NULL DEFAULT 'interno'`).run();
+  } catch (err) {
+    if (!/duplicate column/i.test(err.message)) {
+      return jsonRes({ error: `migração de schema falhou (origem): ${err.message}` }, 500);
+    }
+  }
+  try {
+    await env.CHAMADOS_DB.prepare(`ALTER TABLE solicitantes ADD COLUMN telefone TEXT`).run();
+  } catch (err) {
+    if (!/duplicate column/i.test(err.message)) {
+      return jsonRes({ error: `migração de schema falhou (telefone): ${err.message}` }, 500);
+    }
   }
   return jsonRes({ ok: true });
 }

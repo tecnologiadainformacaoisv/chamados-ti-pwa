@@ -1009,6 +1009,109 @@ async function test(name, fn) {
     assert.strictEqual(um.email, 'pessoa.bulk.um@institutosaovicente.com.br');
   });
 
+  console.log('--- POST /auth/register-externo (2026-09-17, "chamados usados de forma externa... recebemos um chamado com identificacao outros e nem sabemos de onde veio") ---');
+  await test('sem X-App-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/auth/register-externo', {
+      body: JSON.stringify({ name: 'Visitante Teste', email: 'visitante@gmail.com', password: 'senhaboa123' }),
+    }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('cadastra com sucesso, já devolve token, e aparece em /admin/solicitantes com origem "externo"', async () => {
+    const res = await worker.fetch(req('POST', '/auth/register-externo', {
+      headers: SECRET_HEADERS,
+      body: JSON.stringify({ name: 'Fornecedor Externo', email: 'fornecedor.externo@gmail.com', password: 'senhaboa123', telefone: '85999998888' }),
+    }), env);
+    const data = await res.json();
+    assert.strictEqual(res.status, 200, JSON.stringify(data));
+    assert.ok(data.token);
+    assert.strictEqual(data.name, 'Fornecedor Externo');
+
+    const admin = await worker.fetch(req('GET', '/admin/solicitantes', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json());
+    const s = admin.solicitantes.find(x => x.name === 'Fornecedor Externo');
+    assert.strictEqual(s.origem, 'externo');
+    assert.strictEqual(s.email, 'fornecedor.externo@gmail.com');
+    assert.strictEqual(s.telefone, '85999998888');
+    assert.strictEqual(s.ativo, 1);
+  });
+  await test('login funciona logo em seguida, com o e-mail cadastrado no autocadastro', async () => {
+    const res = await worker.fetch(req('POST', '/auth/login', {
+      headers: SECRET_HEADERS,
+      body: JSON.stringify({ email: 'fornecedor.externo@gmail.com', password: 'senhaboa123' }),
+    }), env);
+    assert.strictEqual(res.status, 200);
+  });
+  await test('telefone é opcional', async () => {
+    const res = await worker.fetch(req('POST', '/auth/register-externo', {
+      headers: SECRET_HEADERS,
+      body: JSON.stringify({ name: 'Visitante Sem Telefone', email: 'visitante.sem.tel@gmail.com', password: 'senhaboa123' }),
+    }), env);
+    assert.strictEqual(res.status, 200, await res.text());
+  });
+  await test('nome só com um termo (sem sobrenome) dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/auth/register-externo', {
+      headers: SECRET_HEADERS,
+      body: JSON.stringify({ name: 'SóUmNome', email: 'so.um.nome@gmail.com', password: 'senhaboa123' }),
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('e-mail mal formado dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/auth/register-externo', {
+      headers: SECRET_HEADERS,
+      body: JSON.stringify({ name: 'Pessoa Externa', email: 'não-é-email', password: 'senhaboa123' }),
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('senha curta demais dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/auth/register-externo', {
+      headers: SECRET_HEADERS,
+      body: JSON.stringify({ name: 'Pessoa Externa Dois', email: 'pessoa.ext.dois@gmail.com', password: '123' }),
+    }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('e-mail do domínio institucional é rejeitado (autocadastro externo não pode se passar por colaborador interno)', async () => {
+    const res = await worker.fetch(req('POST', '/auth/register-externo', {
+      headers: SECRET_HEADERS,
+      body: JSON.stringify({ name: 'Pessoa Falsa Interna', email: 'falso@institutosaovicente.com.br', password: 'senhaboa123' }),
+    }), env);
+    assert.strictEqual(res.status, 400);
+    const { error } = await res.json();
+    assert.match(error, /institucional/i);
+  });
+  await test('e-mail já cadastrado (interno ou externo) dá 409, não sobrescreve', async () => {
+    const res = await worker.fetch(req('POST', '/auth/register-externo', {
+      headers: SECRET_HEADERS,
+      body: JSON.stringify({ name: 'Outra Pessoa Qualquer', email: 'fornecedor.externo@gmail.com', password: 'outrasenha123' }),
+    }), env);
+    assert.strictEqual(res.status, 409);
+  });
+  await test('nome já usado por outro solicitante (colisão de PK) dá 409 com mensagem clara, não derruba o e-mail já checado', async () => {
+    const res = await worker.fetch(req('POST', '/auth/register-externo', {
+      headers: SECRET_HEADERS,
+      body: JSON.stringify({ name: 'Bruno Guilherme', email: 'bruno.homonimo@gmail.com', password: 'senhaboa123' }),
+    }), env);
+    assert.strictEqual(res.status, 409);
+    const admin = await worker.fetch(req('GET', '/admin/solicitantes', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json());
+    const bruno = admin.solicitantes.find(s => s.name === 'Bruno Guilherme');
+    assert.strictEqual(bruno.origem, 'interno', 'Bruno é interno de verdade — a tentativa externa não deveria ter mudado nada nele');
+  });
+  await test('solicitante criado pelo admin (handleAdminCreateSolicitante) continua com origem "interno" por padrão', async () => {
+    const admin = await worker.fetch(req('GET', '/admin/solicitantes', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json());
+    const pessoaInstitucional = admin.solicitantes.find(s => s.name === 'Pessoa Com Email Institucional');
+    assert.strictEqual(pessoaInstitucional.origem, 'interno');
+  });
+
+  console.log('--- POST /admin/migrate-schema-solicitantes-origem (2026-09-17) ---');
+  await test('sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/admin/migrate-schema-solicitantes-origem'), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('idempotente — rodar 2x não quebra nada', async () => {
+    const r1 = await worker.fetch(req('POST', '/admin/migrate-schema-solicitantes-origem', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual(r1.status, 200);
+    const r2 = await worker.fetch(req('POST', '/admin/migrate-schema-solicitantes-origem', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual(r2.status, 200);
+  });
+
   console.log('--- GET /api/my-tasks lê do D1, não bate na ClickUp (Fase B7, 2026-08-12) ---');
   await test('devolve o que o D1 tem pro solicitante, sem nenhuma chamada à ClickUp', async () => {
     // Bruno tem exatamente 1 chamado no D1 nesse ponto — o do teste "forjar priority/

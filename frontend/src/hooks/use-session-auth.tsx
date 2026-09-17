@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react"
-import { fetchSolicitanteNomes, loginOrRegister, logoutFromServer } from "@/lib/app-api"
+import { fetchSolicitanteNomes, loginOrRegister, logoutFromServer, registerExterno } from "@/lib/app-api"
 
 const TOKEN_KEY = "session_token"
 const NAME_KEY = "user_name"
@@ -14,6 +14,9 @@ type SessionAuthValue = {
   bootError: string | null
   retryBoot: () => void
   login: (email: string, password: string) => Promise<void>
+  // Autocadastro externo (2026-09-17) — quem não está na lista pré-aprovada pela TI
+  // digita o próprio nome/e-mail em vez de escolher/entrar com um já cadastrado.
+  loginExterno: (name: string, email: string, password: string, telefone?: string) => Promise<void>
   logout: () => void
   // Chamado quando qualquer requisição à API devolve 401 — mesmo efeito do
   // location.reload() da versão vanilla (limpa a sessão morta, volta pro login).
@@ -69,6 +72,15 @@ export function SessionAuthProvider({ children }: { children: ReactNode }) {
     setState("app")
   }, [])
 
+  const loginExterno = useCallback(async (name: string, email: string, password: string, telefone?: string) => {
+    const result = await registerExterno(name, email, password, telefone)
+    localStorage.setItem(TOKEN_KEY, result.token)
+    localStorage.setItem(NAME_KEY, result.name)
+    setSessionToken(result.token)
+    setUserName(result.name)
+    setState("app")
+  }, [])
+
   const logout = useCallback(() => {
     logoutFromServer(sessionToken)
     localStorage.removeItem(TOKEN_KEY)
@@ -80,7 +92,7 @@ export function SessionAuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <SessionAuthContext.Provider
-      value={{ state, sessionToken, userName, nomes, bootError, retryBoot: boot, login, logout, handleSessionExpired: logout }}
+      value={{ state, sessionToken, userName, nomes, bootError, retryBoot: boot, login, loginExterno, logout, handleSessionExpired: logout }}
     >
       {children}
     </SessionAuthContext.Provider>

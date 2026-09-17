@@ -62,6 +62,56 @@ test.describe("Login/cadastro do solicitante", () => {
     expect(await page.evaluate(() => localStorage.getItem("session_token"))).toBeNull()
   })
 
+  test("cadastro externo: aparece o link, alterna pro formulário e volta pro normal", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    await page.goto("/")
+    await page.getByRole("button", { name: "Não tenho e-mail institucional (visitante, parceiro ou fornecedor)" }).click()
+    await expect(page.locator("#setup-ext-name")).toBeVisible()
+    await expect(page.locator("#setup-email")).not.toBeVisible()
+
+    await page.getByRole("button", { name: /Tenho e-mail institucional/ }).click()
+    await expect(page.locator("#setup-email")).toBeVisible()
+    await expect(page.locator("#setup-ext-name")).not.toBeVisible()
+  })
+
+  test("cadastro externo: valida nome completo antes de enviar", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    await page.goto("/")
+    await page.getByRole("button", { name: "Não tenho e-mail institucional (visitante, parceiro ou fornecedor)" }).click()
+    await page.locator("#setup-ext-name").fill("SóUmNome")
+    await page.locator("#setup-ext-email").fill("visitante@gmail.com")
+    await page.locator("#setup-ext-password").fill("senha12345")
+    await page.getByRole("button", { name: "Cadastrar e entrar" }).click()
+    await expect(page.getByText("Digite seu nome completo (nome e sobrenome)")).toBeVisible()
+  })
+
+  test("cadastro externo: preenche tudo (com telefone) e entra na tela principal", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    await page.goto("/")
+    await page.getByRole("button", { name: "Não tenho e-mail institucional (visitante, parceiro ou fornecedor)" }).click()
+    await page.locator("#setup-ext-name").fill("Fornecedor Externo")
+    await page.locator("#setup-ext-email").fill("fornecedor@gmail.com")
+    await page.locator("#setup-ext-telefone").fill("85999998888")
+    await page.locator("#setup-ext-password").fill("senha12345")
+    await page.getByRole("button", { name: "Cadastrar e entrar" }).click()
+    await expect(page.getByRole("tab", { name: "Novo Chamado" })).toBeVisible()
+    await expect(page.getByText("Fornecedor Externo").first()).toBeVisible()
+  })
+
+  test("cadastro externo: erro do servidor (ex.: e-mail institucional) aparece no formulário", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    await page.route("**/auth/register-externo", (route) =>
+      route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "E-mail institucional detectado — use a tela de entrada normal, não o cadastro externo" }) })
+    )
+    await page.goto("/")
+    await page.getByRole("button", { name: "Não tenho e-mail institucional (visitante, parceiro ou fornecedor)" }).click()
+    await page.locator("#setup-ext-name").fill("Pessoa Falsa Interna")
+    await page.locator("#setup-ext-email").fill("falso@institutosaovicente.com.br")
+    await page.locator("#setup-ext-password").fill("senha12345")
+    await page.getByRole("button", { name: "Cadastrar e entrar" }).click()
+    await expect(page.getByText(/use a tela de entrada normal/)).toBeVisible()
+  })
+
   test("erro ao carregar lista de solicitantes mostra tela de boot-error com retry", async ({ page }) => {
     await mockSolicitanteRoutes(page)
     // Registrado DEPOIS dos defaults — tem prioridade (LIFO), sobrescreve só este endpoint.

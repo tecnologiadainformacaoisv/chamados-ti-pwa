@@ -17,6 +17,7 @@ import iconIsv from "@/assets/icon-isv.svg"
 // OUTRA pessoa sem querer — cada um só sabe o próprio e-mail.
 export function SolicitanteSetup() {
   const { bootError, retryBoot, login } = useSessionAuth()
+  const [modoExterno, setModoExterno] = useState(false)
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [submitting, setSubmitting] = useState(false)
@@ -68,46 +69,185 @@ export function SolicitanteSetup() {
           <p className="text-sm text-muted-foreground">ISV – Suporte Técnico</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="setup-email">Seu e-mail institucional *</Label>
-            <Input
-              id="setup-email"
-              type="email"
-              autoComplete="username"
-              placeholder="voce@institutosaovicente.com.br"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </div>
+        {modoExterno ? (
+          <SetupExterno
+            onVoltar={() => {
+              setError(null)
+              setModoExterno(false)
+            }}
+          />
+        ) : (
+          <>
+            <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="setup-email">Seu e-mail institucional *</Label>
+                <Input
+                  id="setup-email"
+                  type="email"
+                  autoComplete="username"
+                  placeholder="voce@institutosaovicente.com.br"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+              </div>
 
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="setup-password">Senha *</Label>
-            <Input
-              id="setup-password"
-              type="password"
-              autoComplete="current-password"
-              placeholder="Sua senha de acesso"
-              minLength={8}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              Primeira vez? A senha que você digitar aqui vira sua senha de acesso (mínimo 8 caracteres).
-            </p>
-          </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="setup-password">Senha *</Label>
+                <Input
+                  id="setup-password"
+                  type="password"
+                  autoComplete="current-password"
+                  placeholder="Sua senha de acesso"
+                  minLength={8}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Primeira vez? A senha que você digitar aqui vira sua senha de acesso (mínimo 8 caracteres).
+                </p>
+              </div>
 
-          {error && (
-            <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
+              {error && (
+                <Alert variant="destructive">
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
 
-          <Button type="submit" disabled={submitting}>
-            {submitting ? "Entrando…" : "Entrar"}
-          </Button>
-        </form>
+              <Button type="submit" disabled={submitting}>
+                {submitting ? "Entrando…" : "Entrar"}
+              </Button>
+            </form>
+
+            <button
+              type="button"
+              onClick={() => setModoExterno(true)}
+              className="mt-4 w-full text-center text-xs text-muted-foreground underline-offset-2 hover:underline"
+            >
+              Não tenho e-mail institucional (visitante, parceiro ou fornecedor)
+            </button>
+          </>
+        )}
       </div>
     </div>
+  )
+}
+
+// Autocadastro externo (2026-09-17, pedido do usuário: "os chamados tbm estao
+// sendo usados de forma externa, e agora recebemos um chamado com a identificacao
+// outros e nem sabemos de onde veio... preciso que haja uma forma de identificar
+// estes usuarios que nao sao os pre selecionados"). Antes disso, quem não tinha
+// e-mail institucional não conseguia logar de jeito NENHUM — na prática isso
+// empurrava todo mundo externo pra uma conta compartilhada única, misturando
+// chamados de pessoas diferentes sob a mesma identidade. Formulário separado (não
+// um campo a mais no de cima) porque pede dado que o login normal não pede (nome
+// completo digitado na hora, telefone) e não tem a restrição de domínio.
+function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
+  const { loginExterno } = useSessionAuth()
+  const [name, setName] = useState("")
+  const [email, setEmail] = useState("")
+  const [telefone, setTelefone] = useState("")
+  const [password, setPassword] = useState("")
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (!name.trim() || name.trim().split(/\s+/).length < 2) {
+      setError("Digite seu nome completo (nome e sobrenome)")
+      return
+    }
+    if (!email) {
+      setError("Digite seu e-mail para continuar")
+      return
+    }
+    if (!password) {
+      setError("Digite uma senha para continuar")
+      return
+    }
+    setSubmitting(true)
+    setError(null)
+    try {
+      await loginExterno(name.trim(), email, password, telefone.trim() || undefined)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível cadastrar. Verifique sua conexão.")
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      <p className="text-xs text-muted-foreground">
+        Cadastro pra quem não tem e-mail institucional — a TI vai ver seu nome, e-mail e
+        telefone junto de cada chamado que você abrir.
+      </p>
+
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="setup-ext-name">Nome completo *</Label>
+        <Input
+          id="setup-ext-name"
+          autoComplete="name"
+          placeholder="Seu nome e sobrenome"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="setup-ext-email">Seu e-mail *</Label>
+        <Input
+          id="setup-ext-email"
+          type="email"
+          autoComplete="username"
+          placeholder="voce@email.com"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="setup-ext-telefone">Telefone (opcional)</Label>
+        <Input
+          id="setup-ext-telefone"
+          type="tel"
+          autoComplete="tel"
+          placeholder="(85) 90000-0000"
+          value={telefone}
+          onChange={(e) => setTelefone(e.target.value)}
+        />
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="setup-ext-password">Senha *</Label>
+        <Input
+          id="setup-ext-password"
+          type="password"
+          autoComplete="new-password"
+          placeholder="Crie uma senha de acesso"
+          minLength={8}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+        <p className="text-xs text-muted-foreground">Mínimo de 8 caracteres.</p>
+      </div>
+
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      <Button type="submit" disabled={submitting}>
+        {submitting ? "Cadastrando…" : "Cadastrar e entrar"}
+      </Button>
+
+      <button
+        type="button"
+        onClick={onVoltar}
+        className="w-full text-center text-xs text-muted-foreground underline-offset-2 hover:underline"
+      >
+        Tenho e-mail institucional — voltar pra entrada normal
+      </button>
+    </form>
   )
 }

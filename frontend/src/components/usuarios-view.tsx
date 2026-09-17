@@ -39,6 +39,7 @@ export function UsuariosView() {
   const [rascunhoEmail, setRascunhoEmail] = useState("")
   const [emailError, setEmailError] = useState<string | null>(null)
   const [resetFeedback, setResetFeedback] = useState<string | null>(null)
+  const [soExternos, setSoExternos] = useState(false)
 
   const solicitantesQuery = useQuery({
     queryKey: ["admin-solicitantes"],
@@ -117,7 +118,9 @@ export function UsuariosView() {
     return null
   }
 
-  const solicitantes = solicitantesQuery.data?.solicitantes ?? []
+  const todos = solicitantesQuery.data?.solicitantes ?? []
+  const totalExternos = todos.filter((s) => s.origem === "externo").length
+  const solicitantes = soExternos ? todos.filter((s) => s.origem === "externo") : todos
   const ativos = solicitantes.filter((s) => s.ativo === 1)
   const inativos = solicitantes.filter((s) => s.ativo !== 1)
   const comSenha = new Set((usersQuery.data?.users ?? []).map((u) => u.name))
@@ -167,6 +170,18 @@ export function UsuariosView() {
         </Alert>
       )}
 
+      {/* Origem (2026-09-17, pedido do usuário: "os chamados tbm estao sendo usados de
+          forma externa... preciso que haja uma forma de identificar estes usuarios que
+          nao sao os pre selecionados") — quem se autocadastra sem e-mail institucional
+          (ver SolicitanteSetup) cai aqui como "Externo", distinto de quem a TI mesma
+          cadastrou. Filtro rápido pra achar esses casos sem precisar ler linha por linha. */}
+      {totalExternos > 0 && (
+        <label className="flex w-fit items-center gap-2 text-xs text-muted-foreground">
+          <input type="checkbox" checked={soExternos} onChange={(e) => setSoExternos(e.target.checked)} className="h-3.5 w-3.5" />
+          Mostrar só externos ({totalExternos})
+        </label>
+      )}
+
       {solicitantesQuery.isLoading ? (
         <p className="py-12 text-center text-sm text-muted-foreground">Carregando…</p>
       ) : (
@@ -175,7 +190,8 @@ export function UsuariosView() {
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <th className="px-3 py-2 font-medium">Nome</th>
-                <th className="px-3 py-2 font-medium">E-mail</th>
+                <th className="px-3 py-2 font-medium">Origem</th>
+                <th className="px-3 py-2 font-medium">E-mail / telefone</th>
                 <th className="px-3 py-2 font-medium">Cadastro</th>
                 <th className="px-3 py-2 font-medium">Desde</th>
                 <th className="px-3 py-2 font-medium" />
@@ -189,6 +205,15 @@ export function UsuariosView() {
                   <tr key={s.name} className="border-b border-border last:border-0 hover:bg-muted/30">
                     <td className={`px-3 py-2 font-medium ${s.ativo !== 1 ? "text-muted-foreground line-through" : "text-foreground"}`}>
                       {s.name}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                          s.origem === "externo" ? "bg-amber-500/15 text-amber-700" : "bg-muted text-muted-foreground"
+                        }`}
+                      >
+                        {s.origem === "externo" ? "Externo" : "Interno"}
+                      </span>
                     </td>
                     <td className="px-3 py-2">
                       {editando ? (
@@ -209,14 +234,17 @@ export function UsuariosView() {
                           </Button>
                         </div>
                       ) : (
-                        <button
-                          type="button"
-                          className="flex items-center gap-1.5 text-left text-muted-foreground hover:text-foreground"
-                          onClick={() => iniciarEdicaoEmail(s)}
-                        >
-                          {s.email ?? <span className="italic">sem e-mail cadastrado</span>}
-                          <Pencil className="h-3 w-3 shrink-0 opacity-50" />
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            className="flex items-center gap-1.5 text-left text-muted-foreground hover:text-foreground"
+                            onClick={() => iniciarEdicaoEmail(s)}
+                          >
+                            {s.email ?? <span className="italic">sem e-mail cadastrado</span>}
+                            <Pencil className="h-3 w-3 shrink-0 opacity-50" />
+                          </button>
+                          {s.telefone && <p className="mt-0.5 text-xs text-muted-foreground">{s.telefone}</p>}
+                        </>
                       )}
                       {editando && emailError && <p className="mt-1 text-xs text-destructive">{emailError}</p>}
                     </td>
@@ -257,8 +285,8 @@ export function UsuariosView() {
               })}
               {solicitantes.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-3 py-6 text-center text-xs text-muted-foreground">
-                    Nenhum solicitante cadastrado ainda.
+                  <td colSpan={6} className="px-3 py-6 text-center text-xs text-muted-foreground">
+                    {soExternos ? "Nenhum solicitante externo cadastrado ainda." : "Nenhum solicitante cadastrado ainda."}
                   </td>
                 </tr>
               )}
@@ -269,8 +297,10 @@ export function UsuariosView() {
 
       <p className="text-xs text-muted-foreground">
         Desativar um nome tira ele do login e da lista de filtro — chamados já abertos por essa pessoa continuam
-        aparecendo normalmente no histórico. O login agora é feito pelo e-mail institucional (@institutosaovicente.com.br)
-        — sem e-mail cadastrado, a pessoa não consegue entrar.
+        aparecendo normalmente no histórico. Solicitantes "Interno" precisam de e-mail institucional
+        (@institutosaovicente.com.br) cadastrado por aqui pra conseguir entrar; solicitantes "Externo" se
+        autocadastraram pela tela de login (visitante/parceiro sem e-mail institucional) com o próprio nome,
+        e-mail e telefone — desative se um cadastro externo parecer indevido.
       </p>
     </div>
   )
