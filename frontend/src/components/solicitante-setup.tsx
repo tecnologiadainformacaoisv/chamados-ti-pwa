@@ -118,15 +118,19 @@ export function SolicitanteSetup() {
               </Button>
             </form>
 
-            {/* h-auto + whitespace-normal — o texto é longo demais pra caber numa linha só
-                (o Button base é whitespace-nowrap, pensado pra rótulo curto; sem isso o
-                texto vazava pra fora do card em vez de quebrar linha, escondendo o
-                fundo/borda do botão por trás do próprio texto transbordando). */}
+            {/* variant="secondary", não "outline" — --background e --card são o MESMO
+                branco puro neste tema (ver index.css), então "outline" (bg-background)
+                não tinha NENHUM preenchimento visível por cima do card, só uma borda
+                fraca — o que fazia o botão sumir mesmo depois do fix de quebra de linha.
+                "secondary" usa --secondary (cinza-azulado real, distinto do card) —
+                preenchimento visível de verdade, não só borda. h-auto/whitespace-normal
+                — o texto é longo demais pra caber numa linha só (Button base é
+                whitespace-nowrap, pensado pra rótulo curto). */}
             <Button
               type="button"
-              variant="outline"
+              variant="secondary"
               onClick={() => setModoExterno(true)}
-              className="mt-4 h-auto w-full whitespace-normal py-2 text-center leading-snug"
+              className="mt-4 h-auto w-full whitespace-normal py-2.5 text-center leading-snug"
             >
               Não tenho e-mail institucional (visitante, parceiro ou fornecedor)
             </Button>
@@ -246,7 +250,7 @@ function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
         {submitting ? "Cadastrando…" : "Cadastrar e entrar"}
       </Button>
 
-      <Button type="button" variant="outline" onClick={onVoltar} className="h-auto w-full whitespace-normal py-2 text-center leading-snug">
+      <Button type="button" variant="secondary" onClick={onVoltar} className="h-auto w-full whitespace-normal py-2.5 text-center leading-snug">
         Tenho e-mail institucional — voltar pra entrada normal
       </Button>
     </form>
