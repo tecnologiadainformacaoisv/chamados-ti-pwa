@@ -118,13 +118,9 @@ export function SolicitanteSetup() {
               </Button>
             </form>
 
-            <button
-              type="button"
-              onClick={() => setModoExterno(true)}
-              className="mt-4 w-full text-center text-xs text-muted-foreground underline-offset-2 hover:underline"
-            >
+            <Button type="button" variant="outline" onClick={() => setModoExterno(true)} className="mt-4 w-full">
               Não tenho e-mail institucional (visitante, parceiro ou fornecedor)
-            </button>
+            </Button>
           </>
         )}
       </div>
@@ -241,13 +237,9 @@ function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
         {submitting ? "Cadastrando…" : "Cadastrar e entrar"}
       </Button>
 
-      <button
-        type="button"
-        onClick={onVoltar}
-        className="w-full text-center text-xs text-muted-foreground underline-offset-2 hover:underline"
-      >
+      <Button type="button" variant="outline" onClick={onVoltar} className="w-full">
         Tenho e-mail institucional — voltar pra entrada normal
-      </button>
+      </Button>
     </form>
   )
 }
