@@ -1,12 +1,47 @@
 import { useState } from "react"
-import { useQuery } from "@tanstack/react-query"
-import { MessageCircle, Paperclip } from "lucide-react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { MessageCircle, Paperclip, Star } from "lucide-react"
 import { getCF, fmtDate, type Attachment, type Task } from "@/lib/api"
 import { isOverdue, overdueFor, slaProgressInfo, timeAgo, timeUntil, waLinkForTask } from "@/lib/ticket-helpers"
 import { OPERADORES, PRIORITY, SETORES, SETOR_FIELD_ID, SOLUCAO_FIELD_ID, STATUS_MAP, TIPOS, TIPO_FIELD_ID, optionName, type StatusKey } from "@/lib/constants"
 import { useSessionAuth } from "@/hooks/use-session-auth"
-import { fetchTaskDetail } from "@/lib/app-api"
+import { fetchTaskDetail, submitNota } from "@/lib/app-api"
 import { AnexoModal } from "@/components/anexo-modal"
+
+// Nota de satisfação (2026-09-21, pedido do usuário: "julgo essencial") — 5 estrelas,
+// só aparece em chamado encerrado (única fase em que faz sentido avaliar). Reenviar
+// sobrescreve a nota anterior (mesmo comportamento do servidor, ver handleSetNota em
+// push-worker.js) — sem tela de "obrigado, não dá mais pra mudar", deixa a pessoa
+// corrigir se clicou errado.
+function NotaChamado({ task }: { task: Task }) {
+  const { sessionToken } = useSessionAuth()
+  const queryClient = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: (nota: number) => submitNota(sessionToken, task.id, nota),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["my-tasks"] }),
+  })
+  const notaAtual = mutation.data?.nota ?? task.nota ?? 0
+
+  return (
+    <div className="mt-3 flex items-center gap-2 text-xs">
+      <span className="text-muted-foreground">{notaAtual ? "Sua avaliação:" : "Como foi o atendimento?"}</span>
+      <div className="flex gap-0.5">
+        {[1, 2, 3, 4, 5].map((n) => (
+          <button
+            key={n}
+            type="button"
+            disabled={mutation.isPending}
+            onClick={() => mutation.mutate(n)}
+            aria-label={`Avaliar com ${n} estrela${n > 1 ? "s" : ""}`}
+            className="disabled:opacity-50"
+          >
+            <Star className="h-4 w-4" fill={n <= notaAtual ? "#f59e0b" : "none"} stroke={n <= notaAtual ? "#f59e0b" : "currentColor"} />
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 // Porta renderDetailCard() de app.js — mesmo cartão: barra de progresso do SLA, banner de
 // atraso, cor de fundo por status, solução em destaque quando encerrado.
@@ -112,6 +147,8 @@ export function TicketCard({ task }: { task: Task }) {
           <p className="break-words text-foreground">{solucao}</p>
         </div>
       )}
+
+      {statusKey === "encerrado" && <NotaChamado task={task} />}
 
       <a
         href={waLinkForTask(task)}

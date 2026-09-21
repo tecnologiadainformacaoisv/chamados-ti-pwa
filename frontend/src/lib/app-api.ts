@@ -124,6 +124,13 @@ export async function uploadAttachment(sessionToken: string, taskId: string, fil
   if (!res.ok) throw new AuthError(`Erro HTTP ${res.status}`, res.status)
 }
 
+// Nota de satisfação (2026-09-21, "julgo essencial") — o solicitante avalia (1-5) o
+// próprio chamado depois de encerrado. Reenviar sobrescreve a nota anterior (ver
+// handleSetNota em push-worker.js — deliberado, corrige clique errado sem travar).
+export async function submitNota(sessionToken: string, taskId: string, nota: number): Promise<Task> {
+  return apiRequest<Task>(sessionToken, "POST", `/tasks/${taskId}/nota`, { nota })
+}
+
 // GET /tasks/:id — só essa rota devolve `attachments` (a listagem de /my-tasks não).
 export async function fetchTaskDetail(sessionToken: string, taskId: string): Promise<Task> {
   return apiRequest<Task>(sessionToken, "GET", `/tasks/${taskId}`)

@@ -83,4 +83,37 @@ test.describe("Meus Chamados / Histórico", () => {
     const link = page.locator('[data-task-id="t-wa"]').getByRole("link", { name: /WhatsApp/ })
     await expect(link).toHaveAttribute("href", /5585989304648/)
   })
+
+  // Nota de satisfação (2026-09-21, "julgo essencial") — 5 estrelas, só em chamado
+  // encerrado.
+  test("chamado aberto não mostra nenhum widget de avaliação", async ({ page }) => {
+    const aberto = makeTask({ id: "t-sem-nota", status: { status: "aberto" } })
+    await mockSolicitanteRoutes(page, { tasks: [aberto] })
+    await gotoSolicitanteLoggedIn(page)
+    await page.getByRole("tab", { name: /Meus Chamados/ }).click()
+    await expect(page.getByText("Como foi o atendimento?")).not.toBeVisible()
+  })
+
+  test("chamado encerrado sem nota mostra o convite pra avaliar; clicar numa estrela envia a nota e atualiza o rótulo", async ({ page }) => {
+    const encerrado = makeTask({ id: "t-avaliar", status: { status: "encerrado" }, date_closed: Date.now() })
+    await mockSolicitanteRoutes(page, { tasks: [encerrado] })
+    await gotoSolicitanteLoggedIn(page)
+    await page.getByRole("tab", { name: /Histórico/ }).click()
+
+    const card = page.locator('[data-task-id="t-avaliar"]')
+    await expect(card.getByText("Como foi o atendimento?")).toBeVisible()
+    await card.getByRole("button", { name: "Avaliar com 4 estrelas" }).click()
+    await expect(card.getByText("Sua avaliação:")).toBeVisible()
+  })
+
+  test("chamado já avaliado abre mostrando a nota preenchida, não o convite", async ({ page }) => {
+    const avaliado = makeTask({ id: "t-ja-avaliado", status: { status: "encerrado" }, date_closed: Date.now(), nota: 3 })
+    await mockSolicitanteRoutes(page, { tasks: [avaliado] })
+    await gotoSolicitanteLoggedIn(page)
+    await page.getByRole("tab", { name: /Histórico/ }).click()
+
+    const card = page.locator('[data-task-id="t-ja-avaliado"]')
+    await expect(card.getByText("Sua avaliação:")).toBeVisible()
+    await expect(card.getByText("Como foi o atendimento?")).not.toBeVisible()
+  })
 })

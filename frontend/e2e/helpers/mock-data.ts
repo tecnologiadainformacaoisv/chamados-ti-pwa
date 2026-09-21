@@ -56,6 +56,7 @@ export const EMPTY_METRICS = {
   porSetor: {},
   sla: { dentroDoSla: 0, atrasado: 0, dentroDoSlaPercent: null, atrasadoPercent: null },
   tempoMedioPorOperador: {},
+  satisfacao: { mediaNota: null, totalAvaliacoes: 0 },
 }
 
 export function makeMetrics(overrides: Record<string, unknown> = {}) {

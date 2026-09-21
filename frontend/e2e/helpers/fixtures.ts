@@ -62,6 +62,14 @@ export async function mockSolicitanteRoutes(
   await on(page, "**/api/my-tasks", "GET", (route) => fulfillJson(route, { tasks }))
   await on(page, /\/api\/tasks$/, "POST", (route) => fulfillJson(route, makeTask({ id: "task-novo", name: "Chamado recém-criado" })))
   await on(page, /\/api\/tasks\/[^/]+\/attachment/, "POST", (route) => fulfillJson(route, { ok: true }))
+  // POST /api/tasks/:id/nota (2026-09-21) — ecoa a nota enviada de volta na task, pro
+  // widget de estrelas do TicketCard refletir a mudança sem precisar de refetch real.
+  await on(page, /\/api\/tasks\/([^/]+)\/nota$/, "POST", (route) => {
+    const id = route.request().url().match(/\/api\/tasks\/([^/]+)\/nota$/)?.[1]
+    const body = route.request().postDataJSON() as { nota?: number }
+    const found = tasks.find((t) => t.id === id)
+    return fulfillJson(route, { ...(found ?? makeTask({ id })), nota: body.nota })
+  })
   // GET /api/tasks/:id — TicketCard chama isso pra CADA card renderizado, pra buscar
   // attachments (a listagem de /my-tasks não devolve isso). Sem esse mock, todo card
   // dispararia uma requisição sem handler (abortada pelo "chão" acima).

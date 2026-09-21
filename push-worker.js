@@ -149,6 +149,8 @@ export default {
       if (pathname === '/api/tasks')     return handleCreateTask(request, env);
       const attachMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/attachment$/);
       if (attachMatch) return handleUploadAttachment(request, env, attachMatch[1]);
+      const notaMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/nota$/);
+      if (notaMatch) return handleSetNota(request, env, notaMatch[1]);
       // Fase B do roadmap pós-MVP-visual (2026-08-14) — checados ANTES do match
       // genérico de single-id logo abaixo, senão "/admin/tasks/bulk" seria confundido
       // com um chamado de id literal "bulk", e "/admin/tasks/:id/eventos" bateria com
@@ -177,6 +179,7 @@ export default {
       if (pathname === '/admin/migrate-schema-solicitantes') return handleAdminMigrateSchemaSolicitantes(request, env);
       if (pathname === '/admin/migrate-schema-solicitantes-email') return handleAdminMigrateSchemaSolicitantesEmail(request, env);
       if (pathname === '/admin/migrate-schema-solicitantes-origem') return handleAdminMigrateSchemaSolicitantesOrigem(request, env);
+      if (pathname === '/admin/migrate-schema-chamados-nota') return handleAdminMigrateSchemaChamadosNota(request, env);
       if (pathname === '/admin/solicitantes') return handleAdminCreateSolicitante(request, env);
       if (pathname === '/admin/solicitantes/emails/bulk') return handleAdminBulkSetSolicitanteEmails(request, env);
       const solAtivoMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/ativo$/);
@@ -386,6 +389,38 @@ async function handleUploadAttachment(request, env, taskId) {
   ).bind(anexoId, taskId, key, file.name, contentType, size, Date.now()).run();
 
   return jsonRes({ ok: true, id: anexoId });
+}
+
+// =====================================================================
+// POST /api/tasks/:id/nota — nota de satisfação (1-5) que o solicitante dá ao próprio
+// chamado depois de encerrado (2026-09-21, pedido do usuário: "julgo essencial" — ver
+// CLAUDE.md, sugerido desde a auditoria inicial e nunca implementado até agora).
+// Mesmo padrão de dono de handleUploadAttachment/handleGetTask — autenticado por
+// sessão, 403 se o chamado não for de quem está pedindo. Só aceita nota pra chamado
+// já "encerrado" (não faz sentido avaliar antes disso); permite reenviar (sobrescreve
+// a nota anterior) — deliberado, mais simples que travar depois do primeiro envio, e
+// deixa a pessoa corrigir se errou o clique.
+// =====================================================================
+async function handleSetNota(request, env, taskId) {
+  const session = await requireSession(request, env);
+  if (!session) return sessionInvalid();
+
+  const chamado = await d1GetChamado(env, taskId);
+  if (!chamado) return jsonRes({ error: 'chamado não encontrado' }, 404);
+  if (chamado.solicitante !== session.name) return unauthorized('sem permissão pra avaliar esse chamado');
+  if (chamado.status !== 'encerrado') {
+    return jsonRes({ error: 'só é possível avaliar um chamado já encerrado' }, 400);
+  }
+
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  const nota = Number(body.nota);
+  if (!Number.isInteger(nota) || nota < 1 || nota > 5) {
+    return jsonRes({ error: 'nota precisa ser um número inteiro de 1 a 5' }, 400);
+  }
+
+  const atualizado = await d1UpdateChamado(env, taskId, { nota });
+  return jsonRes(d1RowToTaskShape(atualizado));
 }
 
 // =====================================================================
@@ -1526,6 +1561,7 @@ function d1RowToTaskShape(row) {
     priority: { priority: PRIORITY_NUM_TO_NAME[row.priority] || 'normal' },
     assignees: assigneeIds.map(id => ({ id })),
     solicitante: row.solicitante || null,
+    nota: row.nota ?? null,
     due_date: row.due_date != null ? String(row.due_date) : null,
     date_created: String(row.date_created),
     date_updated: String(row.updated_at),
@@ -1570,6 +1606,7 @@ async function d1UpdateChamado(env, id, patch, assigneeIdsForSync) {
     dueDate:     'due_date',
     dateClosed:  'date_closed',
     startDate:   'start_date',
+    nota:        'nota',
   };
   const set    = [];
   const params = [];
@@ -1651,7 +1688,7 @@ async function handleAdminDeleteTask(request, env, taskId) {
 // isso. Omitidos, comportamento idêntico ao de antes (agregado geral).
 async function d1GetMetrics(env, { desde, ate } = {}) {
   const { results } = await env.CHAMADOS_DB.prepare(
-    'SELECT id, status, tipo, setor, due_date, date_closed, start_date, date_created FROM chamados'
+    'SELECT id, status, tipo, setor, due_date, date_closed, start_date, date_created, nota FROM chamados'
   ).all();
   let rows = results || [];
   if (desde != null) rows = rows.filter(r => r.date_created >= desde);
@@ -1662,6 +1699,8 @@ async function d1GetMetrics(env, { desde, ate } = {}) {
   const porSetor   = {};
   let dentroDoSla = 0;
   let atrasado    = 0;
+  let somaNotas   = 0;
+  let totalNotas  = 0;
   const agora = Date.now();
 
   // chamados encerrados com duração válida (start_date + date_closed) — resolvidos em
@@ -1680,6 +1719,11 @@ async function d1GetMetrics(env, { desde, ate } = {}) {
 
     if (r.status === 'encerrado' && r.start_date != null && r.date_closed != null) {
       encerradosComDuracao.push({ id: r.id, duracaoMs: r.date_closed - r.start_date });
+    }
+
+    if (r.nota != null) {
+      somaNotas += r.nota;
+      totalNotas++;
     }
   }
 
@@ -1714,7 +1758,14 @@ async function d1GetMetrics(env, { desde, ate } = {}) {
       dentroDoSlaPercent: totalComSla ? Math.round((dentroDoSla / totalComSla) * 1000) / 10 : null,
       atrasadoPercent:    totalComSla ? Math.round((atrasado    / totalComSla) * 1000) / 10 : null,
     },
-    tempoMedioPorOperador
+    tempoMedioPorOperador,
+    // Nota de satisfação (2026-09-21) — média das notas 1-5 que os solicitantes deram,
+    // entre os chamados no escopo atual do filtro de período. `null` quando ninguém
+    // avaliou ainda nesse período, pro Dashboard mostrar "sem avaliações" em vez de 0.
+    satisfacao: {
+      mediaNota: totalNotas ? Math.round((somaNotas / totalNotas) * 10) / 10 : null,
+      totalAvaliacoes: totalNotas,
+    },
   };
 }
 
@@ -2222,6 +2273,24 @@ async function handleAdminMigrateSchemaSolicitantesOrigem(request, env) {
   } catch (err) {
     if (!/duplicate column/i.test(err.message)) {
       return jsonRes({ error: `migração de schema falhou (telefone): ${err.message}` }, 500);
+    }
+  }
+  return jsonRes({ ok: true });
+}
+
+// =====================================================================
+// POST /admin/migrate-schema-chamados-nota — migração de schema ÚNICA (2026-09-21,
+// pedido do usuário: "julgo essencial") — adiciona `nota` na tabela `chamados` já
+// existente. Mesmo padrão de sempre — ALTER TABLE ADD COLUMN, idempotente
+// (SQLite não tem ADD COLUMN IF NOT EXISTS — "duplicate column name" tratado como sucesso).
+// =====================================================================
+async function handleAdminMigrateSchemaChamadosNota(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  try {
+    await env.CHAMADOS_DB.prepare(`ALTER TABLE chamados ADD COLUMN nota INTEGER`).run();
+  } catch (err) {
+    if (!/duplicate column/i.test(err.message)) {
+      return jsonRes({ error: `migração de schema falhou (nota): ${err.message}` }, 500);
     }
   }
   return jsonRes({ ok: true });

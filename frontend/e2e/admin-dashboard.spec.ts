@@ -10,6 +10,23 @@ test.describe("Dashboard", () => {
     await expect(page.getByText("42", { exact: true })).toBeVisible()
   })
 
+  // Satisfação (2026-09-21, "julgo essencial") — média das notas 1-5 dadas pelos
+  // solicitantes, card novo na grade de métricas.
+  test("card de satisfação mostra a média e o total de avaliações", async ({ page }) => {
+    await mockAdminRoutes(page, { metrics: makeMetrics({ satisfacao: { mediaNota: 4.3, totalAvaliacoes: 12 } }) })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Dashboard")
+    await expect(page.getByText("4.3 ★")).toBeVisible()
+    await expect(page.getByText("Satisfação média (12 avaliações)")).toBeVisible()
+  })
+
+  test("sem nenhuma avaliação ainda, mostra travessão em vez de 0 ou NaN", async ({ page }) => {
+    await mockAdminRoutes(page, { metrics: makeMetrics({ satisfacao: { mediaNota: null, totalAvaliacoes: 0 } }) })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Dashboard")
+    await expect(page.getByText("Satisfação média (0 avaliações)")).toBeVisible()
+  })
+
   test("SLA vazio (nenhum chamado com prazo) mostra mensagem, não gráfico quebrado", async ({ page }) => {
     await mockAdminRoutes(page, { metrics: makeMetrics({ sla: { dentroDoSla: 0, atrasado: 0, dentroDoSlaPercent: null, atrasadoPercent: null } }) })
     await gotoAdminLoggedIn(page)

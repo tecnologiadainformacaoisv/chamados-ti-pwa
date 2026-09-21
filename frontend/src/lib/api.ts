@@ -23,6 +23,9 @@ export type Task = {
   date_updated?: string | number | null
   date_closed?: string | number | null
   start_date?: string | number | null
+  // Nota de satisfação (1-5) que o solicitante dá ao próprio chamado depois de
+  // encerrado (2026-09-21) — null enquanto não avaliado.
+  nota?: number | null
   custom_fields?: CustomField[]
   // Só presente no GET de uma task individual (GET /tasks/:id) — a listagem não devolve.
   attachments?: Attachment[]
@@ -343,6 +346,10 @@ export type Metrics = {
   porSetor: Record<string, number>
   sla: { dentroDoSla: number; atrasado: number; dentroDoSlaPercent: number | null; atrasadoPercent: number | null }
   tempoMedioPorOperador: Record<string, OperadorTempo>
+  // Nota de satisfação (2026-09-21) — média das notas 1-5 dadas pelos solicitantes,
+  // no mesmo escopo de período (desde/ate) do resto das métricas. `mediaNota: null`
+  // quando ninguém avaliou nada ainda nesse período.
+  satisfacao: { mediaNota: number | null; totalAvaliacoes: number }
 }
 
 // Fase A do roadmap pós-MVP-visual (2026-08-14): `desde`/`ate` (epoch ms, ambos

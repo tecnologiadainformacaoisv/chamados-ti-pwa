@@ -1176,6 +1176,18 @@ async function test(name, fn) {
     assert.strictEqual(r2.status, 200);
   });
 
+  console.log('--- POST /admin/migrate-schema-chamados-nota (2026-09-21) ---');
+  await test('sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('POST', '/admin/migrate-schema-chamados-nota'), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('idempotente — rodar 2x não quebra nada', async () => {
+    const r1 = await worker.fetch(req('POST', '/admin/migrate-schema-chamados-nota', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual(r1.status, 200);
+    const r2 = await worker.fetch(req('POST', '/admin/migrate-schema-chamados-nota', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
+    assert.strictEqual(r2.status, 200);
+  });
+
   console.log('--- GET /api/my-tasks lê do D1, não bate na ClickUp (Fase B7, 2026-08-12) ---');
   await test('devolve o que o D1 tem pro solicitante, sem nenhuma chamada à ClickUp', async () => {
     // Bruno tem exatamente 1 chamado no D1 nesse ponto — o do teste "forjar priority/
@@ -1200,6 +1212,54 @@ async function test(name, fn) {
     const michael1 = tasks.find(t => t.id === 'task-michael-1');
     assert.ok(michael1, 'task-michael-1 deveria estar na lista do Michael');
     assert.strictEqual(michael1.assignees.length, 1, 'sem withAssignees, cai pro assignee_id único — não é bug, é a rota mais chamada do Worker evitando query extra');
+  });
+
+  console.log('--- POST /api/tasks/:id/nota (satisfação, 2026-09-21, "julgo essencial") ---');
+  await test('sem sessão dá 401', async () => {
+    const res = await worker.fetch(req('POST', '/api/tasks/task-michael-1/nota', { headers: SECRET_HEADERS, body: JSON.stringify({ nota: 5 }) }), env);
+    assert.strictEqual(res.status, 401);
+  });
+  await test('chamado inexistente dá 404', async () => {
+    const res = await worker.fetch(req('POST', '/api/tasks/nao-existe/nota', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: JSON.stringify({ nota: 5 }) }), env);
+    assert.strictEqual(res.status, 404);
+  });
+  await test('avaliar chamado de outra pessoa dá 403 (dono é Michael, não Bruno)', async () => {
+    const res = await worker.fetch(req('POST', '/api/tasks/task-michael-1/nota', { headers: { ...SECRET_HEADERS, 'X-Session-Token': brunoToken }, body: JSON.stringify({ nota: 5 }) }), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await seedChamadoComId(env, 'task-michael-aberto-nota', {
+    name: 'Chamado aberto pra teste de nota', status: 'aberto', priority: 3, tipo: 0, setor: 0, solicitante: 'Michael Vasconcelos',
+  });
+  await test('avaliar chamado ainda não encerrado dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/api/tasks/task-michael-aberto-nota/nota', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: JSON.stringify({ nota: 5 }) }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  for (const notaInvalida of [0, 6, 'abc', null]) {
+    await test(`nota inválida (${JSON.stringify(notaInvalida)}) dá 400`, async () => {
+      const res = await worker.fetch(req('POST', '/api/tasks/task-michael-1/nota', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: JSON.stringify({ nota: notaInvalida }) }), env);
+      assert.strictEqual(res.status, 400);
+    });
+  }
+  await test('avalia com sucesso — nota aparece na resposta e em GET /api/tasks/:id', async () => {
+    const res = await worker.fetch(req('POST', '/api/tasks/task-michael-1/nota', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: JSON.stringify({ nota: 4 }) }), env);
+    const data = await res.json();
+    assert.strictEqual(res.status, 200, JSON.stringify(data));
+    assert.strictEqual(data.nota, 4);
+
+    const getRes = await worker.fetch(req('GET', '/api/tasks/task-michael-1', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token } }), env);
+    const task = await getRes.json();
+    assert.strictEqual(task.nota, 4);
+  });
+  await test('reenviar sobrescreve a nota anterior (deliberado — corrige clique errado)', async () => {
+    await worker.fetch(req('POST', '/api/tasks/task-michael-1/nota', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: JSON.stringify({ nota: 2 }) }), env);
+    const getRes = await worker.fetch(req('GET', '/api/tasks/task-michael-1', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token } }), env);
+    const task = await getRes.json();
+    assert.strictEqual(task.nota, 2);
+  });
+  await test('chamado nunca avaliado devolve nota: null (não 0) — confirmado via GET /admin/tasks', async () => {
+    const admin = await worker.fetch(req('GET', '/admin/tasks', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json());
+    const ariele1 = admin.tasks.find(t => t.id === 'task-ariele-1');
+    assert.strictEqual(ariele1.nota, null);
   });
 
   console.log('--- /admin/tasks (todos os chamados, com filtros) ---');
@@ -1352,6 +1412,8 @@ async function test(name, fn) {
     assert.strictEqual(everson.totalChamados, 1);
     assert.ok(everson.mediaMs > 0);
     assert.strictEqual(data.tempoMedioPorOperador['200498355'], undefined, 'chamado da Ariele não foi encerrado, não deveria contar tempo de atendimento pro Henrique');
+
+    assert.deepStrictEqual(data.satisfacao, { mediaNota: null, totalAvaliacoes: 0 }, 'ninguém avaliou nada ainda neste dataset isolado');
   });
 
   // Fase A do roadmap pós-MVP-visual (2026-08-14): filtro de período opcional
@@ -1369,6 +1431,14 @@ async function test(name, fn) {
   await test('desde/ate inválido (não-numérico) devolve 400', async () => {
     const res = await worker.fetch(req('GET', '/admin/metrics?desde=nao-e-numero', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
     assert.strictEqual(res.status, 400);
+  });
+  await test('satisfacao.mediaNota reflete as notas dadas (arredondada a 1 casa), só entre chamados avaliados', async () => {
+    // Só task-michael-1 ganha nota — task-ariele-1 (nunca avaliado, nota: null) não deve
+    // entrar no denominador da média.
+    await adminEnv.CHAMADOS_DB.prepare('UPDATE chamados SET nota = ? WHERE id = ?').bind(5, 'task-michael-1').run();
+    const res = await worker.fetch(req('GET', '/admin/metrics', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
+    const data = await res.json();
+    assert.deepStrictEqual(data.satisfacao, { mediaNota: 5, totalAvaliacoes: 1 });
   });
 
   console.log('--- POST /admin/tasks (TI cria chamado em nome de um solicitante, 2026-09-15) ---');
