@@ -1100,6 +1100,70 @@ async function test(name, fn) {
     assert.strictEqual(pessoaInstitucional.origem, 'interno');
   });
 
+  console.log('--- achados do revisor sobre /auth/register-externo (2026-09-21) ---');
+  await test('subdomínio real do instituto (ex.: setor.institutosaovicente.com.br) também é rejeitado, não só o domínio exato', async () => {
+    const res = await worker.fetch(req('POST', '/auth/register-externo', {
+      headers: SECRET_HEADERS,
+      body: JSON.stringify({ name: 'Pessoa Subdominio Falsa', email: 'falso@setor.institutosaovicente.com.br', password: 'senhaboa123' }),
+    }), env);
+    assert.strictEqual(res.status, 400);
+    const { error } = await res.json();
+    assert.match(error, /institucional/i);
+  });
+  await test('domínio "parecido" (lookalike/typosquat) também é rejeitado', async () => {
+    const res = await worker.fetch(req('POST', '/auth/register-externo', {
+      headers: SECRET_HEADERS,
+      body: JSON.stringify({ name: 'Pessoa Lookalike Falsa', email: 'falso@institutosaovicente.com.br.evil.com', password: 'senhaboa123' }),
+    }), env);
+    assert.strictEqual(res.status, 400);
+    const { error } = await res.json();
+    assert.match(error, /institucional/i);
+  });
+  await test('e-mail gmail comum continua funcionando normalmente (o fix de lookalike não pegou gente de verdade)', async () => {
+    const res = await worker.fetch(req('POST', '/auth/register-externo', {
+      headers: SECRET_HEADERS,
+      body: JSON.stringify({ name: 'Pessoa Gmail Normal', email: 'pessoa.normal.demais@gmail.com', password: 'senhaboa123' }),
+    }), env);
+    assert.strictEqual(res.status, 200, await res.text());
+  });
+  await test('rate-limit por IP: depois de 5 cadastros bem-sucedidos do mesmo IP, o 6º dá 429', async () => {
+    const ipHeaders = { ...SECRET_HEADERS, 'CF-Connecting-IP': '203.0.113.77' };
+    for (let i = 1; i <= 5; i++) {
+      const res = await worker.fetch(req('POST', '/auth/register-externo', {
+        headers: ipHeaders,
+        body: JSON.stringify({ name: `Pessoa Rate Limit ${i}`, email: `pessoa.ratelimit${i}@gmail.com`, password: 'senhaboa123' }),
+      }), env);
+      assert.strictEqual(res.status, 200, `cadastro ${i} deveria passar: ${await res.text()}`);
+    }
+    const res6 = await worker.fetch(req('POST', '/auth/register-externo', {
+      headers: ipHeaders,
+      body: JSON.stringify({ name: 'Pessoa Rate Limit Seis', email: 'pessoa.ratelimit6@gmail.com', password: 'senhaboa123' }),
+    }), env);
+    assert.strictEqual(res6.status, 429);
+  });
+  await test('rate-limit é por IP — outro IP não é afetado pelo lockout do IP anterior', async () => {
+    const res = await worker.fetch(req('POST', '/auth/register-externo', {
+      headers: { ...SECRET_HEADERS, 'CF-Connecting-IP': '198.51.100.20' },
+      body: JSON.stringify({ name: 'Pessoa Outro Ip', email: 'pessoa.outro.ip@gmail.com', password: 'senhaboa123' }),
+    }), env);
+    assert.strictEqual(res.status, 200, await res.text());
+  });
+  await test('tentativa rejeitada por validação (nome/domínio/senha) não consome a cota de rate-limit', async () => {
+    const ipHeaders = { ...SECRET_HEADERS, 'CF-Connecting-IP': '198.51.100.40' };
+    for (let i = 1; i <= 3; i++) {
+      const res = await worker.fetch(req('POST', '/auth/register-externo', {
+        headers: ipHeaders,
+        body: JSON.stringify({ name: 'SóUmNome', email: `x${i}@gmail.com`, password: 'senhaboa123' }),
+      }), env);
+      assert.strictEqual(res.status, 400);
+    }
+    const res = await worker.fetch(req('POST', '/auth/register-externo', {
+      headers: ipHeaders,
+      body: JSON.stringify({ name: 'Pessoa Cota Preservada', email: 'pessoa.cota.preservada@gmail.com', password: 'senhaboa123' }),
+    }), env);
+    assert.strictEqual(res.status, 200, await res.text());
+  });
+
   console.log('--- POST /admin/migrate-schema-solicitantes-origem (2026-09-17) ---');
   await test('sem X-Admin-Secret dá 403', async () => {
     const res = await worker.fetch(req('POST', '/admin/migrate-schema-solicitantes-origem'), env);

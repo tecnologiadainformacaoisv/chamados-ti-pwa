@@ -115,6 +115,10 @@ const SESSION_TTL_SECONDS = 90 * 24 * 3600;
 const PBKDF2_ITERATIONS   = 100000;
 const MAX_LOGIN_FAILURES  = 5;
 const LOGIN_LOCKOUT_SECONDS = 15 * 60;
+// Rate-limit de POST /auth/register-externo por IP (2026-09-21, achado do revisor) —
+// ver comentário em handleRegisterExterno.
+const MAX_REGISTER_EXTERNO_PER_IP = 5;
+const REGISTER_EXTERNO_WINDOW_SECONDS = 60 * 60;
 
 // =====================================================================
 // ROUTER
@@ -449,8 +453,34 @@ function normalizeEmail(v) {
 // gravar um gmail, login nunca vai encontrar um gmail cadastrado de qualquer jeito).
 const EMAIL_DOMAIN = 'institutosaovicente.com.br';
 
+// Domínio de verdade (ou subdomínio real dele) — usado nos pontos de ESCRITA do admin
+// pra ACEITAR um e-mail como institucional. `endsWith('@'+EMAIL_DOMAIN)` (versão
+// original) tinha um bug sutil: comparava o e-mail inteiro, então um subdomínio de
+// verdade como `conta@setor.institutosaovicente.com.br` não batia (o caractere antes
+// de `institutosaovicente.com.br` era `.`, não `@`) — inofensivo aqui (só rejeitaria
+// um e-mail legítimo a mais), mas o mesmo bug em handleRegisterExterno (ver abaixo)
+// tinha o efeito contrário e perigoso: não bloqueava. Corrigido comparando o domínio
+// isolado (depois do último `@`), não o e-mail inteiro.
 function isEmailDoDominio(email) {
-  return email.endsWith(`@${EMAIL_DOMAIN}`);
+  const at = email.lastIndexOf('@');
+  if (at === -1) return false;
+  const domain = email.slice(at + 1);
+  return domain === EMAIL_DOMAIN || domain.endsWith(`.${EMAIL_DOMAIN}`);
+}
+
+// Checagem mais paranoica (2026-09-21, achado do agente `revisor`) — só usada pra
+// REJEITAR no autocadastro externo, nunca pra aceitar em nenhum ponto de escrita do
+// admin. Além do domínio de verdade, barra qualquer domínio que só PAREÇA
+// institucional (lookalike/typosquat, ex.: `institutosaovicente.com.br.evil.com`) —
+// sem isso, alguém de fora podia se autocadastrar com um e-mail que engana quem olha
+// rápido a tela "Usuários" do admin ou o e-mail exibido num chamado, mesmo sem
+// conseguir de fato logar como um solicitante interno (o PK em `name` já impedia
+// isso). Deliberadamente mais larga que `isEmailDoDominio` — usar só pra bloquear.
+function pareceEmailInstitucional(email) {
+  const at = email.lastIndexOf('@');
+  if (at === -1) return false;
+  const domain = email.slice(at + 1);
+  return isEmailDoDominio(email) || domain.includes('institutosaovicente');
 }
 
 async function handleRegister(request, env) {
@@ -526,14 +556,30 @@ async function handleRegisterExterno(request, env) {
   if (!email || !EMAIL_FORMATO_REGEX.test(email)) {
     return jsonRes({ error: 'E-mail inválido' }, 400);
   }
-  // Domínio institucional é reservado pra conta criada/aprovada pela TI (handleRegister) —
-  // sem essa checagem, qualquer um poderia se autocadastrar como "externo" alegando
-  // um e-mail @institutosaovicente.com.br que a TI nunca cadastrou de verdade.
-  if (isEmailDoDominio(email)) {
+  // Domínio institucional (ou algo que pareça) é reservado pra conta criada/aprovada
+  // pela TI (handleRegister) — sem essa checagem, qualquer um poderia se autocadastrar
+  // como "externo" alegando um e-mail @institutosaovicente.com.br (ou um lookalike)
+  // que a TI nunca cadastrou de verdade. `pareceEmailInstitucional`, não
+  // `isEmailDoDominio` — ver comentário dela (achado do revisor, 2026-09-21).
+  if (pareceEmailInstitucional(email)) {
     return jsonRes({ error: 'E-mail institucional detectado — use a tela de entrada normal, não o cadastro externo' }, 400);
   }
   if (!password || password.length < 8) {
     return jsonRes({ error: 'Senha (mínimo 8 caracteres) é obrigatória' }, 400);
+  }
+
+  // Rate-limit por IP (2026-09-21, achado do revisor) — diferente de handleLogin
+  // (lockout por nome) e isAdmin (lockout por IP contra ADMIN_SECRET errado), esta
+  // rota não tinha NENHUM limite: só o X-App-Secret (público por design) protegia,
+  // então qualquer script com esse header podia criar solicitantes "externo" em
+  // volume ilimitado. Mesmo padrão de chave/TTL de `adminfail_<ip>` — conta só
+  // cadastros que de fato completam (ver incremento perto do fim da função), não
+  // cada tentativa, pra não punir alguém corrigindo um typo no formulário.
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const rateKey = `externoreg_${ip}`;
+  const rateCount = parseInt(await env.SUBSCRIPTIONS.get(rateKey) || '0');
+  if (rateCount >= MAX_REGISTER_EXTERNO_PER_IP) {
+    return jsonRes({ error: 'Muitos cadastros a partir deste IP. Aguarde um pouco e tente de novo.' }, 429);
   }
 
   const existente = await d1GetSolicitanteByEmail(env, email);
@@ -557,6 +603,8 @@ async function handleRegisterExterno(request, env) {
   if (!inserted) {
     return jsonRes({ error: 'Já existe um cadastro com esse nome. Inclua um sobrenome adicional ou fale com a TI.' }, 409);
   }
+
+  await env.SUBSCRIPTIONS.put(rateKey, String(rateCount + 1), { expirationTtl: REGISTER_EXTERNO_WINDOW_SECONDS });
 
   await setAuthRecord(name, password, env);
   const token = await createSession(name, env);
