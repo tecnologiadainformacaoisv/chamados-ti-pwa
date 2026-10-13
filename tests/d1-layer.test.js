@@ -375,6 +375,18 @@ async function test(name, fn) {
     assert.strictEqual(m.total, 1);
   });
 
+  await test('satisfacao respeita o filtro de período (desde/ate)', async () => {
+    const env = freshEnv();
+    const a = await d1CreateChamado(env, { ...baseChamado, name: 'Nota 2 no período' });
+    const b = await d1CreateChamado(env, { ...baseChamado, name: 'Nota 5 fora do período' });
+    await env.CHAMADOS_DB.prepare('UPDATE chamados SET date_created = ?, nota = ? WHERE id = ?').bind(1_000_000, 2, a.id).run();
+    await env.CHAMADOS_DB.prepare('UPDATE chamados SET date_created = ?, nota = ? WHERE id = ?').bind(5_000_000, 5, b.id).run();
+    const noPeriodo = await d1GetMetrics(env, { desde: 900_000, ate: 1_100_000 });
+    assert.deepStrictEqual(noPeriodo.satisfacao, { mediaNota: 2, totalAvaliacoes: 1 });
+    const geral = await d1GetMetrics(env);
+    assert.deepStrictEqual(geral.satisfacao, { mediaNota: 3.5, totalAvaliacoes: 2 });
+  });
+
   await test('sem desde/ate, comportamento idêntico a antes (agregado geral)', async () => {
     const env = freshEnv();
     await seedTresChamados(env);
@@ -401,6 +413,17 @@ async function test(name, fn) {
     const updated = await d1TransitionStatus(env, created.id, 'em atendimento');
     assert.ok(updated.start_date >= before);
     assert.strictEqual(updated.due_date, updated.start_date + 30 * 60000);
+  });
+
+  await test('reabrir um chamado encerrado zera a nota de satisfação', async () => {
+    const env = freshEnvComAutomacao(vapidPrivateJwk);
+    const created = await d1CreateChamado(env, baseChamado);
+    await d1TransitionStatus(env, created.id, 'encerrado');
+    await d1UpdateChamado(env, created.id, { nota: 5 });
+    assert.strictEqual((await d1GetChamado(env, created.id)).nota, 5);
+    const reaberto = await d1TransitionStatus(env, created.id, 'em atendimento');
+    assert.strictEqual(reaberto.nota, null);
+    assert.strictEqual((await d1GetMetrics(env)).satisfacao.totalAvaliacoes, 0);
   });
 
   await test('"encerrado" define date_closed mesmo sem start_date (pulou "em atendimento")', async () => {

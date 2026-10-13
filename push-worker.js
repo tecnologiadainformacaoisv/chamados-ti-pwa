@@ -2526,6 +2526,13 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
     patch.dateClosed = Date.now();
   }
 
+  // Reabrir um chamado encerrado zera a nota de satisfação: a avaliação era do
+  // atendimento anterior. Sem isso a nota ficava escondida (o widget só aparece em
+  // "encerrado") mas continuava contando na média do dashboard.
+  if (prevStatus === 'encerrado' && novoStatus !== 'encerrado') {
+    patch.nota = null;
+  }
+
   const updated = await d1UpdateChamado(env, chamadoId, patch);
 
   const label = NOTIFY_STATUSES[novoStatus];

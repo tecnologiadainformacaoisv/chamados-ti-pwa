@@ -134,6 +134,7 @@ export function TasksTable({
               <th className="px-3 py-1.5 font-medium">Criado em</th>
               <th className="px-3 py-1.5 font-medium">Data inicial</th>
               <th className="px-3 py-1.5 font-medium">Prazo</th>
+              <th className="px-3 py-1.5 font-medium">Nota</th>
               <th className="px-3 py-1.5 font-medium" />
             </tr>
           </thead>
@@ -158,10 +159,10 @@ export function TasksTable({
                         />
                       )}
                     </td>
-                    {/* colSpan=11 (checkbox + 11 = 12 colunas do thead) — achado do
+                    {/* colSpan=12 (checkbox + 12 = 13 colunas do thead) — achado do
                         revisor (2026-09-15): estava em 10, faltando cobrir a
                         última coluna (~24px de fundo faltando, cosmético). */}
-                    <td colSpan={11} className="p-0">
+                    <td colSpan={12} className="p-0">
                       <button
                         type="button"
                         onClick={() => toggle(statusKey)}
@@ -188,7 +189,7 @@ export function TasksTable({
                       <>
                         {statusKey !== "aberto" && (
                           <tr>
-                            <td colSpan={12} className="px-3 py-4 text-center text-xs text-muted-foreground">
+                            <td colSpan={13} className="px-3 py-4 text-center text-xs text-muted-foreground">
                               Nenhum chamado.
                             </td>
                           </tr>
@@ -198,7 +199,7 @@ export function TasksTable({
                             porquê: todo chamado sempre nasce aberto. */}
                         {statusKey === "aberto" && (
                           <tr>
-                            <td colSpan={12} className="p-0">
+                            <td colSpan={13} className="p-0">
                               <CriarChamadoInline
                                 solicitantes={solicitantes}
                                 onCreate={onCreateTask}
@@ -224,14 +225,14 @@ export function TasksTable({
                         ))}
                         {list.length > GROUP_TABLE_LIMIT && (
                           <tr>
-                            <td colSpan={12} className="px-3 py-3 text-center text-xs text-muted-foreground">
+                            <td colSpan={13} className="px-3 py-3 text-center text-xs text-muted-foreground">
                               +{list.length - GROUP_TABLE_LIMIT} chamado(s) — refine os filtros/busca pra ver todos
                             </td>
                           </tr>
                         )}
                         {statusKey === "aberto" && (
                           <tr>
-                            <td colSpan={12} className="p-0">
+                            <td colSpan={13} className="p-0">
                               <CriarChamadoInline
                                 solicitantes={solicitantes}
                                 onCreate={onCreateTask}
@@ -424,6 +425,11 @@ function TaskRow({
       <td className={`px-3 py-1 ${atrasado ? "font-medium text-destructive" : ""}`}>
         {task.due_date ? fmtDate(task.due_date) : "—"}
         {atrasado ? " ⚠" : ""}
+      </td>
+      {/* Nota de satisfação (1-5) dada pelo solicitante — só existe em chamado
+          encerrado e avaliado; "—" nos demais. Permite achar qual chamado puxou a média. */}
+      <td className="px-3 py-1 text-muted-foreground" title="Avaliação do solicitante">
+        {task.nota != null ? `${task.nota} ★` : "—"}
       </td>
       {/* Botão "Gerenciar" (texto) virou só um ícone (2026-09-15) — clicar na linha
           já abre o modal (item 7 do pedido do usuário), o botão explícito ficou
