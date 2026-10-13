@@ -1234,12 +1234,18 @@ async function test(name, fn) {
     const res = await worker.fetch(req('POST', '/api/tasks/task-michael-aberto-nota/nota', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: JSON.stringify({ nota: 5 }) }), env);
     assert.strictEqual(res.status, 400);
   });
-  for (const notaInvalida of [0, 6, 'abc', null]) {
+  for (const notaInvalida of [0, 6, 'abc', null, '3', true, [4], 3.5]) {
     await test(`nota inválida (${JSON.stringify(notaInvalida)}) dá 400`, async () => {
       const res = await worker.fetch(req('POST', '/api/tasks/task-michael-1/nota', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: JSON.stringify({ nota: notaInvalida }) }), env);
       assert.strictEqual(res.status, 400);
     });
   }
+  await test('corpo JSON null ou não-objeto dá 400, não 500', async () => {
+    for (const raw of ['null', '5', '"x"']) {
+      const res = await worker.fetch(req('POST', '/api/tasks/task-michael-1/nota', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: raw }), env);
+      assert.strictEqual(res.status, 400, raw);
+    }
+  });
   await test('avalia com sucesso — nota aparece na resposta e em GET /api/tasks/:id', async () => {
     const res = await worker.fetch(req('POST', '/api/tasks/task-michael-1/nota', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: JSON.stringify({ nota: 4 }) }), env);
     const data = await res.json();

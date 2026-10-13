@@ -68,6 +68,8 @@ export async function mockSolicitanteRoutes(
     const id = route.request().url().match(/\/api\/tasks\/([^/]+)\/nota$/)?.[1]
     const body = route.request().postDataJSON() as { nota?: number }
     const found = tasks.find((t) => t.id === id)
+    // Persiste na lista, como o servidor faz — o refetch de my-tasks (invalidação) volta com a nota.
+    if (found) found.nota = body.nota
     return fulfillJson(route, { ...(found ?? makeTask({ id })), nota: body.nota })
   })
   // GET /api/tasks/:id — TicketCard chama isso pra CADA card renderizado, pra buscar

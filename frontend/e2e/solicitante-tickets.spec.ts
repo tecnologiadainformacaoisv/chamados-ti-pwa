@@ -102,8 +102,11 @@ test.describe("Meus Chamados / Histórico", () => {
 
     const card = page.locator('[data-task-id="t-avaliar"]')
     await expect(card.getByText("Como foi o atendimento?")).toBeVisible()
+    const envio = page.waitForRequest((r) => r.url().includes("/nota") && r.method() === "POST")
     await card.getByRole("button", { name: "Avaliar com 4 estrelas" }).click()
+    expect((await envio).postDataJSON()).toEqual({ nota: 4 })
     await expect(card.getByText("Sua avaliação:")).toBeVisible()
+    await expect(card.getByRole("button", { name: "Avaliar com 4 estrelas" })).toHaveAttribute("aria-pressed", "true")
   })
 
   test("chamado já avaliado abre mostrando a nota preenchida, não o convite", async ({ page }) => {

@@ -20,12 +20,14 @@ function NotaChamado({ task }: { task: Task }) {
     mutationFn: (nota: number) => submitNota(sessionToken, task.id, nota),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["my-tasks"] }),
   })
-  const notaAtual = mutation.data?.nota ?? task.nota ?? 0
+  // Valor do servidor (task.nota, atualizado pela invalidação) é a fonte de verdade;
+  // a nota clicada só vale de forma otimista enquanto o envio está pendente.
+  const notaAtual = (mutation.isPending ? mutation.variables : task.nota) ?? 0
 
   return (
-    <div className="mt-3 flex items-center gap-2 text-xs">
+    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
       <span className="text-muted-foreground">{notaAtual ? "Sua avaliação:" : "Como foi o atendimento?"}</span>
-      <div className="flex gap-0.5">
+      <div className="flex" role="group" aria-label="Avaliação do atendimento">
         {[1, 2, 3, 4, 5].map((n) => (
           <button
             key={n}
@@ -33,12 +35,19 @@ function NotaChamado({ task }: { task: Task }) {
             disabled={mutation.isPending}
             onClick={() => mutation.mutate(n)}
             aria-label={`Avaliar com ${n} estrela${n > 1 ? "s" : ""}`}
-            className="disabled:opacity-50"
+            aria-pressed={n === notaAtual}
+            title={`${n} estrela${n > 1 ? "s" : ""}`}
+            className="rounded p-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50"
           >
             <Star className="h-4 w-4" fill={n <= notaAtual ? "#f59e0b" : "none"} stroke={n <= notaAtual ? "#f59e0b" : "currentColor"} />
           </button>
         ))}
       </div>
+      {mutation.isError && (
+        <span role="alert" className="text-destructive">
+          Não foi possível salvar sua avaliação. Tente de novo.
+        </span>
+      )}
     </div>
   )
 }

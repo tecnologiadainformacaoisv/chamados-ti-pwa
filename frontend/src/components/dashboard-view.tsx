@@ -104,7 +104,7 @@ export function DashboardView() {
         <MetricCard value={fmtPercent(data.sla.dentroDoSlaPercent)} label="Dentro do SLA" tone="success" />
         <MetricCard value={fmtPercent(data.sla.atrasadoPercent)} label="Atrasado" tone="danger" />
         <MetricCard
-          value={data.satisfacao.mediaNota != null ? `${data.satisfacao.mediaNota} ★` : "—"}
+          value={data.satisfacao.mediaNota != null ? `${data.satisfacao.mediaNota.toFixed(1)} ★` : "—"}
           label={`Satisfação média (${data.satisfacao.totalAvaliacoes} avaliaç${data.satisfacao.totalAvaliacoes === 1 ? "ão" : "ões"})`}
         />
       </div>

@@ -414,7 +414,8 @@ async function handleSetNota(request, env, taskId) {
 
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
-  const nota = Number(body.nota);
+  if (!body || typeof body !== 'object') return jsonRes({ error: 'corpo inválido' }, 400);
+  const nota = body.nota;
   if (!Number.isInteger(nota) || nota < 1 || nota > 5) {
     return jsonRes({ error: 'nota precisa ser um número inteiro de 1 a 5' }, 400);
   }
