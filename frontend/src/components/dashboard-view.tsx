@@ -96,7 +96,7 @@ export function DashboardView() {
         </Alert>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <MetricCard value={data.total} label="Total de chamados" />
         {STATUS_ORDER.map((s) => (
           <MetricCard key={s} value={data.porStatus[s] ?? 0} label={STATUS_MAP[s].label} />

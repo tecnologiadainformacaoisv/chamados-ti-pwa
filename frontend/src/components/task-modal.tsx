@@ -258,7 +258,7 @@ export function TaskModal({
 
             <div className="flex flex-col gap-2 rounded-md border border-border p-2.5">
               <div className="flex gap-2">
-                <Select value={notaAutor} onValueChange={setNotaAutor}>
+                <Select value={notaAutor === SEM_ATRIBUICAO ? "" : notaAutor} onValueChange={setNotaAutor}>
                   <SelectTrigger className="w-36"><SelectValue placeholder="Quem escreve?" /></SelectTrigger>
                   <SelectContent>
                     {Object.entries(OPERADORES).map(([id, nome]) => (

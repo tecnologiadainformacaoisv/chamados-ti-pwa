@@ -34,7 +34,9 @@ export function AppHeader({ countAberto }: { countAberto?: number }) {
             (css/style.css .isv-logo) sempre usou. Achado 2026-08-14. */}
         <img src={logoIsv} alt="Instituto São Vicente" className="h-10 w-auto brightness-0 invert" />
       </div>
-      <div className="flex flex-col items-center leading-tight">
+      {/* hidden no mobile: com SidebarTrigger + logo larga + sino/atualizar/sair, o título
+          centralizado se sobrepunha à logo em 390px (achado 2026-10-14, screenshot). */}
+      <div className="hidden flex-col items-center leading-tight sm:flex">
         <span className="text-sm font-semibold">Painel de Admin</span>
         <span className="text-xs text-primary-foreground/70">Chamados de TI</span>
       </div>
