@@ -10,6 +10,17 @@ test.describe("Dashboard", () => {
     await expect(page.getByText("42", { exact: true })).toBeVisible()
   })
 
+  // Marco de início da operação (2026-10-16): o servidor só conta chamados daqui em diante
+  // e avisa a data na resposta — o painel precisa deixar isso explícito pra ninguém
+  // estranhar o total baixo.
+  test("avisa desde quando as métricas são contadas (início da operação)", async ({ page }) => {
+    await mockAdminRoutes(page, { metrics: makeMetrics({ inicioOperacao: Date.UTC(2026, 9, 16, 12, 0, 0) }) })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Dashboard")
+    await expect(page.getByText("Métricas contadas desde 16/10/2026", { exact: false })).toBeVisible()
+    await expect(page.getByRole("button", { name: "Desde o início" })).toBeVisible()
+  })
+
   // Satisfação (2026-09-21, "julgo essencial") — média das notas 1-5 dadas pelos
   // solicitantes, card novo na grade de métricas.
   test("card de satisfação mostra a média e o total de avaliações", async ({ page }) => {

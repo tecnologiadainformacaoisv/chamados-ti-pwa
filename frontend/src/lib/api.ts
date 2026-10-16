@@ -350,6 +350,8 @@ export type Metrics = {
   // no mesmo escopo de período (desde/ate) do resto das métricas. `mediaNota: null`
   // quando ninguém avaliou nada ainda nesse período.
   satisfacao: { mediaNota: number | null; totalAvaliacoes: number }
+  // Marco de início da operação (epoch ms): as métricas só contam daqui em diante.
+  inicioOperacao?: number
 }
 
 // Fase A do roadmap pós-MVP-visual (2026-08-14): `desde`/`ate` (epoch ms, ambos

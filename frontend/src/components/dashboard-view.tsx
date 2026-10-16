@@ -88,6 +88,12 @@ export function DashboardView() {
   return (
     <div className="flex flex-col gap-6">
       {periodoBar}
+      {data.inicioOperacao != null && (
+        <p className="-mt-3 text-xs text-muted-foreground">
+          Métricas contadas desde {new Date(data.inicioOperacao).toLocaleDateString("pt-BR")} (início da operação) — chamados anteriores
+          ficam só no histórico da Gestão.
+        </p>
+      )}
       {data.truncated && (
         <Alert>
           <AlertDescription>
@@ -178,7 +184,7 @@ function PeriodoFilterBar({
         <Button size="sm" variant="ghost" onClick={() => aplicarAtalho(0)}>Hoje</Button>
         <Button size="sm" variant="ghost" onClick={() => aplicarAtalho(6)}>7 dias</Button>
         <Button size="sm" variant="ghost" onClick={() => aplicarAtalho(29)}>30 dias</Button>
-        <Button size="sm" variant={semFiltro ? "secondary" : "ghost"} onClick={() => aplicarAtalho(null)}>Tudo</Button>
+        <Button size="sm" variant={semFiltro ? "secondary" : "ghost"} onClick={() => aplicarAtalho(null)} title="Todo o período desde o início da operação">Desde o início</Button>
       </div>
       {!semFiltro && (
         <span className="pb-1.5 text-xs text-muted-foreground">

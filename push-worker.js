@@ -937,6 +937,14 @@ async function handleAdminCreateTask(request, env) {
 // `ate` em epoch ms via querystring — cobre o caso "quero ver só a última semana/mês"
 // sem exigir migração de schema (`date_created` já existe na tabela desde sempre).
 // Omitidos, o comportamento é idêntico a antes (agregado geral).
+// Marco de início da operação real (2026-10-16, pedido do usuário): os chamados
+// anteriores vieram da fase de testes/ClickUp, quando o sistema ainda não era usado
+// de verdade — 66% apareciam como "atrasado" por causa disso. Eles continuam no banco
+// (nada é apagado, seguem na Gestão como histórico), mas as MÉTRICAS só contam daqui
+// em diante: o piso é aplicado em desde, qualquer período pedido abaixo disso é cortado.
+// 16/10/2026 00:00 em Fortaleza (UTC-3). Pra mudar o marco, é só trocar esta constante.
+const OPERACAO_INICIO_MS = Date.UTC(2026, 9, 16, 3, 0, 0);
+
 async function handleAdminMetrics(request, env) {
   if (!(await isAdmin(request, env))) return unauthorized();
 
@@ -949,7 +957,8 @@ async function handleAdminMetrics(request, env) {
     return jsonRes({ error: 'desde/ate precisam ser epoch ms (número)' }, 400);
   }
 
-  return jsonRes(await d1GetMetrics(env, { desde, ate }));
+  const desdeEfetivo = Math.max(desde ?? 0, OPERACAO_INICIO_MS);
+  return jsonRes({ ...(await d1GetMetrics(env, { desde: desdeEfetivo, ate })), inicioOperacao: OPERACAO_INICIO_MS });
 }
 
 // =====================================================================
