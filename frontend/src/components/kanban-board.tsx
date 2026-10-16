@@ -11,7 +11,8 @@ import {
   PRIORITY_MAP,
   optionName,
 } from "@/lib/constants"
-import { getCF, isAtrasado, fmtDate, type Task } from "@/lib/api"
+import { getCF, isAtrasado, venceLogo, fmtDate, type Task } from "@/lib/api"
+import { timeUntil } from "@/lib/ticket-helpers"
 
 const KANBAN_CARD_LIMIT = 100 // mesmo teto por coluna que admin.js já usa
 
@@ -116,6 +117,7 @@ function KanbanCard({
   const operadores = (task.assignees ?? []).map((a) => a.username || OPERADORES[String(a.id)] || `#${a.id}`).join(", ") || "—"
   const prioridade = task.priority?.priority ? PRIORITY_MAP[task.priority.priority] : null
   const atrasado = isAtrasado(task)
+  const venceEmBreve = !atrasado && venceLogo(task)
 
   return (
     <div
@@ -125,7 +127,7 @@ function KanbanCard({
       onClick={onClick}
       className={`cursor-grab rounded-md border bg-card p-3 shadow-sm transition-opacity hover:border-primary/40 active:cursor-grabbing ${
         isDragging ? "opacity-40" : ""
-      } ${atrasado ? "border-destructive/50" : "border-border"}`}
+      } ${atrasado ? "border-destructive/50" : venceEmBreve ? "border-amber-400" : "border-border"}`}
     >
       {/* break-words — achado 2026-08-17: line-clamp sozinho não impede overflow
           HORIZONTAL de uma palavra/string comprida sem espaço, só limita altura. */}
@@ -152,9 +154,10 @@ function KanbanCard({
         <span>{setorNome}</span>
         <span>{solNome}</span>
         <span>{operadores}</span>
-        <span className={atrasado ? "font-medium text-destructive" : ""}>
+        <span className={atrasado ? "font-medium text-destructive" : venceEmBreve ? "font-medium text-amber-600" : ""}>
           {task.due_date ? fmtDate(task.due_date) : "—"}
           {atrasado ? " ⚠" : ""}
+          {venceEmBreve ? ` ⏰ vence ${timeUntil(task.due_date)}` : ""}
         </span>
       </div>
     </div>

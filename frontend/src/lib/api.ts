@@ -313,6 +313,18 @@ export function isAtrasado(task: Task): boolean {
   return referencia > dueDate
 }
 
+// Alerta de SLA prestes a estourar (2026-10-16): chamado ainda em andamento (aberto ou
+// em atendimento — "pendente" tem o SLA pausado, "encerrado" já acabou) cujo prazo cai
+// nos próximos `limiteMin` minutos. Já passou do prazo = isAtrasado, não isto.
+export const SLA_ALERTA_MIN = 15
+export function venceLogo(task: Task, limiteMin = SLA_ALERTA_MIN): boolean {
+  if (!task.due_date) return false
+  const status = (task.status?.status || "").toLowerCase()
+  if (status !== "aberto" && status !== "em atendimento") return false
+  const falta = Number(task.due_date) - Date.now()
+  return falta > 0 && falta <= limiteMin * 60_000
+}
+
 export function fmtDate(value: string | number | null | undefined): string {
   if (!value) return "—"
   const d = new Date(Number(value))

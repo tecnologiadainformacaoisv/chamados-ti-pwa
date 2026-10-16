@@ -240,3 +240,79 @@ test.describe("Gestão — layout (sem scroll horizontal de página)", () => {
     })
   }
 })
+
+test.describe("Gestão — Exportar CSV", () => {
+  test("baixa os chamados visíveis, com BOM, ';' e proteção contra fórmula", async ({ page }) => {
+    const tasks = [
+      makeTask({ id: "c1", name: "Notebook não liga", status: { status: "aberto" } }),
+      makeTask({ id: "c2", name: '=HYPERLINK("http://evil","clique")', status: { status: "encerrado" }, nota: 4 }),
+    ]
+    await mockAdminRoutes(page, { tasks })
+    await gotoAdminLoggedIn(page)
+    await expect(page.getByText("Notebook não liga")).toBeVisible()
+
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("button", { name: "Exportar CSV" }).click(),
+    ])
+    expect(download.suggestedFilename()).toMatch(/^chamados-\d{4}-\d{2}-\d{2}\.csv$/)
+    const path = await download.path()
+    const csv = (await import("node:fs")).readFileSync(path!, "utf8")
+    expect(csv.charCodeAt(0)).toBe(0xfeff)
+    expect(csv).toContain('"Título";"Status";"Prioridade"')
+    expect(csv).toContain('"Notebook não liga"')
+    // célula começando com "=" ganha um apóstrofo na frente (formula injection)
+    expect(csv).toContain(`"'=HYPERLINK(""http://evil"",""clique"")"`)
+    expect(csv).not.toContain('"=HYPERLINK')
+  })
+
+  test("o CSV respeita a busca: só exporta o que está na tela", async ({ page }) => {
+    const tasks = [
+      makeTask({ id: "d1", name: "Impressora quebrada" }),
+      makeTask({ id: "d2", name: "Mouse sem pilha" }),
+    ]
+    await mockAdminRoutes(page, { tasks })
+    await gotoAdminLoggedIn(page)
+    await page.getByPlaceholder("Buscar por título...").fill("Impressora")
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("button", { name: "Exportar CSV" }).click(),
+    ])
+    const csv = (await import("node:fs")).readFileSync((await download.path())!, "utf8")
+    expect(csv).toContain("Impressora quebrada")
+    expect(csv).not.toContain("Mouse sem pilha")
+  })
+})
+
+test.describe("Gestão — alerta de SLA prestes a estourar", () => {
+  const MIN = 60_000
+  const tasks = [
+    makeTask({ id: "s1", name: "Vence em 10 min", status: { status: "aberto" }, due_date: Date.now() + 10 * MIN }),
+    makeTask({ id: "s2", name: "Vence em 2 horas", status: { status: "aberto" }, due_date: Date.now() + 120 * MIN }),
+    makeTask({ id: "s3", name: "Já venceu", status: { status: "em atendimento" }, due_date: Date.now() - 5 * MIN }),
+    makeTask({ id: "s4", name: "Pendente quase vencendo", status: { status: "pendente" }, due_date: Date.now() + 5 * MIN }),
+  ]
+
+  test("Quadro: só o chamado perto do prazo ganha o aviso âmbar", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks })
+    await gotoAdminLoggedIn(page)
+    await expect(page.getByText("Vence em 10 min")).toBeVisible()
+    await expect(page.getByText(/⏰ vence em \d+min/)).toHaveCount(1)
+    await expect(page.locator('[draggable="true"]', { hasText: "Vence em 10 min" })).toContainText("⏰ vence")
+    await expect(page.locator('[draggable="true"]', { hasText: "Vence em 2 horas" })).not.toContainText("⏰")
+    // já vencido mostra o ⚠ vermelho de sempre, não o aviso de "vai vencer"
+    await expect(page.locator('[draggable="true"]', { hasText: "Já venceu" })).toContainText("⚠")
+    await expect(page.locator('[draggable="true"]', { hasText: "Já venceu" })).not.toContainText("⏰")
+    // pendente tem o SLA pausado: nunca alerta
+    await expect(page.locator('[draggable="true"]', { hasText: "Pendente quase vencendo" })).not.toContainText("⏰")
+  })
+
+  test("Tabela: mesmo critério do Quadro", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks })
+    await gotoAdminLoggedIn(page)
+    await page.getByRole("button", { name: /Tabela/ }).click()
+    await expect(page.getByText(/⏰ vence em \d+min/)).toHaveCount(1)
+    await expect(page.getByRole("row", { name: /Vence em 10 min/ })).toContainText("⏰ vence")
+    await expect(page.getByRole("row", { name: /Vence em 2 horas/ })).not.toContainText("⏰")
+  })
+})

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { LayoutGrid, List } from "lucide-react"
+import { Download, LayoutGrid, List } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { FiltersBar } from "@/components/filters-bar"
@@ -11,6 +11,7 @@ import { EncerrarComSolucaoDialog } from "@/components/encerrar-com-solucao-dial
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 import { getCF, fetchSolicitanteNomes, fetchTasks, isSessionError, postTaskUpdate, postBulkUpdate, createAdminTask, type CreateTaskPayload, type Filtros, type Task, type UpdatePayload } from "@/lib/api"
 import { SOLUCAO_FIELD_ID } from "@/lib/constants"
+import { downloadTasksCsv } from "@/lib/export-csv"
 
 type ViewMode = "quadro" | "tabela"
 
@@ -169,10 +170,23 @@ export function GestaoView() {
           onBuscaChange={setBusca}
           mostrarStatus={viewMode === "tabela"}
         />
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-medium text-foreground">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="whitespace-nowrap text-sm font-medium text-foreground">
             Chamados {busca ? `(${lastVisible.length} de ${tasks.length})` : `(${tasks.length})`}
           </p>
+          <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => downloadTasksCsv(lastVisible)}
+            disabled={lastVisible.length === 0}
+            title="Baixa em CSV os chamados que estão na tela (com os filtros e a busca aplicados)"
+            aria-label="Exportar CSV"
+          >
+            <Download className="h-4 w-4" />
+            <span className="hidden sm:inline">Exportar CSV</span>
+            <span className="sm:hidden">CSV</span>
+          </Button>
           <div className="flex gap-1 rounded-md border border-border p-1">
             <Button size="sm" variant={viewMode === "quadro" ? "default" : "ghost"} onClick={() => changeViewMode("quadro")}>
               <LayoutGrid className="h-4 w-4" /> Quadro
@@ -180,6 +194,7 @@ export function GestaoView() {
             <Button size="sm" variant={viewMode === "tabela" ? "default" : "ghost"} onClick={() => changeViewMode("tabela")}>
               <List className="h-4 w-4" /> Tabela
             </Button>
+          </div>
           </div>
         </div>
       </div>

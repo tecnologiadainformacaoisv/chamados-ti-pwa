@@ -13,7 +13,8 @@ import {
   OPERADORES,
   PRIORITY_MAP,
 } from "@/lib/constants"
-import { getCF, isAtrasado, fmtDate, type CreateTaskPayload, type Task, type UpdatePayload } from "@/lib/api"
+import { timeUntil } from "@/lib/ticket-helpers"
+import { getCF, isAtrasado, venceLogo, fmtDate, type CreateTaskPayload, type Task, type UpdatePayload } from "@/lib/api"
 import type { StatusKey } from "@/lib/constants"
 
 const SEM_ATRIBUICAO = "__sem__"
@@ -311,6 +312,7 @@ function TaskRow({
   const multiplosOperadores = assignees.length > 1
   const prioridade = task.priority?.priority ? PRIORITY_MAP[task.priority.priority] : null
   const atrasado = isAtrasado(task)
+  const venceEmBreve = !atrasado && venceLogo(task)
   const statusAtual = (task.status?.status || "").toLowerCase()
 
   return (
@@ -422,9 +424,10 @@ function TaskRow({
           "Em Atendimento" (start_date), gravado por d1TransitionStatus. Fica "—" pra
           quem nunca saiu de "Aberto" — não é um erro, é a ausência real do dado. */}
       <td className="px-3 py-1 text-muted-foreground">{task.start_date ? fmtDate(task.start_date) : "—"}</td>
-      <td className={`px-3 py-1 ${atrasado ? "font-medium text-destructive" : ""}`}>
+      <td className={`px-3 py-1 ${atrasado ? "font-medium text-destructive" : venceEmBreve ? "font-medium text-amber-600" : ""}`}>
         {task.due_date ? fmtDate(task.due_date) : "—"}
         {atrasado ? " ⚠" : ""}
+        {venceEmBreve ? ` ⏰ vence ${timeUntil(task.due_date)}` : ""}
       </td>
       {/* Nota de satisfação (1-5) dada pelo solicitante — só existe em chamado
           encerrado e avaliado; "—" nos demais. Permite achar qual chamado puxou a média. */}
