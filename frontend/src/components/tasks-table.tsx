@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState, type CSSProperties } from "react"
-import { ChevronDown, ChevronRight, Check, Circle, Flag, TriangleAlert } from "lucide-react"
+import { ChevronDown, ChevronRight, Check, Circle, Clock, Flag, TriangleAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { CriarChamadoInline } from "@/components/criar-chamado-inline"
@@ -133,9 +133,9 @@ export function TasksTable({
               <th className="px-3 py-1.5 font-medium">Operador</th>
               <th className="px-3 py-1.5 font-medium">Status</th>
               <th className="px-3 py-1.5 font-medium">Criado em</th>
-              <th className="px-3 py-1.5 font-medium">Data inicial</th>
+              <th className="hidden px-3 py-1.5 font-medium xl:table-cell">Data inicial</th>
               <th className="px-3 py-1.5 font-medium">Prazo</th>
-              <th className="px-3 py-1.5 font-medium">Nota</th>
+              <th className="hidden px-3 py-1.5 font-medium xl:table-cell">Nota</th>
               <th className="px-3 py-1.5 font-medium" />
             </tr>
           </thead>
@@ -157,6 +157,7 @@ export function TasksTable({
                           checked={todosSelecionados}
                           onChange={(e) => toggleGroup(visibleIds, e.target.checked)}
                           title="Selecionar todos deste grupo"
+                          aria-label="Selecionar todos os chamados deste grupo"
                         />
                       )}
                     </td>
@@ -253,7 +254,7 @@ export function TasksTable({
       </div>
 
       {selectedIds.length > 0 && (
-        <div className="sticky bottom-4 z-10 flex w-fit items-center gap-3 self-center rounded-full border border-border bg-foreground px-4 py-2 text-primary-foreground shadow-lg">
+        <div className="sticky bottom-4 z-10 flex w-fit max-w-[calc(100vw-1rem)] flex-wrap items-center justify-center gap-3 self-center rounded-3xl border border-border bg-foreground px-4 py-2 text-primary-foreground shadow-lg">
           <span className="text-xs font-semibold whitespace-nowrap">
             {selectedIds.length} selecionado{selectedIds.length > 1 ? "s" : ""}
           </span>
@@ -329,7 +330,8 @@ function TaskRow({
             controle bem no meio de uma seleção em lote em andamento). */}
         <input
           type="checkbox"
-          className={`h-3.5 w-3.5 accent-primary ${selected || groupHasSelection ? "opacity-100" : "opacity-0 group-hover/row:opacity-100"}`}
+          aria-label={`Selecionar chamado ${task.name}`}
+          className={`h-3.5 w-3.5 accent-primary focus-visible:opacity-100 ${selected || groupHasSelection ? "opacity-100" : "opacity-0 group-hover/row:opacity-100"}`}
           checked={selected}
           onChange={(e) => onToggleSelected(e.target.checked)}
         />
@@ -423,15 +425,19 @@ function TaskRow({
       {/* Data inicial (2026-09-15, pedido do usuário) — quando o chamado entrou em
           "Em Atendimento" (start_date), gravado por d1TransitionStatus. Fica "—" pra
           quem nunca saiu de "Aberto" — não é um erro, é a ausência real do dado. */}
-      <td className="px-3 py-1 text-muted-foreground">{task.start_date ? fmtDate(task.start_date) : "—"}</td>
-      <td className={`px-3 py-1 ${atrasado ? "font-medium text-destructive" : venceEmBreve ? "font-medium text-amber-600" : ""}`}>
+      <td className="hidden px-3 py-1 text-muted-foreground xl:table-cell">{task.start_date ? fmtDate(task.start_date) : "—"}</td>
+      <td className={`px-3 py-1 whitespace-nowrap ${atrasado ? "font-medium text-destructive" : venceEmBreve ? "font-medium text-amber-600" : ""}`}>
         {task.due_date ? fmtDate(task.due_date) : "—"}
         {atrasado ? " ⚠" : ""}
-        {venceEmBreve ? ` ⏰ vence ${timeUntil(task.due_date)}` : ""}
+        {venceEmBreve && (
+          <span className="ml-1.5 inline-flex items-center gap-1">
+            <Clock className="h-3 w-3" aria-hidden /> vence {timeUntil(task.due_date)}
+          </span>
+        )}
       </td>
       {/* Nota de satisfação (1-5) dada pelo solicitante — só existe em chamado
           encerrado e avaliado; "—" nos demais. Permite achar qual chamado puxou a média. */}
-      <td className="px-3 py-1 text-muted-foreground" title="Avaliação do solicitante">
+      <td className="hidden px-3 py-1 text-muted-foreground xl:table-cell" title="Avaliação do solicitante">
         {task.nota != null ? `${task.nota} ★` : "—"}
       </td>
       {/* Botão "Gerenciar" (texto) virou só um ícone (2026-09-15) — clicar na linha

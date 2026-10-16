@@ -10,7 +10,7 @@ test.describe("Alerta de chamado novo", () => {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ total: 3, tasks: [makeTask({ id: "t1" }), makeTask({ id: "t2" }), makeTask({ id: "t3" })], truncated: false }) })
     })
     await gotoAdminLoggedIn(page)
-    await expect(page.locator('[title*="chamado(s) aberto(s)"]')).toContainText("3")
+    await expect(page.locator('[title*="aguardando atendimento"]')).toContainText("3")
   })
 
   test("primeira carga não dispara a caixa de alerta (só registra em silêncio)", async ({ page }) => {

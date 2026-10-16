@@ -8,6 +8,10 @@ import { mockAdminRoutes, gotoAdminLoggedIn } from "./helpers/fixtures"
 import { makeTask } from "./helpers/mock-data"
 
 test.describe("Encerrar exige solução — Tabela (select inline)", () => {
+  test.beforeEach(async ({ page }, info) => {
+    void page
+    test.skip(info.project.name === "mobile", "A Tabela não existe no celular (só o Quadro) — revisão de UX 2026-10-16")
+  })
   test("selecionar Encerrado abre o popup pedindo solução, sem chamar o servidor ainda", async ({ page }) => {
     await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga", status: { status: "em atendimento" } })] })
     let posted = false
@@ -157,6 +161,10 @@ test.describe("Encerrar exige solução — Quadro (arrastar)", () => {
 })
 
 test.describe("Encerrar exige solução — ação em lote", () => {
+  test.beforeEach(async ({ page }, info) => {
+    void page
+    test.skip(info.project.name === "mobile", "A Tabela não existe no celular (só o Quadro) — revisão de UX 2026-10-16")
+  })
   test("'Encerrado' não aparece nas opções de status em massa", async ({ page }) => {
     await mockAdminRoutes(page, {
       tasks: [makeTask({ id: "t1", name: "Um", status: { status: "aberto" } }), makeTask({ id: "t2", name: "Dois", status: { status: "aberto" } })],

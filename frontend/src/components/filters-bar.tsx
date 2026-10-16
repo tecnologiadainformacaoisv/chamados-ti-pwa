@@ -82,7 +82,8 @@ export function FiltersBar({
         <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <input
           className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-          placeholder="Buscar por título..."
+          placeholder="Buscar por título ou solicitante..."
+          aria-label="Buscar chamados"
           value={busca}
           onChange={(e) => onBuscaChange(e.target.value)}
         />
@@ -116,6 +117,9 @@ function CompactSelect({
           barra de filtros. Utilitário compartilhado com a coluna Solicitante da
           Tabela (ver .truncate-chip em index.css) em vez de max-w-* ad-hoc. */}
       <SelectTrigger size="sm" className="h-8 truncate-chip bg-transparent text-xs font-medium" style={{ "--truncate-chip-w": "12rem" } as CSSProperties}>
+        {/* Com um filtro escolhido o chip mostrava só "Henrique", sem dizer de QUE filtro
+            é (achado de UX 2026-10-16) — mantém o rótulo: "Operador: Henrique". */}
+        {value !== TODOS && <span className="shrink-0 text-muted-foreground">{placeholder.split(":")[0]}:</span>}
         <SelectValue placeholder={placeholder}>{value === TODOS ? placeholder : undefined}</SelectValue>
       </SelectTrigger>
       <SelectContent>

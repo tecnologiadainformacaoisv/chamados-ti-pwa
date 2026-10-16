@@ -2,8 +2,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { TIPO_FIELD_ID, SETOR_FIELD_ID, TIPOS, SETORES, optionName } from "@/lib/constants"
-import { getCF, isSessionError, postTaskUpdate, type Task } from "@/lib/api"
+import { TIPO_FIELD_ID, SETOR_FIELD_ID, TIPOS, SETORES, PRIORITY_MAP, optionName } from "@/lib/constants"
+import { getCF, isSessionError, postTaskUpdate, fmtDate, type Task } from "@/lib/api"
+import { timeUntil } from "@/lib/ticket-helpers"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 
 // A "caixa" que aparece quando um chamado novo chega (2026-08-13) — diferente do modal
@@ -32,6 +33,9 @@ export function NovoChamadoAlert({ fila, onFechar }: { fila: Task[]; onFechar: (
 
   const tipo = optionName(TIPOS, getCF(task, TIPO_FIELD_ID) as number | null)
   const setor = optionName(SETORES, getCF(task, SETOR_FIELD_ID) as number | null)
+  // Prioridade e prazo é o que decide se a TI larga o que está fazendo (achado de UX 2026-10-16)
+  const prioridade = task.priority?.priority ? PRIORITY_MAP[String(task.priority.priority).toLowerCase()] : null
+  const falta = task.due_date ? timeUntil(task.due_date) : null
 
   return (
     <Dialog open={!!task} onOpenChange={(open) => !open && onFechar(task.id)}>
@@ -56,6 +60,17 @@ export function NovoChamadoAlert({ fila, onFechar }: { fila: Task[]; onFechar: (
             <span className="max-w-full truncate rounded-full border border-border px-2 py-0.5">{task.solicitante || "—"}</span>
             <span className="rounded-full border border-border px-2 py-0.5">{tipo}</span>
             <span className="rounded-full border border-border px-2 py-0.5">{setor}</span>
+            {prioridade && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 font-medium" style={{ color: prioridade.color }}>
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: prioridade.color }} />
+                {prioridade.label}
+              </span>
+            )}
+            {task.due_date ? (
+              <span className="rounded-full border border-border px-2 py-0.5">
+                Prazo: {fmtDate(task.due_date)}{falta ? " (" + falta + ")" : ""}
+              </span>
+            ) : null}
           </div>
           <div className="max-h-40 min-w-0 overflow-y-auto rounded-md border border-border bg-muted/40 p-2.5 text-sm break-words whitespace-pre-line text-foreground">
             {task.description || task.text_content || "(sem descrição)"}

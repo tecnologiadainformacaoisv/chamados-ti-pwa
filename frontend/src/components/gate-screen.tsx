@@ -48,18 +48,17 @@ export function GateScreen() {
         ) : (
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
-              <Label htmlFor="gate-secret">Segredo de admin *</Label>
+              <Label htmlFor="gate-secret">Chave de acesso do painel *</Label>
               <Input
                 id="gate-secret"
                 type="password"
                 autoComplete="off"
-                placeholder="X-Admin-Secret"
+                placeholder="Cole a chave aqui"
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Não é sua senha de login do app — é o segredo separado configurado no Worker (
-                <span className="font-mono">ADMIN_SECRET</span>), que a TI já tem.
+                Não é a senha do app dos solicitantes. Se não souber qual é a chave, pergunte a quem administra o sistema.
               </p>
             </div>
 

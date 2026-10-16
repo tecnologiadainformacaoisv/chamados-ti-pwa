@@ -325,6 +325,50 @@ export function venceLogo(task: Task, limiteMin = SLA_ALERTA_MIN): boolean {
   return falta > 0 && falta <= limiteMin * 60_000
 }
 
+// Ordem de atendimento (2026-10-16, revisão de UX pra implantação): com 48 pessoas abrindo
+// chamado, o urgente atrasado não pode ficar no meio da coluna. Pra quem ainda está em
+// andamento: atrasado, depois "vence logo", depois o resto; dentro de cada grupo por
+// prioridade (urgente > alta > normal), prazo mais próximo e, no fim, sem prazo (ex.: os
+// chamados importados da ClickUp). "Pendente" tem o SLA pausado, então não vai pro topo
+// por atraso. Encerrados: o mais recente primeiro.
+const PRIORIDADE_PESO: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 }
+function grupoUrgencia(task: Task): number {
+  const status = (task.status?.status || "").toLowerCase()
+  if (status !== "aberto" && status !== "em atendimento") return 2
+  if (isAtrasado(task)) return 0
+  if (venceLogo(task)) return 1
+  return 2
+}
+// Primeiro o status (em andamento, pendente, encerrado), depois a regra de cada grupo —
+// sem isso o comparador não era transitivo (encerrado comparado por data de fechamento
+// contra encerrado, mas por prioridade contra os outros) e o sort dava ordem indefinida
+// (achado do revisor, 2026-10-16).
+function rankStatus(task: Task): number {
+  const status = (task.status?.status || "").toLowerCase()
+  if (status === "encerrado") return 2
+  if (status === "pendente") return 1
+  return 0
+}
+export function compararUrgencia(a: Task, b: Task): number {
+  const ra = rankStatus(a)
+  const rb = rankStatus(b)
+  if (ra !== rb) return ra - rb
+  if (ra === 2) {
+    // encerrados: o mais recente primeiro (|| 0 protege contra NaN de data inválida)
+    return (Number(b.date_closed ?? b.date_updated ?? 0) || 0) - (Number(a.date_closed ?? a.date_updated ?? 0) || 0)
+  }
+  const ga = grupoUrgencia(a)
+  const gb = grupoUrgencia(b)
+  if (ga !== gb) return ga - gb
+  const pa = PRIORIDADE_PESO[String(a.priority?.priority ?? "").toLowerCase()] ?? 2
+  const pb = PRIORIDADE_PESO[String(b.priority?.priority ?? "").toLowerCase()] ?? 2
+  if (pa !== pb) return pa - pb
+  const da = a.due_date ? Number(a.due_date) : Number.POSITIVE_INFINITY
+  const db = b.due_date ? Number(b.due_date) : Number.POSITIVE_INFINITY
+  if (da !== db) return da < db ? -1 : 1
+  return (Number(a.date_created ?? 0) || 0) - (Number(b.date_created ?? 0) || 0)
+}
+
 // Data completa (com ano), pra onde o dia/mês sozinho confunde — ex.: chamados antigos
 // importados. fmtDate (abaixo) omite o ano de propósito, pra caber em card/tabela.
 export function fmtDateFull(value: string | number | null | undefined): string {

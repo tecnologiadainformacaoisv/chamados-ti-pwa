@@ -12,9 +12,15 @@ import {
   optionName,
 } from "@/lib/constants"
 import { getCF, isAtrasado, venceLogo, fmtDate, fmtDateFull, type Task } from "@/lib/api"
+import { Clock } from "lucide-react"
 import { timeUntil } from "@/lib/ticket-helpers"
+import { Button } from "@/components/ui/button"
 
 const KANBAN_CARD_LIMIT = 100 // mesmo teto por coluna que admin.js já usa
+// Encerrado não precisa de ação: só os mais recentes ficam à vista (revisão de UX 2026-10-16) —
+// senão a coluna cresce a cada semana e empurra o que importa pra fora da tela, principalmente
+// no celular, onde as colunas ficam empilhadas. "Ver todos" abre a lista inteira.
+const ENCERRADO_VISIVEIS = 10
 
 // Porta renderKanban/kanbanCardHtml + arrastar-e-soltar de admin.js. Clique abre o
 // modal "Gerenciar" (via onOpenTask); arrastar entre colunas muda só o status (via
@@ -23,13 +29,18 @@ export function KanbanBoard({
   tasks,
   onOpenTask,
   onDropStatus,
+  semLimiteEncerrados = false,
 }: {
+  // com busca ativa o limite de 10 encerrados some: senão o card achado ficava escondido atrás
+  // de "Ver todos" enquanto o contador dizia que ele existia (achado do revisor, 2026-10-16)
+  semLimiteEncerrados?: boolean
   tasks: Task[]
   onOpenTask: (task: Task) => void
   onDropStatus: (taskId: string, status: string) => void
 }) {
   const [dragOverCol, setDragOverCol] = useState<string | null>(null)
   const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [verTodosEncerrados, setVerTodosEncerrados] = useState(false)
 
   const byStatus: Record<string, Task[]> = { aberto: [], "em atendimento": [], pendente: [], encerrado: [] }
   for (const t of tasks) {
@@ -41,7 +52,8 @@ export function KanbanBoard({
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
       {STATUS_ORDER.map((statusKey) => {
         const list = byStatus[statusKey]
-        const shown = list.slice(0, KANBAN_CARD_LIMIT)
+        const limite = statusKey === "encerrado" && !verTodosEncerrados && !semLimiteEncerrados ? ENCERRADO_VISIVEIS : KANBAN_CARD_LIMIT
+        const shown = list.slice(0, limite)
         return (
           // min-w-0 na coluna (item do grid xl:grid-cols-4 acima) — achado 2026-08-17:
           // sem isso, um card com texto sem quebra natural podia estourar a largura
@@ -84,6 +96,11 @@ export function KanbanBoard({
                   onClick={() => onOpenTask(task)}
                 />
               ))}
+              {statusKey === "encerrado" && !semLimiteEncerrados && list.length > ENCERRADO_VISIVEIS && (
+                <Button variant="ghost" size="sm" className="self-center" onClick={() => setVerTodosEncerrados((v) => !v)}>
+                  {verTodosEncerrados ? "Mostrar menos" : `Ver todos os encerrados (${list.length})`}
+                </Button>
+              )}
               {list.length > KANBAN_CARD_LIMIT && (
                 <p className="py-2 text-center text-xs text-muted-foreground">
                   +{list.length - KANBAN_CARD_LIMIT} chamado(s) — refine os filtros/busca pra ver todos
@@ -158,7 +175,11 @@ function KanbanCard({
         <span className={atrasado ? "font-medium text-destructive" : venceEmBreve ? "font-medium text-amber-600" : ""}>
           Prazo: {task.due_date ? fmtDate(task.due_date) : "sem prazo"}
           {atrasado ? " ⚠" : ""}
-          {venceEmBreve ? ` ⏰ vence ${timeUntil(task.due_date)}` : ""}
+          {venceEmBreve && (
+            <span className="ml-1.5 inline-flex items-center gap-1">
+              <Clock className="h-3 w-3" aria-hidden /> vence {timeUntil(task.due_date)}
+            </span>
+          )}
         </span>
       </div>
     </div>

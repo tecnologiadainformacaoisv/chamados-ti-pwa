@@ -13,6 +13,17 @@ test.describe("Dashboard", () => {
   // Marco de início da operação (2026-10-16): o servidor só conta chamados daqui em diante
   // e avisa a data na resposta — o painel precisa deixar isso explícito pra ninguém
   // estranhar o total baixo.
+  // Sem nenhum chamado no período (caso real nos primeiros dias — as métricas só contam
+  // desde o início da operação): uma mensagem só, em vez de 8 cartões "0" (UX 2026-10-16).
+  test("sem chamados no período mostra uma mensagem só, não 8 cartões zerados", async ({ page }) => {
+    await mockAdminRoutes(page, { metrics: makeMetrics({ total: 0, porStatus: {}, inicioOperacao: Date.UTC(2026, 9, 16, 12, 0, 0) }) })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Dashboard")
+    await expect(page.getByText("Ainda sem chamados neste período.")).toBeVisible()
+    await expect(page.getByText("Total de chamados")).toHaveCount(0)
+    await expect(page.getByText(/Métricas contadas desde 16/)).toBeVisible()
+  })
+
   test("avisa desde quando as métricas são contadas (início da operação)", async ({ page }) => {
     await mockAdminRoutes(page, { metrics: makeMetrics({ inicioOperacao: Date.UTC(2026, 9, 16, 12, 0, 0) }) })
     await gotoAdminLoggedIn(page)
@@ -63,7 +74,7 @@ test.describe("Dashboard", () => {
     await mockAdminRoutes(page, { metrics: makeMetrics({ truncated: true }) })
     await gotoAdminLoggedIn(page)
     await abrirSecaoAdmin(page, "Dashboard")
-    await expect(page.getByText(/bateu no teto de páginas/)).toBeVisible()
+    await expect(page.getByText(/Há mais chamados do que a tela consegue mostrar/)).toBeVisible()
   })
 
   test("erro do servidor mostra alerta em vez de tela em branco", async ({ page }) => {

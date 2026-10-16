@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Download, LayoutGrid, List } from "lucide-react"
+import { Download, LayoutGrid, List, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { FiltersBar } from "@/components/filters-bar"
@@ -9,7 +9,8 @@ import { TasksTable } from "@/components/tasks-table"
 import { TaskModal } from "@/components/task-modal"
 import { EncerrarComSolucaoDialog } from "@/components/encerrar-com-solucao-dialog"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
-import { getCF, fetchSolicitanteNomes, fetchTasks, isSessionError, postTaskUpdate, postBulkUpdate, createAdminTask, type CreateTaskPayload, type Filtros, type Task, type UpdatePayload } from "@/lib/api"
+import { useIsMobile } from "@/hooks/use-mobile"
+import { getCF, compararUrgencia, fetchSolicitanteNomes, fetchTasks, isSessionError, postTaskUpdate, postBulkUpdate, createAdminTask, type CreateTaskPayload, type Filtros, type Task, type UpdatePayload } from "@/lib/api"
 import { SOLUCAO_FIELD_ID } from "@/lib/constants"
 import { downloadTasksCsv } from "@/lib/export-csv"
 
@@ -22,6 +23,10 @@ export function GestaoView() {
   const [filtros, setFiltros] = useState<Filtros>({})
   const [busca, setBusca] = useState("")
   const [viewMode, setViewMode] = useState<ViewMode>(() => (localStorage.getItem("admin_view_mode_react") as ViewMode) || "quadro")
+  // No celular a Tabela (13 colunas, controles de 24px) não é usável — revisão de UX
+  // 2026-10-16. Lá só existe o Quadro, sem mexer na preferência salva pro desktop.
+  const isMobile = useIsMobile()
+  const modoVisao: ViewMode = isMobile ? "quadro" : viewMode
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [bulkMessage, setBulkMessage] = useState<string | null>(null)
@@ -61,10 +66,24 @@ export function GestaoView() {
   }, [tasksQuery.error, logout])
 
   const tasks = tasksQuery.data?.tasks ?? []
+  // A ordem por urgência depende da hora (um chamado passa a "vence logo"/"atrasado" com o
+  // tempo, sem o servidor mudar nada): reavalia a cada minuto, senão ele só subiria na coluna
+  // quando outro dado mudasse (achado do revisor, 2026-10-16).
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 60_000)
+    return () => clearInterval(id)
+  }, [])
   const lastVisible = useMemo(() => {
     const term = busca.trim().toLowerCase()
-    return term ? tasks.filter((t) => (t.name || "").toLowerCase().includes(term)) : tasks
-  }, [tasks, busca])
+    // A busca olha o título E o nome de quem abriu (achado de UX 2026-10-16: "achar o chamado
+    // da Fulana" só funcionava pelo filtro de Solicitante, a busca ignorava o nome).
+    const filtrados = term
+      ? tasks.filter((t) => (t.name || "").toLowerCase().includes(term) || (t.solicitante || "").toLowerCase().includes(term))
+      : tasks
+    return [...filtrados].sort(compararUrgencia)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `tick` só força a reordenação por tempo
+  }, [tasks, busca, tick])
 
   const updateMutation = useMutation({
     mutationFn: (body: UpdatePayload) => {
@@ -161,14 +180,14 @@ export function GestaoView() {
           lado, criando um scroll horizontal fantasma que não tinha nada a ver com
           a largura da tabela em si (o que pareceu ser "a tabela ainda não cabe"
           era na real esse truque de margem). */}
-      <div className="sticky top-16 z-10 flex flex-col gap-4 bg-background pt-2 pb-3">
+      <div className="flex flex-col gap-4 bg-background pt-2 pb-3 md:sticky md:top-16 md:z-10">
         <FiltersBar
           filtros={filtros}
           onChange={setFiltros}
           solicitantes={solicitantesQuery.data ?? []}
           busca={busca}
           onBuscaChange={setBusca}
-          mostrarStatus={viewMode === "tabela"}
+          mostrarStatus={modoVisao === "tabela"}
         />
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="whitespace-nowrap text-sm font-medium text-foreground">
@@ -187,7 +206,7 @@ export function GestaoView() {
             <span className="hidden sm:inline">Exportar CSV</span>
             <span className="sm:hidden">CSV</span>
           </Button>
-          <div className="flex gap-1 rounded-md border border-border p-1">
+          <div className="hidden gap-1 rounded-md border border-border p-1 md:flex">
             <Button size="sm" variant={viewMode === "quadro" ? "default" : "ghost"} onClick={() => changeViewMode("quadro")}>
               <LayoutGrid className="h-4 w-4" /> Quadro
             </Button>
@@ -202,22 +221,54 @@ export function GestaoView() {
       {tasksQuery.data?.truncated && (
         <Alert>
           <AlertDescription>
-            Alguns chamados podem não estar aparecendo — a busca na ClickUp bateu no teto de páginas. Refine os
-            filtros pra ver o conjunto completo.
+            Há mais chamados do que a tela consegue mostrar. Use os filtros para ver o restante.
           </AlertDescription>
         </Alert>
       )}
 
-      {tasksQuery.isError && (
-        <Alert variant="destructive">
-          <AlertDescription>{tasksQuery.error instanceof Error ? tasksQuery.error.message : "Erro ao carregar chamados."}</AlertDescription>
-        </Alert>
+      {/* Se a atualização automática falhar com a lista já carregada, a TI não pode continuar
+          olhando dados velhos sem saber (achado do revisor, 2026-10-16). */}
+      {tasksQuery.isError && !!tasksQuery.data && !isSessionError(tasksQuery.error) && (
+        <p role="status" className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          Sem conexão com o servidor. Os chamados abaixo podem estar desatualizados — tentando de novo automaticamente.
+        </p>
       )}
 
       {tasksQuery.isLoading ? (
         <p className="py-12 text-center text-sm text-muted-foreground">Carregando chamados…</p>
-      ) : viewMode === "quadro" ? (
+      ) : tasksQuery.isError && !tasksQuery.data ? (
+        // Sem dado nenhum e com erro: NÃO mostrar as 4 colunas "Nenhum chamado." (parecia que não
+        // havia chamados, quando na verdade não carregou — achado de UX 2026-10-16).
+        <div className="flex flex-col items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-10 text-center" role="alert">
+          <p className="font-medium text-destructive">Não foi possível carregar os chamados.</p>
+          <p className="text-sm text-muted-foreground">Verifique a internet e tente de novo. Os chamados continuam salvos.</p>
+          <Button variant="outline" onClick={() => tasksQuery.refetch()} disabled={tasksQuery.isFetching}>
+            <RefreshCw className="h-4 w-4" /> {tasksQuery.isFetching ? "Tentando…" : "Tentar de novo"}
+          </Button>
+        </div>
+      ) : busca.trim() && lastVisible.length === 0 ? (
+        <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border px-4 py-10 text-center">
+          <p className="font-medium text-foreground">Nenhum chamado com “{busca.trim()}”.</p>
+          <p className="text-sm text-muted-foreground">A busca olha o título e o nome de quem abriu o chamado.</p>
+          <Button variant="outline" onClick={() => setBusca("")}>Limpar busca</Button>
+        </div>
+      ) : modoVisao === "quadro" && tasks.length === 0 ? (
+        <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border px-4 py-10 text-center">
+          {Object.values(filtros).some(Boolean) ? (
+            <>
+              <p className="font-medium text-foreground">Nenhum chamado com esses filtros.</p>
+              <Button variant="outline" onClick={() => setFiltros({})}>Limpar filtros</Button>
+            </>
+          ) : (
+            <>
+              <p className="font-medium text-foreground">Ainda não há chamados.</p>
+              <p className="text-sm text-muted-foreground">Quando alguém abrir um chamado, ele aparece aqui.</p>
+            </>
+          )}
+        </div>
+      ) : modoVisao === "quadro" ? (
         <KanbanBoard
+          semLimiteEncerrados={!!busca.trim()}
           tasks={lastVisible}
           onOpenTask={setSelectedTask}
           onDropStatus={(taskId, status) => pedirStatus(taskId, { status })}

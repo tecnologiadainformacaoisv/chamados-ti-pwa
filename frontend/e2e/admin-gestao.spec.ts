@@ -26,7 +26,8 @@ test.describe("Gestão — Quadro (Kanban)", () => {
     await expect(page.getByRole("dialog").getByText("Notebook quebrado")).toBeVisible()
   })
 
-  test("alterna pra Tabela e volta pro Quadro", async ({ page }) => {
+  test("alterna pra Tabela e volta pro Quadro", async ({ page }, info) => {
+    test.skip(info.project.name === "mobile", "A Tabela não existe no celular (só o Quadro) — revisão de UX 2026-10-16")
     await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Chamado X" })] })
     await gotoAdminLoggedIn(page)
     await page.getByRole("button", { name: "Tabela" }).click()
@@ -37,6 +38,10 @@ test.describe("Gestão — Quadro (Kanban)", () => {
 })
 
 test.describe("Gestão — Tabela", () => {
+  test.beforeEach(async ({ page }, info) => {
+    void page
+    test.skip(info.project.name === "mobile", "A Tabela não existe no celular (só o Quadro) — revisão de UX 2026-10-16")
+  })
   test("edição inline de status muda o chamado de grupo", async ({ page }) => {
     await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Vai mudar de status", status: { status: "aberto" } })] })
     await gotoAdminLoggedIn(page)
@@ -117,7 +122,7 @@ test.describe("Gestão — Tabela", () => {
     await expect(page.getByText("Impressora sem tinta")).toBeVisible()
     await expect(page.getByText("Rede lenta")).toBeVisible()
 
-    await page.getByPlaceholder("Buscar por título...").fill("impressora")
+    await page.getByPlaceholder("Buscar por título ou solicitante...").fill("impressora")
     await expect(page.getByText("Impressora sem tinta")).toBeVisible()
     await expect(page.getByText("Rede lenta")).not.toBeVisible()
   })
@@ -178,7 +183,7 @@ test.describe("Gestão — Filtros", () => {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ total: 0, tasks: [], truncated: true }) })
     })
     await gotoAdminLoggedIn(page)
-    await expect(page.getByText(/bateu no teto de páginas/)).toBeVisible()
+    await expect(page.getByText(/Há mais chamados do que a tela consegue mostrar/)).toBeVisible()
   })
 })
 
@@ -273,7 +278,7 @@ test.describe("Gestão — Exportar CSV", () => {
     ]
     await mockAdminRoutes(page, { tasks })
     await gotoAdminLoggedIn(page)
-    await page.getByPlaceholder("Buscar por título...").fill("Impressora")
+    await page.getByPlaceholder("Buscar por título ou solicitante...").fill("Impressora")
     const [download] = await Promise.all([
       page.waitForEvent("download"),
       page.getByRole("button", { name: "Exportar CSV" }).click(),
@@ -297,23 +302,24 @@ test.describe("Gestão — alerta de SLA prestes a estourar", () => {
     await mockAdminRoutes(page, { tasks })
     await gotoAdminLoggedIn(page)
     await expect(page.getByText("Vence em 10 min")).toBeVisible()
-    await expect(page.getByText(/⏰ vence em \d+min/)).toHaveCount(1)
-    await expect(page.locator('[draggable="true"]', { hasText: "Vence em 10 min" })).toContainText("⏰ vence")
-    await expect(page.locator('[draggable="true"]', { hasText: "Vence em 2 horas" })).not.toContainText("⏰")
+    await expect(page.getByText(/vence em \d+min/)).toHaveCount(1)
+    await expect(page.locator('[draggable="true"]', { hasText: "Vence em 10 min" })).toContainText("vence em")
+    await expect(page.locator('[draggable="true"]', { hasText: "Vence em 2 horas" })).not.toContainText("vence em")
     // já vencido mostra o ⚠ vermelho de sempre, não o aviso de "vai vencer"
     await expect(page.locator('[draggable="true"]', { hasText: "Já venceu" })).toContainText("⚠")
-    await expect(page.locator('[draggable="true"]', { hasText: "Já venceu" })).not.toContainText("⏰")
+    await expect(page.locator('[draggable="true"]', { hasText: "Já venceu" })).not.toContainText("vence em")
     // pendente tem o SLA pausado: nunca alerta
-    await expect(page.locator('[draggable="true"]', { hasText: "Pendente quase vencendo" })).not.toContainText("⏰")
+    await expect(page.locator('[draggable="true"]', { hasText: "Pendente quase vencendo" })).not.toContainText("vence em")
   })
 
-  test("Tabela: mesmo critério do Quadro", async ({ page }) => {
+  test("Tabela: mesmo critério do Quadro", async ({ page }, info) => {
+    test.skip(info.project.name === "mobile", "A Tabela não existe no celular (só o Quadro) — revisão de UX 2026-10-16")
     await mockAdminRoutes(page, { tasks })
     await gotoAdminLoggedIn(page)
     await page.getByRole("button", { name: /Tabela/ }).click()
-    await expect(page.getByText(/⏰ vence em \d+min/)).toHaveCount(1)
-    await expect(page.getByRole("row", { name: /Vence em 10 min/ })).toContainText("⏰ vence")
-    await expect(page.getByRole("row", { name: /Vence em 2 horas/ })).not.toContainText("⏰")
+    await expect(page.getByText(/vence em \d+min/)).toHaveCount(1)
+    await expect(page.getByRole("row", { name: /Vence em 10 min/ })).toContainText("vence em")
+    await expect(page.getByRole("row", { name: /Vence em 2 horas/ })).not.toContainText("vence em")
   })
 })
 
@@ -336,5 +342,126 @@ test.describe("Gestão — data e hora de abertura visíveis", () => {
     await gotoAdminLoggedIn(page)
     await page.getByText("Impressora sem tinta").click()
     await expect(page.getByRole("dialog")).toContainText("Aberto em 14/10/2026 09:30")
+  })
+})
+
+// Revisão de UX do admin pra implantação (2026-10-16)
+test.describe("Gestão — ordem de atendimento, erro/vazio honestos e celular", () => {
+  const MIN = 60_000
+
+  test("Aberto vem ordenado: atrasado, vence logo, prioridade, sem prazo no fim", async ({ page }) => {
+    const tasks = [
+      makeTask({ id: "o1", name: "Normal sem prazo", status: { status: "aberto" }, priority: { priority: "normal" }, due_date: null }),
+      makeTask({ id: "o2", name: "Urgente em 2h", status: { status: "aberto" }, priority: { priority: "urgent" }, due_date: Date.now() + 120 * MIN }),
+      makeTask({ id: "o3", name: "Atrasado normal", status: { status: "aberto" }, priority: { priority: "normal" }, due_date: Date.now() - 10 * MIN }),
+      makeTask({ id: "o4", name: "Vence em 10 min", status: { status: "aberto" }, priority: { priority: "normal" }, due_date: Date.now() + 10 * MIN }),
+    ]
+    await mockAdminRoutes(page, { tasks })
+    await gotoAdminLoggedIn(page)
+    await expect(page.getByText("Atrasado normal")).toBeVisible()
+    const textos = await page.locator('[data-status="aberto"] [draggable="true"]').allTextContents()
+    const ordem = ["Atrasado normal", "Vence em 10 min", "Urgente em 2h", "Normal sem prazo"].map((n) => textos.findIndex((t) => t.includes(n)))
+    expect(ordem.every((i) => i >= 0)).toBe(true)
+    expect([...ordem].sort((a, b) => a - b)).toEqual(ordem)
+  })
+
+  test("com a rede fora, mostra erro com 'Tentar de novo' em vez de colunas vazias com 0", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "e1", name: "Qualquer" })] })
+    await page.route("**/admin/tasks?*", (route) => (route.request().method() === "GET" ? route.abort() : route.fallback()))
+    await page.route("**/admin/tasks", (route) => (route.request().method() === "GET" ? route.abort() : route.fallback()))
+    await gotoAdminLoggedIn(page)
+    await expect(page.getByText("Não foi possível carregar os chamados.")).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByRole("button", { name: "Tentar de novo" })).toBeVisible()
+    await expect(page.getByText("Nenhum chamado.")).toHaveCount(0)
+  })
+
+  test("busca sem resultado orienta e 'Limpar busca' volta a lista", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "b1", name: "Impressora quebrada" })] })
+    await gotoAdminLoggedIn(page)
+    await page.getByPlaceholder("Buscar por título ou solicitante...").fill("zzzz")
+    await expect(page.getByText("Nenhum chamado com “zzzz”.")).toBeVisible()
+    await page.getByRole("button", { name: "Limpar busca" }).click()
+    await expect(page.getByText("Impressora quebrada")).toBeVisible()
+  })
+
+  test("a busca também acha pelo nome de quem abriu o chamado", async ({ page }) => {
+    const tasks = [
+      makeTask({ id: "s1", name: "Notebook lento", solicitante: "Maria Souza" }),
+      makeTask({ id: "s2", name: "Mouse quebrado", solicitante: "João Lima" }),
+    ]
+    await mockAdminRoutes(page, { tasks })
+    await gotoAdminLoggedIn(page)
+    await page.getByPlaceholder("Buscar por título ou solicitante...").fill("maria")
+    await expect(page.getByText("Notebook lento")).toBeVisible()
+    await expect(page.getByText("Mouse quebrado")).toHaveCount(0)
+  })
+
+  test("coluna Encerrado mostra só 10 e 'Ver todos' abre o resto", async ({ page }) => {
+    const tasks = Array.from({ length: 12 }, (_, i) =>
+      makeTask({ id: "enc" + i, name: "Encerrado " + i, status: { status: "encerrado" }, date_closed: Date.now() - i * MIN })
+    )
+    await mockAdminRoutes(page, { tasks })
+    await gotoAdminLoggedIn(page)
+    const cards = page.locator('[data-status="encerrado"] [draggable="true"]')
+    await expect(cards).toHaveCount(10)
+    await page.getByRole("button", { name: "Ver todos os encerrados (12)" }).click()
+    await expect(cards).toHaveCount(12)
+  })
+
+  test("no celular só existe o Quadro (sem botão Tabela)", async ({ page }, info) => {
+    test.skip(info.project.name !== "mobile", "regra só do viewport de celular")
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "m1", name: "Chamado celular" })] })
+    await gotoAdminLoggedIn(page)
+    await expect(page.getByText("Chamado celular")).toBeVisible()
+    await expect(page.getByRole("button", { name: "Tabela" })).toHaveCount(0)
+    await expect(page.getByRole("button", { name: "Quadro" })).toHaveCount(0)
+  })
+
+  test("filtro escolhido mantém o rótulo: 'Solicitante: Fulano'", async ({ page }, info) => {
+    test.skip(info.project.name === "mobile", "o seletor é o mesmo; basta conferir no desktop")
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "f1", name: "Algum chamado" })] })
+    await gotoAdminLoggedIn(page)
+    await page.getByRole("combobox").filter({ hasText: "Operador: Todos" }).click()
+    await page.getByRole("option").nth(1).click()
+    await expect(page.getByRole("combobox").filter({ hasText: /^Operador:/ })).toBeVisible()
+  })
+
+  test("encerrados vêm do mais recente pro mais antigo, mesmo com prioridades diferentes", async ({ page }) => {
+    const tasks = [
+      makeTask({ id: "z1", name: "Fechado há 3h", status: { status: "encerrado" }, priority: { priority: "normal" }, date_closed: Date.now() - 180 * MIN }),
+      makeTask({ id: "z2", name: "Fechado agora", status: { status: "encerrado" }, priority: { priority: "high" }, date_closed: Date.now() - 1 * MIN }),
+      makeTask({ id: "z3", name: "Fechado há 1h", status: { status: "encerrado" }, priority: { priority: "urgent" }, date_closed: Date.now() - 60 * MIN }),
+    ]
+    await mockAdminRoutes(page, { tasks })
+    await gotoAdminLoggedIn(page)
+    await expect(page.getByText("Fechado há 3h")).toBeVisible()
+    const textos = await page.locator('[data-status="encerrado"] [draggable="true"]').allTextContents()
+    const idx = ["Fechado agora", "Fechado há 1h", "Fechado há 3h"].map((n) => textos.findIndex((t) => t.includes(n)))
+    expect(idx.every((i) => i >= 0)).toBe(true)
+    expect([...idx].sort((a, b) => a - b)).toEqual(idx)
+  })
+
+  test("com busca ativa, o chamado achado aparece mesmo sendo o 15º encerrado", async ({ page }) => {
+    const tasks = Array.from({ length: 15 }, (_, i) =>
+      makeTask({
+        id: "w" + i,
+        name: i === 14 ? "Chamado escondido" : "Outro " + i,
+        solicitante: i === 14 ? "Zuleide Rara" : "Fulano de Tal",
+        status: { status: "encerrado" },
+        date_closed: Date.now() - i * MIN,
+      })
+    )
+    await mockAdminRoutes(page, { tasks })
+    await gotoAdminLoggedIn(page)
+    await expect(page.getByText("Chamado escondido")).toHaveCount(0)
+    await page.getByPlaceholder("Buscar por título ou solicitante...").fill("zuleide")
+    await expect(page.getByText("Chamado escondido")).toBeVisible()
+  })
+
+  test("sistema sem nenhum chamado e sem filtro diz que ainda não há chamados", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [] })
+    await gotoAdminLoggedIn(page)
+    await expect(page.getByText("Ainda não há chamados.")).toBeVisible()
+    await expect(page.getByText("Nenhum chamado com esses filtros.")).toHaveCount(0)
   })
 })

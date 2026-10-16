@@ -42,7 +42,7 @@ export function AppHeader({ countAberto }: { countAberto?: number }) {
       </div>
       <div className="flex items-center gap-1">
         {!!countAberto && (
-          <div className="relative mr-1 flex h-8 w-8 items-center justify-center" title={`${countAberto} chamado(s) aberto(s) aguardando atendimento`}>
+          <div className="relative mr-1 flex h-8 w-8 items-center justify-center" title={`${countAberto} ${countAberto === 1 ? "chamado aberto aguardando" : "chamados abertos aguardando"} atendimento`}>
             <Bell className="h-5 w-5" />
             <Badge variant="destructive" className="absolute -top-1 -right-1 h-4 min-w-4 justify-center bg-destructive px-1 text-[0.65rem] text-white">
               {countAberto > 99 ? "99+" : countAberto}

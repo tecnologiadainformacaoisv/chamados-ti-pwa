@@ -7,6 +7,10 @@ import { makeTask } from "./helpers/mock-data"
 // push-worker.js). Só existe no grupo "Aberto" de propósito — ver comentário no
 // próprio handler pro porquê (todo chamado sempre nasce aberto).
 test.describe("Adicionar Chamado inline (Tabela)", () => {
+  test.beforeEach(async ({ page }, info) => {
+    void page
+    test.skip(info.project.name === "mobile", "A Tabela não existe no celular (só o Quadro) — revisão de UX 2026-10-16")
+  })
   async function irParaTabela(page: import("@playwright/test").Page) {
     await page.getByRole("button", { name: "Tabela" }).click()
   }

@@ -85,6 +85,27 @@ export function DashboardView() {
   const data = metricsQuery.data
   if (!data) return null
 
+  // Sem nenhum chamado no período (caso real nos primeiros dias, já que as métricas só contam
+  // desde o início da operação): em vez de 8 cartões "0" e 4 blocos "nenhum chamado", uma
+  // mensagem só, que explica (achado de UX 2026-10-16).
+  if (data.total === 0) {
+    return (
+      <div className="flex flex-col gap-6">
+        {periodoBar}
+        {data.inicioOperacao != null && (
+          <p className="-mt-3 text-xs text-muted-foreground">
+            Métricas contadas desde {new Date(data.inicioOperacao).toLocaleDateString("pt-BR")} (início da operação) — chamados anteriores
+            ficam só no histórico da Gestão.
+          </p>
+        )}
+        <div className="rounded-lg border border-dashed border-border px-4 py-12 text-center">
+          <p className="font-medium text-foreground">Ainda sem chamados neste período.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Os números aparecem conforme os chamados forem abertos e encerrados.</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col gap-6">
       {periodoBar}
@@ -97,7 +118,7 @@ export function DashboardView() {
       {data.truncated && (
         <Alert>
           <AlertDescription>
-            Alguns chamados podem não estar entrando nesses números — a busca na ClickUp bateu no teto de páginas.
+            Há mais chamados do que a tela consegue mostrar, então estes números podem estar incompletos.
           </AlertDescription>
         </Alert>
       )}
