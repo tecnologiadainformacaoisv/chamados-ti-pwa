@@ -325,6 +325,14 @@ export function venceLogo(task: Task, limiteMin = SLA_ALERTA_MIN): boolean {
   return falta > 0 && falta <= limiteMin * 60_000
 }
 
+// Data completa (com ano), pra onde o dia/mês sozinho confunde — ex.: chamados antigos
+// importados. fmtDate (abaixo) omite o ano de propósito, pra caber em card/tabela.
+export function fmtDateFull(value: string | number | null | undefined): string {
+  if (!value) return "—"
+  const d = new Date(Number(value))
+  return d.toLocaleDateString("pt-BR") + " " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+}
+
 export function fmtDate(value: string | number | null | undefined): string {
   if (!value) return "—"
   const d = new Date(Number(value))

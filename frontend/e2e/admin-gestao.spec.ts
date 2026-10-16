@@ -316,3 +316,25 @@ test.describe("Gestão — alerta de SLA prestes a estourar", () => {
     await expect(page.getByRole("row", { name: /Vence em 2 horas/ })).not.toContainText("⏰")
   })
 })
+
+test.describe("Gestão — data e hora de abertura visíveis", () => {
+  // Chamados vindos da ClickUp (importados) não têm prazo; o card só mostrava o prazo,
+  // então parecia não ter data nenhuma (2026-10-16).
+  const criado = new Date(2026, 9, 14, 9, 30).getTime()
+  const tasks = [makeTask({ id: "dt1", name: "Impressora sem tinta", status: { status: "aberto" }, date_created: criado, due_date: null })]
+
+  test("o card do Quadro mostra quando foi aberto, mesmo sem prazo", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks })
+    await gotoAdminLoggedIn(page)
+    const card = page.locator('[draggable="true"]', { hasText: "Impressora sem tinta" })
+    await expect(card).toContainText("Aberto em 14/10 09:30")
+    await expect(card).toContainText("Prazo: sem prazo")
+  })
+
+  test("o modal Gerenciar mostra a data completa de abertura, com ano", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks })
+    await gotoAdminLoggedIn(page)
+    await page.getByText("Impressora sem tinta").click()
+    await expect(page.getByRole("dialog")).toContainText("Aberto em 14/10/2026 09:30")
+  })
+})

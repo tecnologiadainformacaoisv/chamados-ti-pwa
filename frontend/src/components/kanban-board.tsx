@@ -11,7 +11,7 @@ import {
   PRIORITY_MAP,
   optionName,
 } from "@/lib/constants"
-import { getCF, isAtrasado, venceLogo, fmtDate, type Task } from "@/lib/api"
+import { getCF, isAtrasado, venceLogo, fmtDate, fmtDateFull, type Task } from "@/lib/api"
 import { timeUntil } from "@/lib/ticket-helpers"
 
 const KANBAN_CARD_LIMIT = 100 // mesmo teto por coluna que admin.js já usa
@@ -154,8 +154,9 @@ function KanbanCard({
         <span>{setorNome}</span>
         <span>{solNome}</span>
         <span>{operadores}</span>
+        <span title={fmtDateFull(task.date_created)}>Aberto em {fmtDate(task.date_created)}</span>
         <span className={atrasado ? "font-medium text-destructive" : venceEmBreve ? "font-medium text-amber-600" : ""}>
-          {task.due_date ? fmtDate(task.due_date) : "—"}
+          Prazo: {task.due_date ? fmtDate(task.due_date) : "sem prazo"}
           {atrasado ? " ⚠" : ""}
           {venceEmBreve ? ` ⏰ vence ${timeUntil(task.due_date)}` : ""}
         </span>

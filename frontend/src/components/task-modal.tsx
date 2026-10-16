@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { OPERADORES, SOLUCAO_FIELD_ID, STATUS_MAP, STATUS_ORDER } from "@/lib/constants"
-import { getCF, fetchEventos, postEvento, deleteTask, isSessionError, fmtDate, type ChamadoEvento, type Task, type UpdatePayload } from "@/lib/api"
+import { getCF, fetchEventos, postEvento, deleteTask, isSessionError, fmtDate, fmtDateFull, type ChamadoEvento, type Task, type UpdatePayload } from "@/lib/api"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 
 const SEM_ATRIBUICAO = "__sem__"
@@ -150,6 +150,11 @@ export function TaskModal({
       <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{task.name || "(sem título)"}</DialogTitle>
+          <p className="text-xs text-muted-foreground">
+            Aberto em {fmtDateFull(task.date_created)}
+            {task.date_closed ? ` · Encerrado em ${fmtDateFull(task.date_closed)}` : ""}
+            {task.due_date ? ` · Prazo ${fmtDateFull(task.due_date)}` : ""}
+          </p>
         </DialogHeader>
 
         <div className="min-w-0 flex-1 overflow-y-auto pr-1">
