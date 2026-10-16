@@ -102,7 +102,15 @@ const DEFAULT_TIME_ESTIMATE_MS_BY_PRIORITY = { 1: DEFAULT_TIME_ESTIMATE_MS.urgen
 
 // Só o app publicado pode chamar o Worker via navegador — '*' permitia qualquer site
 // embutir uma chamada pro proxy usando o navegador de quem estivesse com a aba aberta.
-const ALLOWED_ORIGIN = 'https://tecnologiadainformacaoisv.github.io';
+// Duas origens válidas durante a migração pro domínio próprio (2026-10-16): o GitHub
+// Pages original e o subdomínio do instituto. A origem da requisição é refletida
+// (withCors) só se estiver nesta lista — nunca '*'. Pode remover a do github.io
+// quando o domínio novo for o único em uso.
+const ALLOWED_ORIGINS = [
+  'https://tecnologiadainformacaoisv.github.io',
+  'https://chamados.institutosaovicente.com.br',
+];
+const ALLOWED_ORIGIN = ALLOWED_ORIGINS[0]; // padrão quando não há Origin (ex.: curl, testes)
 const CORS = {
   'Access-Control-Allow-Origin':  ALLOWED_ORIGIN,
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -130,8 +138,26 @@ const REGISTER_EXTERNO_WINDOW_SECONDS = 60 * 60;
 // verdade em toda rota — o header continua existindo com a mesma função de sempre
 // (só libera quem pode falar com o Worker), só não é mais "proxy" de nada externo.
 // =====================================================================
+// Reflete a origem do chamador no Access-Control-Allow-Origin quando ela está na lista
+// (o header é fixo em CORS/ALLOWED_ORIGIN pra rota sem Origin). Vary: Origin evita que
+// cache intermediário sirva a resposta de uma origem pra outra.
+function withCors(response, request) {
+  const origin = request.headers.get('Origin');
+  if (!origin || !ALLOWED_ORIGINS.includes(origin) || origin === ALLOWED_ORIGIN) return response;
+  const headers = new Headers(response.headers);
+  headers.set('Access-Control-Allow-Origin', origin);
+  headers.append('Vary', 'Origin');
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 export default {
   async fetch(request, env) {
+    return withCors(await routeRequest(request, env), request);
+  },
+};
+
+async function routeRequest(request, env) {
+  {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS });
     }
@@ -215,7 +241,7 @@ export default {
 
     return new Response('Not Found', { status: 404 });
   }
-};
+}
 
 // =====================================================================
 // AUTENTICAÇÃO DE APP (/api/*, /subscribe) — X-App-Secret

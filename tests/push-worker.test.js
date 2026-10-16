@@ -2007,6 +2007,21 @@ async function test(name, fn) {
     const res = await worker.fetch(req('OPTIONS', '/api/solicitantes'), env);
     assert.strictEqual(res.headers.get('Access-Control-Allow-Origin'), 'https://tecnologiadainformacaoisv.github.io');
   });
+  await test('CORS reflete o domínio próprio do instituto (preflight e resposta normal)', async () => {
+    const origin = 'https://chamados.institutosaovicente.com.br';
+    const pre = await worker.fetch(req('OPTIONS', '/api/solicitantes', { headers: { Origin: origin } }), env);
+    assert.strictEqual(pre.headers.get('Access-Control-Allow-Origin'), origin);
+    assert.ok((pre.headers.get('Vary') || '').includes('Origin'));
+    const res = await worker.fetch(req('GET', '/api/solicitantes', { headers: { ...SECRET_HEADERS, Origin: origin } }), env);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.headers.get('Access-Control-Allow-Origin'), origin);
+  });
+  await test('CORS de origem desconhecida cai na origem padrão, nunca é refletida nem vira "*"', async () => {
+    const res = await worker.fetch(req('OPTIONS', '/api/solicitantes', { headers: { Origin: 'https://evil.example.com' } }), env);
+    assert.strictEqual(res.headers.get('Access-Control-Allow-Origin'), 'https://tecnologiadainformacaoisv.github.io');
+    const lookalike = await worker.fetch(req('OPTIONS', '/api/solicitantes', { headers: { Origin: 'https://chamados.institutosaovicente.com.br.evil.com' } }), env);
+    assert.strictEqual(lookalike.headers.get('Access-Control-Allow-Origin'), 'https://tecnologiadainformacaoisv.github.io');
+  });
   await test('logout invalida a sessão', async () => {
     await worker.fetch(req('POST', '/auth/logout', { headers: { 'X-Session-Token': token } }), env);
     const res = await worker.fetch(req('GET', '/api/my-tasks', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token } }), env);
