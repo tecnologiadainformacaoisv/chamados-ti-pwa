@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { TIPO_FIELD_ID, SETOR_FIELD_ID, TIPOS, SETORES, PRIORITY_MAP, optionName } from "@/lib/constants"
+import { TIPO_FIELD_ID, SETOR_FIELD_ID, TIPOS, SETORES, PRIORITY_MAP, OPERADORES, optionName } from "@/lib/constants"
 import { getCF, isSessionError, postTaskUpdate, fmtDate, type Task } from "@/lib/api"
 import { timeUntil } from "@/lib/ticket-helpers"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
@@ -36,6 +36,10 @@ export function NovoChamadoAlert({ fila, onFechar }: { fila: Task[]; onFechar: (
   // Prioridade e prazo é o que decide se a TI larga o que está fazendo (achado de UX 2026-10-16)
   const prioridade = task.priority?.priority ? PRIORITY_MAP[String(task.priority.priority).toLowerCase()] : null
   const falta = task.due_date ? timeUntil(task.due_date) : null
+  // "Aceitar" só muda o status: o atendente continua sendo quem o solicitante escolheu ao abrir
+  // ("Quem vai atender?"). Regra do usuário (2026-10-16): mesmo que só uma pessoa aceite, o chamado
+  // pode ser do outro operador — por isso a caixa mostra de quem ele é.
+  const atendente = (task.assignees ?? []).map((a) => OPERADORES[String(a.id)] || a.username || "#" + a.id).join(", ")
 
   return (
     <Dialog open={!!task} onOpenChange={(open) => !open && onFechar(task.id)}>
@@ -60,6 +64,9 @@ export function NovoChamadoAlert({ fila, onFechar }: { fila: Task[]; onFechar: (
             <span className="max-w-full truncate rounded-full border border-border px-2 py-0.5">{task.solicitante || "—"}</span>
             <span className="rounded-full border border-border px-2 py-0.5">{tipo}</span>
             <span className="rounded-full border border-border px-2 py-0.5">{setor}</span>
+            <span className="rounded-full border border-border bg-muted px-2 py-0.5 font-medium text-foreground">
+              Atendente: {atendente || "sem atribuição"}
+            </span>
             {prioridade && (
               <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 font-medium" style={{ color: prioridade.color }}>
                 <span className="h-1.5 w-1.5 rounded-full" style={{ background: prioridade.color }} />

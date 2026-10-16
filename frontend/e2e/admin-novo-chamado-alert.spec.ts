@@ -52,6 +52,36 @@ test.describe("Alerta de chamado novo", () => {
     await expect(page.getByText("🔔 Chamado novo")).not.toBeVisible()
   })
 
+  // Regra do usuário (2026-10-16): aceitar NÃO muda o atendente. O chamado continua sendo de quem
+  // o solicitante escolheu ("Quem vai atender?"), mesmo que seja outra pessoa que clique em Aceitar.
+  test("chamado do Henrique mostra 'Atendente: Henrique' e aceitar não troca o atendente", async ({ page }) => {
+    let call = 0
+    await mockAdminRoutes(page)
+    await page.route(/\/admin\/tasks\?.*status=aberto/, (route) => {
+      if (route.request().method() === "OPTIONS") return route.fallback()
+      call++
+      const tasks = call === 1 ? [] : [makeTask({ id: "t-hen", name: "Chamado do Henrique", assignees: [{ id: 200498355, username: "Henrique" }] })]
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ total: tasks.length, tasks, truncated: false }) })
+    })
+    await gotoAdminLoggedIn(page)
+    await expect(page.locator('[title="Atualizar"]')).toBeVisible()
+    await page.locator('[title="Atualizar"]').click()
+
+    await expect(page.getByText("🔔 Chamado novo")).toBeVisible()
+    await expect(page.getByText("Atendente: Henrique")).toBeVisible()
+
+    let accepted: Record<string, unknown> | null = null
+    await page.route(/\/admin\/tasks\/t-hen$/, (route) => {
+      if (route.request().method() === "OPTIONS") return route.fallback()
+      if (route.request().method() !== "POST") return route.fallback()
+      accepted = route.request().postDataJSON()
+      return route.fulfill({ status: 200, contentType: "application/json", body: "{}" })
+    })
+    await page.getByRole("button", { name: "Aceitar chamado" }).click()
+    await expect.poll(() => accepted).toEqual({ status: "em atendimento" })
+    expect(accepted).not.toHaveProperty("assigneeId")
+  })
+
   test("'Ver depois' fecha sem aceitar", async ({ page }) => {
     let call = 0
     await mockAdminRoutes(page)
