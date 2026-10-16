@@ -206,6 +206,13 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 
 > Última atualização: 2026-10-16
 
+- **📏 Marco de início da operação + CSV + alerta de SLA (2026-10-16, v1.17.1/v1.18.0)** — pedido do usuário depois de a implantação "pra valer" começar: "não usaremos estes dados em diante, não faremos o retroativo".
+  - **Marco (`OPERACAO_INICIO_MS`, push-worker.js, 16/10/2026 00:00 Fortaleza):** `GET /admin/metrics` aplica o marco como piso em `desde` — chamados criados antes dele **não entram em nenhuma métrica** (nem se pedirem um período anterior), mas continuam no banco e na Gestão como histórico (nada foi apagado). Motivo: dos 459 chamados, só 1 era de setembro e 41 de agosto — o resto veio da fase de testes/ClickUp, e 66% apareciam como "atrasado" por causa disso. A resposta traz `inicioOperacao` e o Dashboard avisa "Métricas contadas desde 16/10/2026"; o atalho "Tudo" virou "Desde o início". Pra mudar o marco, trocar a constante.
+  - **Exportar CSV** (`lib/export-csv.ts`, botão na barra da Gestão): exporta o que está na tela (filtros+busca), 100% cliente. BOM UTF-8, separador `;` (Excel pt-BR), e proteção contra formula injection (célula começando com `= + - @` ganha `'`). No mobile o botão vira "CSV".
+  - **Alerta de SLA prestes a estourar** (`venceLogo`, `SLA_ALERTA_MIN = 15` em lib/api.ts): Quadro e Tabela mostram borda/texto âmbar "⏰ vence em Xmin" quando um chamado **aberto ou em atendimento** está a ≤15 min do prazo. Pendente nunca alerta (SLA pausado); já vencido continua no ⚠ vermelho de sempre. Só visual no painel — **não há push de SLA** (exigiria Cron Trigger no Worker, não feito).
+  - Nome do operador no "tempo médio" já era resolvido pelo painel (`OPERADORES`), não precisou de ajuste.
+  - 304 testes de backend (53+201+43+7), 229 E2E (+5 skipped).
+
 - **🌐 Domínio próprio: https://chamados.institutosaovicente.com.br (2026-10-16, v1.17.0)** — pedido do usuário ("agora é implantação pra valer e com domínio fica mais profissional"). Seguiu o guia `../DOMINIO-GITHUB-PAGES.md`, mas **trocando no mesmo repositório** (opção 3 do guia, escolha explícita do usuário — só a TI e algumas máquinas de teste usavam o endereço antigo).
   - **DNS (HostGator, feito pelo usuário):** `CNAME chamados -> tecnologiadainformacaoisv.github.io`. MX do Titan conferido intacto antes e depois.
   - **Ordem seguida (importa):** (1) Worker passou a aceitar as duas origens no CORS e foi publicado ANTES da troca (v1.16.0) — sem isso o site no domínio novo não falaria com a API; (2) só depois o frontend com `base: '/'` + `frontend/public/CNAME` (v1.17.0) e `gh api -X PUT .../pages -f cname=...`; (3) certificado `approved` em ~1 min, `https_enforced=true`.
