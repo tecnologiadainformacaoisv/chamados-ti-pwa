@@ -206,7 +206,6 @@ async function routeRequest(request, env) {
       if (pathname === '/admin/migrate-schema-solicitantes-email') return handleAdminMigrateSchemaSolicitantesEmail(request, env);
       if (pathname === '/admin/migrate-schema-solicitantes-origem') return handleAdminMigrateSchemaSolicitantesOrigem(request, env);
       if (pathname === '/admin/migrate-schema-chamados-nota') return handleAdminMigrateSchemaChamadosNota(request, env);
-      if (pathname === '/admin/import-chamados') return handleAdminImportChamados(request, env);
       if (pathname === '/admin/solicitantes') return handleAdminCreateSolicitante(request, env);
       if (pathname === '/admin/solicitantes/emails/bulk') return handleAdminBulkSetSolicitanteEmails(request, env);
       const solAtivoMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/ativo$/);
@@ -2331,62 +2330,6 @@ async function handleAdminMigrateSchemaChamadosNota(request, env) {
     }
   }
   return jsonRes({ ok: true });
-}
-
-// =====================================================================
-// POST /admin/import-chamados — importação ÚNICA de chamados que ficaram só na ClickUp
-// (2026-10-16). Depois do corte da migração (M5, 13/08) alguns chamados continuaram
-// entrando na ClickUp por fora do app (formulário/automação dela) e nunca chegaram ao D1;
-// com a assinatura da ClickUp vencida, o usuário decidiu centralizar tudo aqui. Mantém o
-// id original da ClickUp, as datas e o operador. Idempotente (INSERT OR IGNORE — rodar de
-// novo não duplica) e em lotes de no máximo 20 (teto de subrequests por invocação, ver
-// CLAUDE.md M2). Aceita {dryRun:true} pra só validar. Rota de uso único: remover depois
-// de rodar, como as rotas migrate-* de antes.
-// Body: { chamados: [{ id, name, description, status, priority(1|2|3), tipo, setor,
-//   solicitante, email, solucao, assignee_ids[], due_date, date_created, date_closed,
-//   start_date, date_updated }], dryRun? }
-// =====================================================================
-const IMPORT_CHAMADOS_MAX = 20;
-async function handleAdminImportChamados(request, env) {
-  if (!(await isAdmin(request, env))) return unauthorized();
-  let body;
-  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
-  const lista = body && body.chamados;
-  if (!Array.isArray(lista) || lista.length === 0) return jsonRes({ error: 'chamados[] obrigatório' }, 400);
-  if (lista.length > IMPORT_CHAMADOS_MAX) return jsonRes({ error: `no máximo ${IMPORT_CHAMADOS_MAX} chamados por chamada` }, 400);
-
-  const numOuNull = (v) => (v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
-  const resultado = { imported: 0, skipped: 0, errors: [] };
-  for (const c of lista) {
-    try {
-      if (!c || typeof c.id !== 'string' || !c.id || typeof c.name !== 'string' || !c.name.trim()) throw new Error('id/name inválidos');
-      if (!D1_VALID_STATUSES.includes(c.status)) throw new Error(`status inválido: ${c.status}`);
-      const priority = [1, 2, 3].includes(Number(c.priority)) ? Number(c.priority) : 3;
-      const dateCreated = numOuNull(c.date_created);
-      if (dateCreated === null) throw new Error('date_created obrigatório');
-      const assigneeIds = (Array.isArray(c.assignee_ids) ? c.assignee_ids : []).map(Number).filter(Number.isFinite);
-      if (body.dryRun) { resultado.imported++; continue; }
-      const now = Date.now();
-      const existe = await env.CHAMADOS_DB.prepare('SELECT 1 FROM chamados WHERE id = ?').bind(c.id).first();
-      if (existe) { resultado.skipped++; continue; }
-      const main = env.CHAMADOS_DB.prepare(
-        `INSERT OR IGNORE INTO chamados
-          (id, name, description, status, priority, tipo, setor, solicitante, email, solucao,
-           assignee_id, due_date, date_created, date_closed, start_date, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        c.id, c.name.trim(), c.description || null, c.status, priority,
-        numOuNull(c.tipo), numOuNull(c.setor), typeof c.solicitante === 'string' ? c.solicitante : '',
-        c.email || null, c.solucao || null, assigneeIds[0] ?? null, numOuNull(c.due_date), dateCreated,
-        numOuNull(c.date_closed), numOuNull(c.start_date), now, numOuNull(c.date_updated) ?? now
-      );
-      await env.CHAMADOS_DB.batch([main, ...buildSetAssigneesStatements(env, c.id, assigneeIds)]);
-      resultado.imported++;
-    } catch (err) {
-      resultado.errors.push({ id: c && c.id, error: err.message });
-    }
-  }
-  return jsonRes({ ok: resultado.errors.length === 0, dryRun: !!body.dryRun, ...resultado });
 }
 
 // =====================================================================
