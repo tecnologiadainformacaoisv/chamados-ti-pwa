@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { MessageCircle, Paperclip, Star } from "lucide-react"
 import { getCF, fmtDate, type Attachment, type Task } from "@/lib/api"
 import { isOverdue, overdueFor, slaProgressInfo, timeAgo, timeUntil, waLinkForTask } from "@/lib/ticket-helpers"
-import { OPERADORES, PRIORITY, SETORES, SETOR_FIELD_ID, SOLUCAO_FIELD_ID, STATUS_MAP, TIPOS, TIPO_FIELD_ID, optionName, type StatusKey } from "@/lib/constants"
+import { OPERADORES, PRIORITY_MAP, SETORES, SETOR_FIELD_ID, SOLUCAO_FIELD_ID, STATUS_MAP, TIPOS, TIPO_FIELD_ID, optionName, type StatusKey } from "@/lib/constants"
 import { useSessionAuth } from "@/hooks/use-session-auth"
 import { fetchTaskDetail, submitNota } from "@/lib/app-api"
 import { AnexoModal } from "@/components/anexo-modal"
@@ -37,12 +37,17 @@ function NotaChamado({ task }: { task: Task }) {
             aria-label={`Avaliar com ${n} estrela${n > 1 ? "s" : ""}`}
             aria-pressed={n === notaAtual}
             title={`${n} estrela${n > 1 ? "s" : ""}`}
-            className="rounded p-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50"
+            className="rounded p-2.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50"
           >
-            <Star className="h-4 w-4" fill={n <= notaAtual ? "#f59e0b" : "none"} stroke={n <= notaAtual ? "#f59e0b" : "currentColor"} />
+            <Star className="h-6 w-6" fill={n <= notaAtual ? "#f59e0b" : "none"} stroke={n <= notaAtual ? "#f59e0b" : "currentColor"} />
           </button>
         ))}
       </div>
+      {/* contêiner sempre montado, só o texto troca — região viva inserida depois nem
+          sempre é anunciada por leitor de tela */}
+      <span role="status" className="text-muted-foreground">
+        {mutation.isSuccess && !mutation.isPending ? "Obrigado pela avaliação!" : ""}
+      </span>
       {mutation.isError && (
         <span role="alert" className="text-destructive">
           Não foi possível salvar sua avaliação. Tente de novo.
@@ -71,9 +76,11 @@ export function TicketCard({ task }: { task: Task }) {
   const statusKey = (task.status?.status as StatusKey) ?? "aberto"
   const info = STATUS_MAP[statusKey] ?? STATUS_MAP.aberto
   const prioId = task.priority?.priority
-  // task.priority aqui vem da ClickUp como nome (urgent/high/normal) em vez do número —
-  // mapeia pro mesmo PRIORITY por label, já que app-api usa PRIORITY indexado por id numérico.
-  const prioEntry = Object.values(PRIORITY).find((p) => p.label.toLowerCase() === String(prioId).toLowerCase())
+  // task.priority.priority vem do Worker como nome em inglês (urgent/high/normal), igual à
+  // ClickUp de antes. Achado de UX 2026-10-16: comparar com o label em português
+  // ("Urgente"/"Alta") nunca casava — só "normal" aparecia, e o solicitante de um chamado
+  // urgente não via a prioridade. PRIORITY_MAP já é indexado por esse nome.
+  const prioEntry = PRIORITY_MAP[String(prioId).toLowerCase()]
   const overdue = isOverdue(task)
   const oText = overdueFor(task)
   const sla = slaProgressInfo(task)
@@ -101,7 +108,7 @@ export function TicketCard({ task }: { task: Task }) {
       )}
 
       <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
-        <span>Atualizado {timeAgo(task.date_created)}</span>
+        <span>Atualizado {timeAgo(task.date_updated ?? task.date_created)}</span>
         <span className="inline-flex items-center gap-1.5 font-medium" style={{ color: info.dot }}>
           <span className="h-1.5 w-1.5 rounded-full" style={{ background: info.dot }} />
           {info.label}
@@ -163,7 +170,7 @@ export function TicketCard({ task }: { task: Task }) {
         href={waLinkForTask(task)}
         target="_blank"
         rel="noreferrer"
-        className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-[#22c55e] hover:underline"
+        className="mt-1 inline-flex min-h-11 items-center gap-1.5 text-sm font-medium text-[#16a34a] hover:underline"
       >
         <MessageCircle className="h-4 w-4" /> Falar no WhatsApp
       </a>

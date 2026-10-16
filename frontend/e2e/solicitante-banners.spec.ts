@@ -30,7 +30,7 @@ test.describe("Banners do app do solicitante", () => {
     // o listener de beforeinstallprompt só existe depois que a shell (pós-boot) monta —
     // esperar a aba "Novo Chamado" aparecer evita perder o evento numa corrida com o boot()
     await expect(page.getByRole("tab", { name: "Novo Chamado" })).toBeVisible()
-    await expect(page.getByText("Instalar app")).not.toBeVisible()
+    await expect(page.getByText("Instalar o app")).not.toBeVisible()
 
     await page.evaluate(() => {
       class FakeBIP extends Event {
@@ -40,9 +40,9 @@ test.describe("Banners do app do solicitante", () => {
       }
       window.dispatchEvent(new FakeBIP())
     })
-    await expect(page.getByText("Instalar app")).toBeVisible()
+    await expect(page.getByText("Instalar o app")).toBeVisible()
     await page.getByRole("button", { name: "Instalar" }).click()
-    await expect(page.getByText("Instalar app")).not.toBeVisible()
+    await expect(page.getByText("Instalar o app")).not.toBeVisible()
   })
 
   test("banner de instalar some ao clicar 'Agora não' sem instalar", async ({ page }) => {
@@ -58,9 +58,33 @@ test.describe("Banners do app do solicitante", () => {
       }
       window.dispatchEvent(new FakeBIP())
     })
-    await expect(page.getByText("Instalar app")).toBeVisible()
+    await expect(page.getByText("Instalar o app")).toBeVisible()
     await page.getByRole("button", { name: "Agora não" }).click()
-    await expect(page.getByText("Instalar app")).not.toBeVisible()
+    await expect(page.getByText("Instalar o app")).not.toBeVisible()
+  })
+
+  // Achado de UX 2026-10-16: no celular o banner (fixo no rodapé) cobria o botão
+  // "Abrir Chamado". Agora a página ganha um espaço com a altura real do banner.
+  test("com o banner de instalar visível, o botão Abrir Chamado continua alcançável (não fica por baixo)", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 640 })
+    await mockSolicitanteRoutes(page)
+    await gotoSolicitanteLoggedIn(page)
+    await expect(page.getByRole("tab", { name: "Novo Chamado" })).toBeVisible()
+    await page.evaluate(() => {
+      class FakeBIP extends Event {
+        constructor() { super("beforeinstallprompt", { cancelable: true }) }
+        prompt() { return Promise.resolve() }
+        get userChoice() { return Promise.resolve({ outcome: "dismissed" }) }
+      }
+      window.dispatchEvent(new FakeBIP())
+    })
+    await expect(page.getByText("Instalar o app")).toBeVisible()
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+    const botao = await page.getByRole("button", { name: "Abrir Chamado" }).boundingBox()
+    const banner = await page.getByText("Instalar o app").locator("xpath=ancestor::div[contains(@class,'fixed')][1]").boundingBox()
+    expect(botao).not.toBeNull()
+    expect(banner).not.toBeNull()
+    expect(botao!.y + botao!.height).toBeLessThanOrEqual(banner!.y + 1)
   })
 })
 

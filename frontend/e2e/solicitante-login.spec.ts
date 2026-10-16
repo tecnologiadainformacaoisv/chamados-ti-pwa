@@ -5,11 +5,100 @@ import { mockSolicitanteRoutes, gotoSolicitanteLoggedIn } from "./helpers/fixtur
 // chamados de outros usuários") — substitui o <Select> de escolher o próprio nome
 // numa lista. `#setup-email` (Input) no lugar de `[data-slot="select-trigger"]`.
 test.describe("Login/cadastro do solicitante", () => {
+  // Validação em português dentro da página (revisão de UX, 2026-10-16): o formulário usa
+  // noValidate, então o balão nativo do navegador (em inglês, some sozinho) não aparece.
   test("mostra erro se tentar entrar sem e-mail/senha", async ({ page }) => {
     await mockSolicitanteRoutes(page)
     await page.goto("/")
     await page.getByRole("button", { name: "Entrar" }).click()
-    await expect(page.getByText("Digite seu e-mail institucional para continuar")).toBeVisible()
+    await expect(page.getByText("Digite seu e-mail completo, por exemplo nome@institutosaovicente.com.br.")).toBeVisible()
+  })
+
+  test("e-mail incompleto e senha vazia mostram a orientação certa e levam o foco ao campo, sem chamar o servidor", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    let chamouLogin = false
+    await page.route("**/auth/login", (route) => { chamouLogin = true; return route.fallback() })
+    await page.goto("/")
+
+    await page.locator("#setup-email").fill("fulano@")
+    await page.locator("#setup-password").fill("senha12345")
+    await page.getByRole("button", { name: "Entrar" }).click()
+    await expect(page.getByText("Digite seu e-mail completo")).toBeVisible()
+    await expect(page.locator("#setup-email")).toBeFocused()
+
+    await page.locator("#setup-email").fill("fulano@institutosaovicente.com.br")
+    await page.locator("#setup-password").fill("")
+    await page.getByRole("button", { name: "Entrar" }).click()
+    await expect(page.getByText("Digite sua senha.")).toBeVisible()
+    await expect(page.locator("#setup-password")).toBeFocused()
+    expect(chamouLogin).toBe(false)
+  })
+
+  // O mínimo de 8 caracteres vale pra CRIAR a senha (cadastro externo). No login normal
+  // só se exige senha preenchida — quem já tem conta com senha antiga curta não fica
+  // trancado fora; no primeiro acesso o servidor devolve a mensagem do mínimo.
+  test("cadastro externo: senha com menos de 8 caracteres mostra a orientação, sem chamar o servidor", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    let chamouCadastro = false
+    await page.route("**/auth/register-externo", (route) => { chamouCadastro = true; return route.fallback() })
+    await page.goto("/")
+    await page.getByRole("button", { name: "Não tenho e-mail institucional (visitante, parceiro ou fornecedor)" }).click()
+    await page.locator("#setup-ext-name").fill("Maria da Silva")
+    await page.locator("#setup-ext-email").fill("maria@email.com")
+    await page.locator("#setup-ext-password").fill("curta")
+    await page.getByRole("button", { name: "Cadastrar e entrar" }).click()
+    await expect(page.getByText("A senha precisa ter pelo menos 8 caracteres.")).toBeVisible()
+    expect(chamouCadastro).toBe(false)
+  })
+
+  test("login: senha antiga mais curta que 8 caracteres ainda chega ao servidor (não tranca quem já tem conta)", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    let senhaEnviada = ""
+    await page.route("**/auth/login", (route) => {
+      senhaEnviada = (route.request().postDataJSON() as { password?: string }).password ?? ""
+      return route.fallback()
+    })
+    await page.goto("/")
+    await page.locator("#setup-email").fill("fulano@institutosaovicente.com.br")
+    await page.locator("#setup-password").fill("antiga1")
+    await page.getByRole("button", { name: "Entrar" }).click()
+    await expect(page.getByRole("tab", { name: "Novo Chamado" })).toBeVisible()
+    expect(senhaEnviada).toBe("antiga1")
+  })
+
+  test("o olho mostra e esconde a senha digitada (confere antes do primeiro acesso)", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    await page.goto("/")
+    const campo = page.locator("#setup-password")
+    await campo.fill("minhaSenha123")
+    await expect(campo).toHaveAttribute("type", "password")
+    await page.getByRole("button", { name: "Mostrar senha" }).click()
+    await expect(campo).toHaveAttribute("type", "text")
+    await page.getByRole("button", { name: "Esconder senha" }).click()
+    await expect(campo).toHaveAttribute("type", "password")
+    await expect(page.getByText("Primeiro acesso?")).toBeVisible()
+  })
+
+  test("enquanto o boot carrega, mostra 'Carregando…' em vez do formulário de login", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    // atrasa a lista de solicitantes (o boot depende dela) pra dar tempo de ver a tela de espera
+    await page.route("**/api/solicitantes", async (route) => {
+      await new Promise((r) => setTimeout(r, 1500))
+      return route.fallback()
+    })
+    await page.goto("/")
+    await expect(page.getByText("Carregando…")).toBeVisible()
+    await expect(page.locator("#setup-email")).toHaveCount(0)
+    await expect(page.locator("#setup-email")).toBeVisible({ timeout: 10_000 })
+  })
+
+  test("erro de boot mostra orientação em português, não o erro técnico", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    await page.route("**/api/solicitantes", (route) => route.fulfill({ status: 500, contentType: "application/json", body: "{}" }))
+    await page.goto("/")
+    await expect(page.getByText("Não foi possível conectar ao sistema.")).toBeVisible()
+    await expect(page.getByText("Se continuar, fale com a TI.")).toBeVisible()
+    await expect(page.getByRole("button", { name: "Tentar de novo" })).toBeVisible()
   })
 
   test("primeiro acesso: login 404 cai pra registro automático", async ({ page }) => {

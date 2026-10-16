@@ -119,4 +119,61 @@ test.describe("Meus Chamados / Histórico", () => {
     await expect(card.getByText("Sua avaliação:")).toBeVisible()
     await expect(card.getByText("Como foi o atendimento?")).not.toBeVisible()
   })
+
+  // Revisão de UX pra implantação (2026-10-16) — o Worker devolve a prioridade em inglês
+  // (urgent/high/normal); o card comparava com o label em português e só "normal" aparecia.
+  test("o card mostra a prioridade Urgente, Alta e Normal", async ({ page }) => {
+    const tasks = [
+      makeTask({ id: "p-urg", name: "Chamado urgente", priority: { priority: "urgent" } }),
+      makeTask({ id: "p-alta", name: "Chamado alto", priority: { priority: "high" } }),
+      makeTask({ id: "p-norm", name: "Chamado normal", priority: { priority: "normal" } }),
+    ]
+    await mockSolicitanteRoutes(page, { tasks })
+    await gotoSolicitanteLoggedIn(page)
+    await page.getByRole("tab", { name: /Meus Chamados/ }).click()
+    await expect(page.locator('[data-task-id="p-urg"]').getByText("Urgente", { exact: true })).toBeVisible()
+    await expect(page.locator('[data-task-id="p-alta"]').getByText("Alta", { exact: true })).toBeVisible()
+    await expect(page.locator('[data-task-id="p-norm"]').getByText("Normal", { exact: true })).toBeVisible()
+  })
+
+  test("'Atualizado há…' usa a última atualização, não a data de criação", async ({ page }) => {
+    const criadoHa8h = Date.now() - 8 * 3600_000
+    const task = makeTask({ id: "u1", status: { status: "em atendimento" }, date_created: criadoHa8h, date_updated: Date.now() - 60_000 })
+    await mockSolicitanteRoutes(page, { tasks: [task] })
+    await gotoSolicitanteLoggedIn(page)
+    await page.getByRole("tab", { name: /Meus Chamados/ }).click()
+    const card = page.locator('[data-task-id="u1"]')
+    await expect(card.getByText(/Atualizado 1m atrás/)).toBeVisible()
+    await expect(card.getByText(/Atualizado 8h atrás/)).toHaveCount(0)
+  })
+
+  test("depois de avaliar, agradece e marca a estrela escolhida", async ({ page }) => {
+    const encerrado = makeTask({ id: "n1", status: { status: "encerrado" }, date_closed: Date.now() })
+    await mockSolicitanteRoutes(page, { tasks: [encerrado] })
+    await gotoSolicitanteLoggedIn(page)
+    await page.getByRole("tab", { name: /Histórico/ }).click()
+    await page.locator('[data-task-id="n1"]').getByRole("button", { name: "Avaliar com 5 estrelas" }).click()
+    await expect(page.locator('[data-task-id="n1"]').getByText("Obrigado pela avaliação!")).toBeVisible()
+  })
+})
+
+// Alvos de toque no celular (revisão de UX, 2026-10-16): abas, Sair, estrelas e o link do
+// WhatsApp estavam abaixo de ~44px, fáceis de errar com o dedo. Só faz sentido no projeto mobile.
+test.describe("Alvos de toque no celular", () => {
+  test("abas, botão Sair, estrelas e link do WhatsApp têm pelo menos 40px de altura", async ({ page }, info) => {
+    test.skip(info.project.name !== "mobile", "medição só vale no viewport de celular")
+    const tasks = [
+      makeTask({ id: "t-aberto", status: { status: "aberto" } }),
+      makeTask({ id: "t-enc", status: { status: "encerrado" }, date_closed: Date.now() }),
+    ]
+    await mockSolicitanteRoutes(page, { tasks })
+    await gotoSolicitanteLoggedIn(page)
+    const altura = async (loc: ReturnType<typeof page.locator>) => (await loc.first().boundingBox())!.height
+    expect(await altura(page.getByRole("tab", { name: "Novo Chamado" }))).toBeGreaterThanOrEqual(44)
+    expect(await altura(page.getByRole("button", { name: "Sair" }))).toBeGreaterThanOrEqual(44)
+    await page.getByRole("tab", { name: /Meus Chamados/ }).click()
+    expect(await altura(page.locator('[data-task-id="t-aberto"]').getByRole("link", { name: /WhatsApp/ }))).toBeGreaterThanOrEqual(40)
+    await page.getByRole("tab", { name: /Histórico/ }).click()
+    expect(await altura(page.locator('[data-task-id="t-enc"]').getByRole("button", { name: /Avaliar com 3 estrelas/ }))).toBeGreaterThanOrEqual(40)
+  })
 })

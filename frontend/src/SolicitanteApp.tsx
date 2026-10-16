@@ -111,8 +111,9 @@ function SolicitanteShell() {
           size="icon"
           variant="ghost"
           title="Sair"
-          className="text-primary-foreground hover:bg-white/10 hover:text-primary-foreground"
-          onClick={() => confirm("Desconectar?") && logout()}
+          aria-label="Sair"
+          className="h-11 w-11 text-primary-foreground hover:bg-white/10 hover:text-primary-foreground"
+          onClick={() => confirm("Sair do app? Você vai precisar entrar de novo com e-mail e senha.") && logout()}
         >
           <LogOut />
         </Button>
@@ -122,11 +123,11 @@ function SolicitanteShell() {
         <NotifBanner sessionToken={sessionToken} />
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="w-full">
-            <TabsTrigger value="novo-chamado" className="flex-1">Novo Chamado</TabsTrigger>
-            <TabsTrigger value="meus-chamados" className="flex-1 gap-1.5">
+            <TabsTrigger value="novo-chamado" className="min-h-11 flex-1">Novo Chamado</TabsTrigger>
+            <TabsTrigger value="meus-chamados" className="min-h-11 flex-1 gap-1.5">
               Meus Chamados{ativos.length > 0 && <span className="count-pill">{ativos.length}</span>}
             </TabsTrigger>
-            <TabsTrigger value="todos-chamados" className="flex-1 gap-1.5">
+            <TabsTrigger value="todos-chamados" className="min-h-11 flex-1 gap-1.5">
               Histórico{encerrados.length > 0 && <span className="count-pill">{encerrados.length}</span>}
             </TabsTrigger>
           </TabsList>
@@ -134,6 +135,10 @@ function SolicitanteShell() {
           <TabsContent value="novo-chamado" className="mt-4">
             <NovoChamadoForm
               onCreated={(task, slaLabel, anexoWarning) => {
+                // Entra na lista na hora (achado de UX 2026-10-16): sem isso a aba "Meus
+                // Chamados" mostrava "Nenhum chamado em aberto" até o refetch terminar,
+                // logo depois de a pessoa abrir um chamado.
+                queryClient.setQueryData<Task[]>(["my-tasks"], (old) => [task, ...(old ?? []).filter((t) => t.id !== task.id)])
                 queryClient.invalidateQueries({ queryKey: ["my-tasks"] })
                 setTab("meus-chamados")
                 setWaTask({ task, slaLabel, anexoWarning })
@@ -168,6 +173,20 @@ function SolicitanteShell() {
 function SolicitanteBoot() {
   const { state } = useSessionAuth()
   if (state === "app") return <SolicitanteShell />
+  // Tela de "Carregando…" enquanto o boot decide se há sessão válida (achado de UX
+  // 2026-10-16): antes caía direto no formulário de login, e quem já estava logado via
+  // "o app me deslogou" por alguns segundos (e podia começar a digitar a senha).
+  if (state === "loading") {
+    return (
+      <div className="relative flex min-h-svh items-center justify-center p-4" role="status" aria-live="polite">
+        <div className="bg-brand-gradient fixed inset-0 z-0" />
+        <div className="relative z-10 flex flex-col items-center gap-4 text-center text-primary-foreground">
+          <img src={logoIsv} alt="Instituto São Vicente" className="h-12 w-auto brightness-0 invert" />
+          <p className="text-sm">Carregando…</p>
+        </div>
+      </div>
+    )
+  }
   return <SolicitanteSetup />
 }
 

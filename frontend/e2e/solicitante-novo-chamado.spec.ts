@@ -19,7 +19,10 @@ test.describe("Abrir chamado", () => {
     await mockSolicitanteRoutes(page)
     await gotoSolicitanteLoggedIn(page)
     await page.getByRole("button", { name: "Abrir Chamado" }).click()
-    await expect(page.getByText("Preencha todos os campos obrigatórios")).toBeVisible()
+    // diz QUAL campo falta, e o aviso some quando a pessoa corrige (revisão de UX, 2026-10-16)
+    await expect(page.getByText("Falta preencher: Setor, Tipo de solicitação, Quem vai atender, Descrição do problema.")).toBeVisible()
+    await page.locator("textarea").first().fill("Notebook não liga")
+    await expect(page.getByText("Falta preencher:")).toHaveCount(0)
   })
 
   test("cria chamado e mostra SLA correto pro tipo Urgente (Notebooks)", async ({ page }) => {
@@ -87,6 +90,11 @@ test.describe("Abrir chamado", () => {
 
     await expect(page.getByText(/acima de 10MB/)).toBeVisible()
     expect(uploadCalled).toBe(false)
+
+    // O aviso de arquivo descartado não pode sumir só porque a pessoa começou a digitar
+    // (o aviso de "Falta preencher…" some, este não — revisão de código, 2026-10-16).
+    await page.locator("textarea").first().fill("Notebook não liga")
+    await expect(page.getByText(/acima de 10MB/)).toBeVisible()
   })
 
   test("contador de caracteres em Detalhes adicionais respeita o limite de 1000", async ({ page }) => {

@@ -1,4 +1,4 @@
-import { useRef, useState, type ClipboardEvent, type FormEvent } from "react"
+import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent } from "react"
 import { Paperclip, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
@@ -34,6 +34,13 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
   const [anexos, setAnexos] = useState<File[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // O aviso de "Falta preencher…" some assim que a pessoa corrige algum campo — antes
+  // ficava na tela mesmo com o formulário já completo (achado de UX 2026-10-16). Só
+  // limpa ESSE aviso: a rejeição de anexo > 10MB e o erro do servidor continuam visíveis.
+  useEffect(() => {
+    setError((atual) => (atual?.startsWith("Falta preencher") ? null : atual))
+  }, [setor, tipo, operador, descricao])
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   function adicionarAnexos(novos: File[]) {
@@ -62,8 +69,16 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (!setor || !tipo || !operador || !descricao.trim()) {
-      setError("Preencha todos os campos obrigatórios (*)")
+    // Diz QUAL campo falta (achado de UX 2026-10-16): "preencha todos os obrigatórios"
+    // deixava a pessoa procurando o que faltava.
+    const faltando = [
+      !setor && "Setor",
+      !tipo && "Tipo de solicitação",
+      !operador && "Quem vai atender",
+      !descricao.trim() && "Descrição do problema",
+    ].filter(Boolean)
+    if (faltando.length > 0) {
+      setError(`Falta preencher: ${faltando.join(", ")}.`)
       return
     }
     setSubmitting(true)
@@ -203,7 +218,11 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
             <Paperclip className="h-4 w-4" /> Escolher arquivo
           </Button>
           <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileChange} />
-          <span className="text-xs text-muted-foreground">ou cole um print (Ctrl+V) — até {MAX_ANEXO_MB}MB por arquivo</span>
+          <span className="text-xs text-muted-foreground">
+            {/* Ctrl+V só existe com teclado: no celular a dica confundia */}
+            <span className="hidden md:inline">ou cole um print (Ctrl+V) — </span>
+            até {MAX_ANEXO_MB}MB por arquivo
+          </span>
         </div>
         {anexos.length > 0 && (
           <div className="flex flex-wrap gap-2 pt-1">

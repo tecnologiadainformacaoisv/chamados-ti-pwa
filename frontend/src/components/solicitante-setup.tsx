@@ -1,10 +1,49 @@
-import { useState, type FormEvent } from "react"
+import { useRef, useState, type FormEvent, type RefObject } from "react"
+import { Eye, EyeOff } from "lucide-react"
 import { useSessionAuth } from "@/hooks/use-session-auth"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import iconIsv from "@/assets/icon-isv.svg"
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const MSG_EMAIL = "Digite seu e-mail completo, por exemplo nome@institutosaovicente.com.br."
+const MSG_SENHA = "A senha precisa ter pelo menos 8 caracteres."
+
+// Campo de senha com botão "mostrar" (2026-10-16, revisão de UX pra implantação): no
+// primeiro acesso a senha digitada vira a senha definitiva, e um erro de digitação às
+// cegas vira fila de reset na TI. Ver a senha antes de entrar evita isso.
+function PasswordInput({ id, autoComplete, placeholder, value, onChange, inputRef, describedBy }: {
+  id: string; autoComplete: string; placeholder: string; value: string; onChange: (v: string) => void
+  inputRef?: RefObject<HTMLInputElement | null>; describedBy?: string
+}) {
+  const [visivel, setVisivel] = useState(false)
+  return (
+    <div className="relative">
+      <Input
+        id={id}
+        ref={inputRef}
+        aria-describedby={describedBy}
+        type={visivel ? "text" : "password"}
+        autoComplete={autoComplete}
+        placeholder={placeholder}
+        className="pr-11"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <button
+        type="button"
+        onClick={() => setVisivel((v) => !v)}
+        aria-label={visivel ? "Esconder senha" : "Mostrar senha"}
+        aria-pressed={visivel}
+        className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+      >
+        {visivel ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+      </button>
+    </div>
+  )
+}
 
 // Porta showSetup()/onSetupSubmit() de app.js — login e cadastro são a mesma tela e o
 // mesmo formulário: se /auth/login devolve 404 (sem senha pra esse e-mail), a senha
@@ -22,13 +61,19 @@ export function SolicitanteSetup() {
   const [password, setPassword] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Foco vai pro campo com problema quando a validação falha (leitor de tela e teclado).
+  const emailRef = useRef<HTMLInputElement>(null)
+  const passwordRef = useRef<HTMLInputElement>(null)
 
   if (bootError) {
     return (
       <div className="relative flex min-h-svh items-center justify-center p-4">
         <div className="bg-brand-gradient fixed inset-0 z-0" />
         <div className="shadow-brand-card relative z-10 w-full max-w-sm rounded-[20px] bg-card p-8 text-center">
-          <p className="mb-4 text-sm text-destructive">{bootError}</p>
+          <p className="mb-1 text-sm font-medium text-destructive">Não foi possível conectar ao sistema.</p>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Verifique sua internet e tente de novo. Se continuar, fale com a TI.
+          </p>
           <Button onClick={retryBoot}>Tentar de novo</Button>
         </div>
       </div>
@@ -37,18 +82,23 @@ export function SolicitanteSetup() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (!email) {
-      setError("Digite seu e-mail institucional para continuar")
+    if (!EMAIL_RE.test(email.trim())) {
+      setError(MSG_EMAIL)
+      emailRef.current?.focus()
       return
     }
+    // No login só exige senha preenchida (o mínimo de 8 caracteres vale pra CRIAR a senha;
+    // se existir uma senha antiga mais curta, quem já tem conta não pode ficar trancado
+    // aqui). No primeiro acesso, o servidor devolve a mensagem do mínimo de 8 caracteres.
     if (!password) {
-      setError("Digite sua senha para continuar")
+      setError("Digite sua senha.")
+      passwordRef.current?.focus()
       return
     }
     setSubmitting(true)
     setError(null)
     try {
-      await login(email, password)
+      await login(email.trim(), password)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível entrar. Verifique sua conexão.")
     } finally {
@@ -78,11 +128,12 @@ export function SolicitanteSetup() {
           />
         ) : (
           <>
-            <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="setup-email">Seu e-mail institucional *</Label>
                 <Input
                   id="setup-email"
+                  ref={emailRef}
                   type="email"
                   autoComplete="username"
                   placeholder="voce@institutosaovicente.com.br"
@@ -93,17 +144,18 @@ export function SolicitanteSetup() {
 
               <div className="flex flex-col gap-2">
                 <Label htmlFor="setup-password">Senha *</Label>
-                <Input
+                <PasswordInput
                   id="setup-password"
-                  type="password"
+                  inputRef={passwordRef}
+                  describedBy="setup-password-hint"
                   autoComplete="current-password"
                   placeholder="Sua senha de acesso"
-                  minLength={8}
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={setPassword}
                 />
-                <p className="text-xs text-muted-foreground">
-                  Primeira vez? A senha que você digitar aqui vira sua senha de acesso (mínimo 8 caracteres).
+                <p id="setup-password-hint" className="rounded-md bg-muted px-2.5 py-2 text-xs text-foreground">
+                  <strong>Primeiro acesso?</strong> A senha que você digitar agora será a sua senha. Use o olho para
+                  conferir antes de entrar (mínimo 8 caracteres).
                 </p>
               </div>
 
@@ -165,18 +217,18 @@ function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
       setError("Digite seu nome completo (nome e sobrenome)")
       return
     }
-    if (!email) {
-      setError("Digite seu e-mail para continuar")
+    if (!EMAIL_RE.test(email.trim())) {
+      setError("Digite um e-mail completo, por exemplo nome@email.com.")
       return
     }
-    if (!password) {
-      setError("Digite uma senha para continuar")
+    if (password.length < 8) {
+      setError(MSG_SENHA)
       return
     }
     setSubmitting(true)
     setError(null)
     try {
-      await loginExterno(name.trim(), email, password, telefone.trim() || undefined)
+      await loginExterno(name.trim(), email.trim(), password, telefone.trim() || undefined)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível cadastrar. Verifique sua conexão.")
     } finally {
@@ -185,7 +237,7 @@ function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+    <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
       <p className="text-xs text-muted-foreground">
         Cadastro pra quem não tem e-mail institucional — a TI vai ver seu nome, e-mail e
         telefone junto de cada chamado que você abrir.
@@ -228,16 +280,14 @@ function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
 
       <div className="flex flex-col gap-2">
         <Label htmlFor="setup-ext-password">Senha *</Label>
-        <Input
+        <PasswordInput
           id="setup-ext-password"
-          type="password"
           autoComplete="new-password"
           placeholder="Crie uma senha de acesso"
-          minLength={8}
           value={password}
-          onChange={(e) => setPassword(e.target.value)}
+          onChange={setPassword}
         />
-        <p className="text-xs text-muted-foreground">Mínimo de 8 caracteres.</p>
+        <p className="text-xs text-muted-foreground">Mínimo de 8 caracteres. Use o olho para conferir.</p>
       </div>
 
       {error && (
