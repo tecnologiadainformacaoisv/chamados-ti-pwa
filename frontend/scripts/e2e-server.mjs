@@ -4,7 +4,7 @@
 // '/chamados-ti-pwa/'` (GitHub Pages é project site, ver vite.config.ts) direto nos
 // caminhos de asset do HTML — `vite preview` sozinho serve na raiz e não sabe
 // reescrever isso, dando 404 em todo asset. Aqui a gente serve com um prefixo de
-// verdade (`/chamados-ti-pwa/`), removendo ele antes de procurar o arquivo em `dist/`
+// verdade (hoje vazio — o site vive na raiz do domínio próprio, ver vite.config.ts)
 // — mesmo truque que os scripts ad-hoc desta sessão faziam copiando o dist pra um
 // subdiretório físico, só que sem precisar copiar nada.
 import http from "node:http"
@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DIST = path.resolve(__dirname, "..", "dist")
-const PREFIX = "/chamados-ti-pwa"
+const PREFIX = ""
 const PORT = Number(process.env.PORT || 4173)
 
 const MIME = {

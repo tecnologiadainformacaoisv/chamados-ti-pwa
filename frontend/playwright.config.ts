@@ -28,7 +28,7 @@ export default defineConfig({
   timeout: 30_000,
 
   use: {
-    baseURL: "http://localhost:4173/chamados-ti-pwa/",
+    baseURL: "http://localhost:4173/",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     // As mesmas rotas do app usam SW real (registerType:autoUpdate, ver vite.config.ts) —
@@ -56,7 +56,7 @@ export default defineConfig({
 
   webServer: {
     command: "npm run build && node scripts/e2e-server.mjs",
-    url: "http://localhost:4173/chamados-ti-pwa/",
+    url: "http://localhost:4173/",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },

@@ -12,13 +12,11 @@ import { VitePWA } from 'vite-plugin-pwa'
 // tipo de lista fixa que causou o incidente real de cache em 2026-08-10).
 //
 // https://vite.dev/config/
-export default defineConfig(({ command }) => ({
-  // GitHub Pages deste repo é um "project site" (tecnologiadainformacaoisv.github.io/
-  // chamados-ti-pwa/, não um domínio próprio) — os assets precisam ser referenciados
-  // com esse subcaminho em produção, senão tudo (JS/CSS/manifest/ícones) pede na raiz
-  // errada e 404. Em dev/preview local fica em "/" mesmo, por conveniência (bate com
-  // como os scripts de verificação desta sessão já testam via localhost).
-  base: command === 'build' ? '/chamados-ti-pwa/' : '/',
+export default defineConfig(() => ({
+  // Domínio próprio (chamados.institutosaovicente.com.br, desde 2026-10-16): o site fica
+  // na RAIZ do domínio, então os assets usam base '/'. Antes, no project site do GitHub
+  // Pages (tecnologiadainformacaoisv.github.io/chamados-ti-pwa/), isso era '/chamados-ti-pwa/'.
+  base: '/',
   plugins: [
     react(),
     tailwindcss(),

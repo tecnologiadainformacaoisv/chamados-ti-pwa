@@ -44,15 +44,15 @@ test.describe("PWA instalável do admin (2026-09-15)", () => {
     // poll direto em `registration.active` evita depender disso, mesmo padrão já usado
     // em produção (ver waitForAdminSWActivation em lib/admin-sw.ts).
     const reg = await page.evaluate(async () => {
-      const registration = await navigator.serviceWorker.register("/chamados-ti-pwa/admin-sw.js", {
-        scope: "/chamados-ti-pwa/admin.html",
+      const registration = await navigator.serviceWorker.register("/admin-sw.js", {
+        scope: "/admin.html",
       })
       for (let i = 0; i < 100 && !registration.active; i++) {
         await new Promise((r) => setTimeout(r, 100))
       }
       return { scope: registration.scope, active: registration.active?.scriptURL }
     })
-    expect(reg.scope).toBe("http://localhost:4173/chamados-ti-pwa/admin.html")
+    expect(reg.scope).toBe("http://localhost:4173/admin.html")
     expect(reg.active).toContain("admin-sw.js")
   })
 
@@ -78,7 +78,7 @@ test.describe("PWA instalável do admin (2026-09-15)", () => {
 
     await page.goto("/admin.html")
     await page.evaluate(async () => {
-      const registration = await navigator.serviceWorker.register("/chamados-ti-pwa/admin-sw.js", { scope: "/chamados-ti-pwa/admin.html" })
+      const registration = await navigator.serviceWorker.register("/admin-sw.js", { scope: "/admin.html" })
       for (let i = 0; i < 100 && !registration.active; i++) {
         await new Promise((r) => setTimeout(r, 100))
       }
@@ -94,8 +94,8 @@ test.describe("PWA instalável do admin (2026-09-15)", () => {
       (await navigator.serviceWorker.getRegistrations()).map((r) => ({ scope: r.scope, active: r.active?.scriptURL }))
     )
     expect(regs.sort((a, b) => a.scope.localeCompare(b.scope))).toEqual([
-      { scope: "http://localhost:4173/chamados-ti-pwa/", active: "http://localhost:4173/chamados-ti-pwa/sw.js" },
-      { scope: "http://localhost:4173/chamados-ti-pwa/admin.html", active: "http://localhost:4173/chamados-ti-pwa/admin-sw.js" },
+      { scope: "http://localhost:4173/", active: "http://localhost:4173/sw.js" },
+      { scope: "http://localhost:4173/admin.html", active: "http://localhost:4173/admin-sw.js" },
     ])
   })
 })
