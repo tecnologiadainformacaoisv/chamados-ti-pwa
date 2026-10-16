@@ -146,6 +146,8 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 
 ## Deploy do Frontend
 
+- **URL de produção: https://chamados.institutosaovicente.com.br/** (domínio próprio desde 2026-10-16; o antigo `tecnologiadainformacaoisv.github.io/chamados-ti-pwa/` redireciona pra ele). Os parágrafos abaixo sobre o prefixo `/chamados-ti-pwa/` descrevem o estado ANTERIOR a essa data — hoje o `base` do Vite é `'/'`.
+
 - **Automatizado desde 2026-08-12 (Fase F5)** — `git push` na `main` que toque em `frontend/**` (ou no próprio workflow) dispara `.github/workflows/deploy-frontend.yml`: `npm ci` + `npm run build` (Vite, build MPA — ver abaixo) em `frontend/`, depois publica `frontend/dist` via `actions/upload-pages-artifact` + `actions/deploy-pages`. Também pode ser disparado manualmente em Actions → "Deploy Frontend (GitHub Pages)" → Run workflow.
 - **GitHub Pages deste repo é um project site** (`https://tecnologiadainformacaoisv.github.io/chamados-ti-pwa/`, não um domínio próprio) — os assets do build precisam do prefixo `/chamados-ti-pwa/`, senão pedem na raiz errada e dão 404. `frontend/vite.config.ts` resolve isso com `base` condicional (`'/chamados-ti-pwa/'` só no build de produção; `'/'` em dev/preview local, sem mudar o fluxo de trabalho do dia a dia).
 - **Build MPA (multi-page app)** — `admin.html` e `index.html` são duas entradas HTML de verdade (`build.rollupOptions.input` em `vite.config.ts`), cada uma com seu próprio `main-*.tsx` (`src/main.tsx` monta `SolicitanteApp`, `src/main-admin.tsx` monta `AdminApp`) — produz dois bundles JS separados, como duas páginas de fato independentes (mesma decisão de arquitetura já registrada: "mesma estrutura de hoje, uma página por app"). O switcher de dev por hash (`App.tsx`) foi removido — não precisa mais, cada entrada já roda o app certo nativamente em dev/build/preview.
@@ -202,7 +204,15 @@ Este projeto faz parte da pasta `Desenvolvimento/`, que reúne os sistemas do In
 
 ## Estado atual do desenvolvimento
 
-> Última atualização: 2026-09-21
+> Última atualização: 2026-10-16
+
+- **🌐 Domínio próprio: https://chamados.institutosaovicente.com.br (2026-10-16, v1.17.0)** — pedido do usuário ("agora é implantação pra valer e com domínio fica mais profissional"). Seguiu o guia `../DOMINIO-GITHUB-PAGES.md`, mas **trocando no mesmo repositório** (opção 3 do guia, escolha explícita do usuário — só a TI e algumas máquinas de teste usavam o endereço antigo).
+  - **DNS (HostGator, feito pelo usuário):** `CNAME chamados -> tecnologiadainformacaoisv.github.io`. MX do Titan conferido intacto antes e depois.
+  - **Ordem seguida (importa):** (1) Worker passou a aceitar as duas origens no CORS e foi publicado ANTES da troca (v1.16.0) — sem isso o site no domínio novo não falaria com a API; (2) só depois o frontend com `base: '/'` + `frontend/public/CNAME` (v1.17.0) e `gh api -X PUT .../pages -f cname=...`; (3) certificado `approved` em ~1 min, `https_enforced=true`.
+  - **CORS do Worker:** `ALLOWED_ORIGINS` (github.io + domínio novo); `withCors` reflete o `Origin` do chamador só se estiver na lista — origem desconhecida ou lookalike (`chamados.institutosaovicente.com.br.evil.com`) cai na origem padrão, nunca `*`; `Vary: Origin`. A origem do github.io pode sair da lista quando o domínio novo for o único em uso.
+  - **Vite:** `base` agora é sempre `'/'` (antes `'/chamados-ti-pwa/'` em build). O servidor do E2E (`scripts/e2e-server.mjs`), `playwright.config.ts` e `admin-pwa-install.spec.ts` perderam o prefixo. Manifest/SW já usavam caminho relativo (`start_url: '.'`) — não precisaram mudar.
+  - **Efeito prático:** `https://tecnologiadainformacaoisv.github.io/chamados-ti-pwa/` e `http://` redirecionam (301) pro domínio novo. Login, sessão e instalação do PWA são por origem — **cada máquina que já usava o app precisa entrar de novo, reativar as notificações e (TI) reinstalar o painel e digitar o `ADMIN_SECRET` de novo.** Quem instalou o PWA pelo endereço antigo pode ficar preso na versão antiga (navegador não segue redirecionamento ao atualizar o `sw.js`) — desinstalar e instalar de novo.
+  - **Verificado:** `/`, `/admin.html` e `/admin-sw.js` 200; `GET /api/solicitantes` 200 a partir da origem nova; zero erro de console nas duas páginas; 303 testes de backend e 219 E2E (+5 skipped) passando.
 
 - **⭐ Nota de satisfação — solicitante avalia o próprio chamado depois de encerrado (2026-09-21, v1.14.0)** — sugestão já registrada desde a auditoria inicial do projeto ("Próximos passos"), nunca implementada até o usuário pedir explicitamente: "julgo essencial". 5 estrelas, só aparece em chamado "encerrado".
   - **Schema**: `chamados` ganhou `nota INTEGER` (1-5, `NULL` = não avaliado) — `POST /admin/migrate-schema-chamados-nota`, idempotente, mesmo padrão de sempre.
