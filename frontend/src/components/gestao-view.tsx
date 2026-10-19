@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Download, LayoutGrid, List, RefreshCw } from "lucide-react"
+import { Download, LayoutGrid, List, ListOrdered, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { FiltersBar } from "@/components/filters-bar"
@@ -11,6 +11,7 @@ import { EncerrarComSolucaoDialog } from "@/components/encerrar-com-solucao-dial
 import { CommandPalette, type Comando } from "@/components/command-palette"
 import { DesfazerAviso } from "@/components/desfazer-aviso"
 import { LinhaDoDia } from "@/components/linha-do-dia"
+import { FilaAtendimento } from "@/components/fila-atendimento"
 import { useDesfazer } from "@/hooks/use-desfazer"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 import { useIsMobile } from "@/hooks/use-mobile"
@@ -18,7 +19,7 @@ import { getCF, compararUrgencia, isAtrasado, venceLogo, fetchSolicitanteNomes, 
 import { OPERADORES, SOLUCAO_FIELD_ID, STATUS_ORDER } from "@/lib/constants"
 import { downloadTasksCsv } from "@/lib/export-csv"
 
-type ViewMode = "quadro" | "tabela"
+type ViewMode = "fila" | "quadro" | "tabela"
 
 export function GestaoView() {
   const { secret, logout } = useAdminAuth()
@@ -26,11 +27,12 @@ export function GestaoView() {
 
   const [filtros, setFiltros] = useState<Filtros>({})
   const [busca, setBusca] = useState("")
-  const [viewMode, setViewMode] = useState<ViewMode>(() => (localStorage.getItem("admin_view_mode_react") as ViewMode) || "quadro")
+  const [viewMode, setViewMode] = // chave nova (v3): a Fila virou a visão padrão (2026-10-19) e quem já tinha "quadro" salvo ia continuar nele
+  useState<ViewMode>(() => (localStorage.getItem("admin_view_mode_v3") as ViewMode) || "fila")
   // No celular a Tabela (13 colunas, controles de 24px) não é usável — revisão de UX
-  // 2026-10-16. Lá só existe o Quadro, sem mexer na preferência salva pro desktop.
+  // 2026-10-16. Lá ela vira a Fila, sem mexer na preferência salva pro desktop.
   const isMobile = useIsMobile()
-  const modoVisao: ViewMode = isMobile ? "quadro" : viewMode
+  const modoVisao: ViewMode = isMobile && viewMode === "tabela" ? "fila" : viewMode
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [bulkMessage, setBulkMessage] = useState<string | null>(null)
@@ -52,7 +54,7 @@ export function GestaoView() {
 
   function changeViewMode(mode: ViewMode) {
     setViewMode(mode)
-    localStorage.setItem("admin_view_mode_react", mode)
+    localStorage.setItem("admin_view_mode_v3", mode)
   }
 
   const solicitantesQuery = useQuery({
@@ -389,6 +391,9 @@ export function GestaoView() {
             <span className="sm:hidden">CSV</span>
           </Button>
           <div className="hidden gap-1 rounded-md border border-border p-1 md:flex">
+            <Button size="sm" variant={viewMode === "fila" ? "default" : "ghost"} onClick={() => changeViewMode("fila")}>
+              <ListOrdered className="h-4 w-4" /> Fila
+            </Button>
             <Button size="sm" variant={viewMode === "quadro" ? "default" : "ghost"} onClick={() => changeViewMode("quadro")}>
               <LayoutGrid className="h-4 w-4" /> Quadro
             </Button>
@@ -434,7 +439,7 @@ export function GestaoView() {
           <p className="text-sm text-muted-foreground">A busca olha o título e o nome de quem abriu o chamado.</p>
           <Button variant="outline" onClick={() => setBusca("")}>Limpar busca</Button>
         </div>
-      ) : modoVisao === "quadro" && tasks.length === 0 ? (
+      ) : (modoVisao === "quadro" || modoVisao === "fila") && tasks.length === 0 ? (
         <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border px-4 py-10 text-center">
           {Object.values(filtros).some(Boolean) ? (
             <>
@@ -448,6 +453,16 @@ export function GestaoView() {
             </>
           )}
         </div>
+      ) : modoVisao === "fila" ? (
+        <FilaAtendimento
+          tasks={lastVisible}
+          focoId={focoId}
+          onFoco={setFocoId}
+          onGerenciar={setSelectedTask}
+          onAceitar={aceitarComDesfazer}
+          onEncerrar={(t) => pedirStatus(t.id, { status: "encerrado" })}
+          onRetomar={(t) => pedirStatus(t.id, { status: "em atendimento" })}
+        />
       ) : modoVisao === "quadro" ? (
         <KanbanBoard
           semLimiteEncerrados={!!busca.trim()}

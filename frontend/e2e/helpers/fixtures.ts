@@ -154,13 +154,15 @@ export async function loginAdminViaGate(page: Page, secret = ADMIN_SECRET) {
 
 /** Pula direto pro admin autenticado (localStorage pré-semeado) — usado quando o
  * teste não é sobre o próprio login. */
-export async function gotoAdminLoggedIn(page: Page, secret = ADMIN_SECRET, linhaDoDia = false) {
+export async function gotoAdminLoggedIn(page: Page, secret = ADMIN_SECRET, linhaDoDia = false, visao: "quadro" | "fila" = "quadro") {
   // A "linha do dia" repete os títulos dos chamados; os testes antigos buscam por texto, então ela
   // começa recolhida (só vale se a chave ainda não existe, pra o reload lembrar a escolha).
-  await page.addInitScript(([s, linha]) => {
+  await page.addInitScript(([s, linha, vis]) => {
     localStorage.setItem("admin_secret", s)
     if (localStorage.getItem("admin_linha_dia") === null) localStorage.setItem("admin_linha_dia", linha)
-  }, [secret, linhaDoDia ? "1" : "0"])
+    // a Fila é a visão padrão do produto; os testes antigos do Quadro/Tabela partem do Quadro
+    if (localStorage.getItem("admin_view_mode_v3") === null) localStorage.setItem("admin_view_mode_v3", vis)
+  }, [secret, linhaDoDia ? "1" : "0", visao])
   await page.goto("/admin.html")
 }
 

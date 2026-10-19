@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { ChevronDown, ChevronRight } from "lucide-react"
 import { OPERADORES } from "@/lib/constants"
 import { fmtDate, isAtrasado, type Task } from "@/lib/api"
+import { COR_PRIO, FONTE, INK, LINE, MUTED, NORMAL, URGENT } from "@/lib/mvp-visual"
 
 // Linha do dia (Fase 2 do redesign de UX, 2026-10-19; protótipo aprovado pelo usuário).
 // Cada chamado em andamento vira uma barra do início (ou da abertura) até o prazo, numa faixa por
@@ -12,14 +13,6 @@ const H0 = 8 // expediente: 08h às 18h (hora local do navegador)
 const H1 = 18
 const SPAN_MS = (H1 - H0) * 3_600_000
 const MIN_W = 3.2 // largura mínima da barra, em % (igual ao protótipo)
-const URGENT = "#C62828"
-const HIGH = "#D9650B"
-const NORMAL = "#1F6FB2"
-const INK = "#17303F"
-const MUTED = "#51636F"
-const LINE = "#D5DCE1"
-const COR_PRIO: Record<string, string> = { urgent: URGENT, high: HIGH, normal: NORMAL }
-const FONTE = '"Atkinson Hyperlegible Next", "Segoe UI", system-ui, sans-serif'
 
 function useAgora(ms = 30_000) {
   const [agora, setAgora] = useState(() => Date.now())
