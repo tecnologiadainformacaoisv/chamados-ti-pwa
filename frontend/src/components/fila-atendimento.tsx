@@ -8,6 +8,9 @@ import { COR_PRIO, FONTE, INK, LINE, MUTED, NAVY, NORMAL, URGENT } from "@/lib/m
 // linguagem de gente e UM botão com a próxima ação (Aceitar / Encerrar / Retomar). Clicar na linha abre o
 // resumo; "Gerenciar" abre o modal completo. A ordem vem pronta de `compararUrgencia` (gestao-view).
 const ENCERRADOS_VISIVEIS = 50
+// botão da fila: mão ao passar o mouse, cor que muda, leve "afundar" ao apertar e anel de foco do teclado
+const BTN =
+  "min-h-9 cursor-pointer rounded-[5px] border px-3.5 py-1.5 font-bold transition-colors duration-100 active:translate-y-px active:brightness-95 focus-visible:outline focus-visible:outline-[3px] focus-visible:outline-offset-2 focus-visible:outline-[#0A3D62]"
 const HORA = { hour: "2-digit", minute: "2-digit" } as const
 
 function atendenteDe(t: Task): string {
@@ -108,7 +111,7 @@ export function FilaAtendimento({
                   onFoco(t.id)
                   setAberto((a) => (a === t.id ? null : t.id))
                 }}
-                className="grid cursor-pointer grid-cols-[7px_minmax(0,1fr)] items-center gap-x-3 gap-y-1 border-b py-2.5 pr-3 last:border-b-0 md:grid-cols-[7px_minmax(0,1fr)_auto]"
+                className="grid cursor-pointer grid-cols-[7px_minmax(0,1fr)] hover:bg-[#F6FAFD] items-center gap-x-3 gap-y-1 border-b py-2.5 pr-3 last:border-b-0 md:grid-cols-[7px_minmax(0,1fr)_auto]"
                 style={{
                   borderColor: LINE,
                   background: foco ? "#F6FAFD" : "#fff",
@@ -139,8 +142,8 @@ export function FilaAtendimento({
                         e.stopPropagation()
                         acao.fn(t)
                       }}
-                      className="min-h-9 rounded-[5px] border px-3.5 py-1.5 font-bold"
-                      style={{ borderColor: NAVY, background: acao.cheio ? NAVY : "#fff", color: acao.cheio ? "#fff" : NAVY }}
+                      className={`${BTN} ${acao.cheio ? "bg-[#0A3D62] text-white hover:bg-[#0F5282]" : "bg-white text-[#0A3D62] hover:bg-[#E8F0F6]"}`}
+                      style={{ borderColor: NAVY }}
                     >
                       {acao.rotulo}
                     </button>
@@ -163,8 +166,8 @@ export function FilaAtendimento({
                       <button
                         type="button"
                         onClick={() => onGerenciar(t)}
-                        className="min-h-9 rounded-[5px] border px-3.5 py-1.5 font-bold"
-                        style={{ borderColor: NAVY, background: "#fff", color: NAVY }}
+                        className={`${BTN} bg-white text-[#0A3D62] hover:bg-[#E8F0F6]`}
+                        style={{ borderColor: NAVY }}
                       >
                         Gerenciar
                       </button>

@@ -57,6 +57,31 @@ test.describe("Gestão — fila de atendimento", () => {
     expect(calls).toHaveLength(0)
   })
 
+  test("Retomar aparece na hora, mesmo com o servidor lento", async ({ page }) => {
+    const calls: Array<Record<string, unknown>> = []
+    await abrirFila(page)
+    // registrada DEPOIS dos mocks padrão (a rota mais nova vence)
+    await page.route(/\/admin\/tasks\/p1$/, async (route) => {
+      if (route.request().method() !== "POST") return route.fallback()
+      calls.push(route.request().postDataJSON())
+      await new Promise((r) => setTimeout(r, 3000)) // servidor devagar
+      return route.fulfill({ status: 200, contentType: "application/json", body: "{}" })
+    })
+    const fila = page.getByRole("region", { name: "Fila de atendimento" })
+    await fila.locator('[data-task-id="p1"]').getByRole("button", { name: /^Retomar:/ }).click()
+    // a tela já mostra "Encerrar" (= em atendimento) bem antes dos 3 s do servidor
+    await expect(fila.locator('[data-task-id="p1"]').getByRole("button", { name: /^Encerrar:/ })).toBeVisible({ timeout: 1000 })
+    await expect.poll(() => calls.length).toBe(1)
+    expect(calls[0]).toEqual({ status: "em atendimento" })
+  })
+
+  test("botões da fila mostram a mãozinha ao passar o mouse", async ({ page }, info) => {
+    test.skip(info.project.name === "mobile", "sem mouse no celular")
+    await abrirFila(page)
+    const botao = page.getByRole("region", { name: "Fila de atendimento" }).locator('[data-task-id="a1"]').getByRole("button", { name: /^Aceitar:/ })
+    expect(await botao.evaluate((el) => getComputedStyle(el).cursor)).toBe("pointer")
+  })
+
   test("clicar na linha abre o resumo e Gerenciar abre o modal completo", async ({ page }) => {
     await abrirFila(page, [makeTask({ id: "d1", name: "Mouse quebrado", description: "O mouse parou de clicar.", text_content: "O mouse parou de clicar.", status: { status: "aberto" } })])
     const fila = page.getByRole("region", { name: "Fila de atendimento" })

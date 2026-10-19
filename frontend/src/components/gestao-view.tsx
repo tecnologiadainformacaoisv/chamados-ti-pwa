@@ -230,6 +230,35 @@ export function GestaoView() {
     })
   }
 
+  // Retomar um chamado pendente: aparece como "em atendimento" NA HORA (sobreposição local) e só então
+  // o servidor confirma. Antes esperava a resposta de rede com a tela parada ("delay ao apertar", 19/10).
+  // Sem janela de Desfazer: retomar não notifica ninguém e dá pra pôr em espera de novo.
+  function retomarRapido(task: Task) {
+    desfazer.enviar()
+    const id = task.id
+    const nome = task.name || "(sem título)"
+    const due = Number(task.due_date)
+    const prazoTela = Number.isFinite(due) && due > Date.now() ? due : Date.now() + (JANELA_FINALIZACAO_MIN[String(task.priority?.priority ?? "").toLowerCase()] ?? 60) * 60_000
+    setAcaoErro(null)
+    setOtimistas((o) => ({ ...o, [id]: { status: "em atendimento", due_date: prazoTela } }))
+    postTaskUpdate(secret, id, { status: "em atendimento" })
+      .catch((err) => {
+        if (isSessionError(err)) { logout(); return }
+        setAcaoErro(`Não foi possível retomar "${nome}". Ele voltou para Pendente. Tente de novo.`)
+      })
+      .finally(async () => {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["admin-tasks"] }),
+          queryClient.invalidateQueries({ queryKey: ["admin-open-count"] }),
+        ])
+        setOtimistas((o) => {
+          const novo = { ...o }
+          delete novo[id]
+          return novo
+        })
+      })
+  }
+
   // Ordem do teclado: segue o que se vê na tela (colunas do Quadro / grupos da Tabela, da esquerda
   // pra direita), sem os encerrados, que não pedem ação.
   const ordemNav = useMemo(
@@ -461,7 +490,7 @@ export function GestaoView() {
           onGerenciar={setSelectedTask}
           onAceitar={aceitarComDesfazer}
           onEncerrar={(t) => pedirStatus(t.id, { status: "encerrado" })}
-          onRetomar={(t) => pedirStatus(t.id, { status: "em atendimento" })}
+          onRetomar={retomarRapido}
         />
       ) : modoVisao === "quadro" ? (
         <KanbanBoard
