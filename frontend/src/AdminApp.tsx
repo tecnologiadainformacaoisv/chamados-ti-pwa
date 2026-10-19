@@ -117,10 +117,15 @@ function AdminShell() {
               funcionalmente. */}
           <div className="min-w-0 flex-1 space-y-6 bg-muted/30 p-6">
             <AdminNotifBanner secret={secret} />
-            <div>
-              <h1 className="text-xl font-semibold text-foreground">{meta.titulo}</h1>
-              <p className="text-sm text-muted-foreground">{meta.subtitulo}</p>
-            </div>
+            {/* Gestão abre direto na linha do dia, sem título (pedido do usuário, 2026-10-19): o h1 fica só pra leitor de tela. */}
+            {secaoAtiva === "gestao" ? (
+              <h1 className="sr-only">{meta.titulo}</h1>
+            ) : (
+              <div>
+                <h1 className="text-xl font-semibold text-foreground">{meta.titulo}</h1>
+                <p className="text-sm text-muted-foreground">{meta.subtitulo}</p>
+              </div>
+            )}
 
             {secaoAtiva === "gestao" ? (
               <GestaoView />

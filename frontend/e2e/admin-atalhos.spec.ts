@@ -249,7 +249,7 @@ test.describe("Gestão — atalhos, desfazer e paleta", () => {
     await expect(page.getByText("Atrasado urgente")).toBeVisible()
     await page.keyboard.press("j") // foco no "Atrasado urgente"
     await page.getByPlaceholder("Buscar por título ou solicitante...").fill("Normal aberto") // esconde o chamado em foco
-    await page.getByRole("heading", { name: "Gestão" }).click() // tira o foco do campo
+    await page.getByRole("heading", { name: "Linha do dia" }).click() // tira o foco do campo
     await page.keyboard.press("Enter")
     await page.waitForTimeout(400)
     await expect(page.getByRole("button", { name: /^Desfazer/ })).toHaveCount(0)

@@ -55,11 +55,13 @@ async function stubPushApi(page: Page, opts: { permission?: NotificationPermissi
 }
 
 test.describe("Notificação push do admin — diagnóstico visível (2026-09-15)", () => {
-  test("permissão já concedida + servidor confirma: mostra 'Notificações push ativas'", async ({ page }) => {
+  test("permissão já concedida + servidor confirma: não mostra barra nenhuma (tela limpa)", async ({ page }) => {
     await mockAdminRoutes(page, { tasks: [] })
     await stubPushApi(page, { permission: "granted" })
     await gotoAdminLoggedIn(page)
-    await expect(page.getByText("Notificações push ativas neste navegador.")).toBeVisible()
+    await expect(page.getByRole("heading", { name: "Linha do dia" })).toBeVisible()
+    await expect(page.getByText("Notificações push ativas neste navegador.")).toHaveCount(0)
+    await expect(page.getByRole("button", { name: "Testar notificação" })).toHaveCount(0)
   })
 
   test("permissão concedida mas o servidor rejeita a inscrição: mostra o erro, não fica em silêncio", async ({ page }) => {
@@ -72,37 +74,6 @@ test.describe("Notificação push do admin — diagnóstico visível (2026-09-15
     await gotoAdminLoggedIn(page)
     await expect(page.getByText(/Notificação não confirmada/)).toBeVisible()
     await expect(page.getByText("Notificações push ativas neste navegador.")).not.toBeVisible()
-  })
-
-  test("botão 'Testar notificação' funciona: dispara POST /admin/subscribe/test e mostra 'Teste chegou'", async ({ page }) => {
-    await mockAdminRoutes(page, { tasks: [] })
-    let testCalled = false
-    await page.route("**/admin/subscribe/test", (route) => {
-      if (route.request().method() === "OPTIONS") return route.fallback()
-      testCalled = true
-      return route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' })
-    })
-    await stubPushApi(page, { permission: "granted" })
-    await gotoAdminLoggedIn(page)
-    await expect(page.getByText("Notificações push ativas neste navegador.")).toBeVisible()
-
-    await page.getByRole("button", { name: "Testar notificação" }).click()
-    await expect.poll(() => testCalled).toBe(true)
-    await expect(page.getByText("Teste chegou")).toBeVisible()
-  })
-
-  test("botão 'Testar notificação' mostra falha quando o servidor rejeita o teste", async ({ page }) => {
-    await mockAdminRoutes(page, { tasks: [] })
-    await page.route("**/admin/subscribe/test", (route) => {
-      if (route.request().method() === "OPTIONS") return route.fallback()
-      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: 'nenhuma inscrição salva pra esse device — clique em "Ativar" primeiro' }) })
-    })
-    await stubPushApi(page, { permission: "granted" })
-    await gotoAdminLoggedIn(page)
-    await expect(page.getByText("Notificações push ativas neste navegador.")).toBeVisible()
-
-    await page.getByRole("button", { name: "Testar notificação" }).click()
-    await expect(page.getByText(/Notificação não confirmada/)).toBeVisible()
   })
 
   test("permissão 'default' (nunca pedida): mostra o banner de ativação, não o status", async ({ page }) => {

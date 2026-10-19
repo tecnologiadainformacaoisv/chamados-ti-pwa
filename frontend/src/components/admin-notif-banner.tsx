@@ -1,8 +1,7 @@
 import { useState } from "react"
-import { Bell, BellOff, CheckCircle2, X } from "lucide-react"
+import { Bell, BellOff, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAdminPushNotifications } from "@/hooks/use-admin-push-notifications"
-import { playNotificationSound } from "@/lib/sound"
 
 // Mesmo componente/mesma regra de notif-banner.tsx (lado solicitante) — só troca o
 // texto e a fonte da inscrição (por dispositivo, não por sessão de login).
@@ -20,7 +19,6 @@ export function AdminNotifBanner({ secret }: { secret: string }) {
   const { state, erro, ativar, dispensar, testar } = useAdminPushNotifications(secret)
   const [permissaoNegada, setPermissaoNegada] = useState(false)
   const [testando, setTestando] = useState(false)
-  const [testeResultado, setTesteResultado] = useState<"ok" | "erro" | null>(null)
 
   if (state === "unsupported" || state === "hidden") return null
 
@@ -31,13 +29,10 @@ export function AdminNotifBanner({ secret }: { secret: string }) {
 
   async function handleTestar() {
     setTestando(true)
-    setTesteResultado(null)
-    playNotificationSound() // feedback imediato — mesmo som do badge com o painel aberto
     try {
       await testar()
-      setTesteResultado("ok")
     } catch {
-      setTesteResultado("erro")
+      /* o hook já passa pro estado de erro, que aparece na barra */
     } finally {
       setTestando(false)
     }
@@ -68,8 +63,9 @@ export function AdminNotifBanner({ secret }: { secret: string }) {
     )
   }
 
-  // "checking"/"active"/"error" — linha de status compacta e permanente (não é mais um
-  // banner descartável): dá pra conferir e testar a qualquer momento, não só uma vez.
+  // Funcionando (ou ainda verificando): nada na tela. A barra de status com "Testar notificação" saiu a
+  // pedido do usuário (2026-10-19, tela mais limpa); só o ERRO continua aparecendo, pra não falhar em silêncio.
+  if (state !== "error") return null
   const isError = state === "error"
   return (
     <div className={`mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-2 text-sm ${isError ? "border-destructive/40 bg-destructive/5" : "border-border bg-muted/40"}`}>
@@ -86,14 +82,6 @@ export function AdminNotifBanner({ secret }: { secret: string }) {
               {state === "checking" ? "Verificando notificações…" : "Notificações push ativas neste navegador."}
             </span>
           </>
-        )}
-        {testeResultado === "ok" && (
-          <span className="flex items-center gap-1 text-xs font-medium text-emerald-600">
-            <CheckCircle2 className="h-3.5 w-3.5" /> Teste chegou
-          </span>
-        )}
-        {testeResultado === "erro" && !isError && (
-          <span className="text-xs font-medium text-destructive">Teste falhou</span>
         )}
       </span>
       <Button size="sm" variant={isError ? "default" : "outline"} onClick={handleTestar} disabled={testando}>
