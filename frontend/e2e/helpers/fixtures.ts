@@ -154,10 +154,13 @@ export async function loginAdminViaGate(page: Page, secret = ADMIN_SECRET) {
 
 /** Pula direto pro admin autenticado (localStorage pré-semeado) — usado quando o
  * teste não é sobre o próprio login. */
-export async function gotoAdminLoggedIn(page: Page, secret = ADMIN_SECRET) {
-  await page.addInitScript((s) => {
+export async function gotoAdminLoggedIn(page: Page, secret = ADMIN_SECRET, linhaDoDia = false) {
+  // A "linha do dia" repete os títulos dos chamados; os testes antigos buscam por texto, então ela
+  // começa recolhida (só vale se a chave ainda não existe, pra o reload lembrar a escolha).
+  await page.addInitScript(([s, linha]) => {
     localStorage.setItem("admin_secret", s)
-  }, secret)
+    if (localStorage.getItem("admin_linha_dia") === null) localStorage.setItem("admin_linha_dia", linha)
+  }, [secret, linhaDoDia ? "1" : "0"])
   await page.goto("/admin.html")
 }
 

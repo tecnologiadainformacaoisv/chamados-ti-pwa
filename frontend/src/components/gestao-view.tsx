@@ -10,6 +10,7 @@ import { TaskModal } from "@/components/task-modal"
 import { EncerrarComSolucaoDialog } from "@/components/encerrar-com-solucao-dialog"
 import { CommandPalette, type Comando } from "@/components/command-palette"
 import { DesfazerAviso } from "@/components/desfazer-aviso"
+import { LinhaDoDia } from "@/components/linha-do-dia"
 import { useDesfazer } from "@/hooks/use-desfazer"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 import { useIsMobile } from "@/hooks/use-mobile"
@@ -407,6 +408,10 @@ export function GestaoView() {
         <p role="status" className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           Sem conexão com o servidor. Os chamados abaixo podem estar desatualizados — tentando de novo automaticamente.
         </p>
+      )}
+
+      {!tasksQuery.isLoading && !!tasksQuery.data && (
+        <LinhaDoDia tasks={lastVisible} focoId={focoId} onOpenTask={(t) => { setFocoId(t.id); setSelectedTask(t) }} />
       )}
 
       {tasksQuery.isLoading ? (
