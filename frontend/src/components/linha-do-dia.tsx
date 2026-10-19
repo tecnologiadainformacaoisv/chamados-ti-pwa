@@ -1,16 +1,25 @@
 import { useEffect, useState } from "react"
 import { ChevronDown, ChevronRight } from "lucide-react"
-import { OPERADORES, PRIORITY_MAP } from "@/lib/constants"
+import { OPERADORES } from "@/lib/constants"
 import { fmtDate, isAtrasado, type Task } from "@/lib/api"
 
 // Linha do dia (Fase 2 do redesign de UX, 2026-10-19; protótipo aprovado pelo usuário).
 // Cada chamado em andamento vira uma barra do início (ou da abertura) até o prazo, numa faixa por
 // atendente, com o "agora" em vermelho: dá pra ver de relance onde aperta e quanto cada um tem pela frente.
 // Só usa dados que já existem (start_date/date_created, due_date, assignees): nada novo no servidor.
+// O visual copia o protótipo (_ux-design/prototipos/chamados-mvp/index.html): mesmas cores, tamanhos e fonte.
 const H0 = 8 // expediente: 08h às 18h (hora local do navegador)
 const H1 = 18
 const SPAN_MS = (H1 - H0) * 3_600_000
-const MIN_W = 7 // largura mínima da barra, em % (pra caber o começo do título)
+const MIN_W = 3.2 // largura mínima da barra, em % (igual ao protótipo)
+const URGENT = "#C62828"
+const HIGH = "#D9650B"
+const NORMAL = "#1F6FB2"
+const INK = "#17303F"
+const MUTED = "#51636F"
+const LINE = "#D5DCE1"
+const COR_PRIO: Record<string, string> = { urgent: URGENT, high: HIGH, normal: NORMAL }
+const FONTE = '"Atkinson Hyperlegible Next", "Segoe UI", system-ui, sans-serif'
 
 function useAgora(ms = 30_000) {
   const [agora, setAgora] = useState(() => Date.now())
@@ -102,38 +111,40 @@ export function LinhaDoDia({
   const horas = Array.from({ length: H1 - H0 + 1 }, (_, i) => H0 + i)
 
   return (
-    <section className="rounded-lg border border-border bg-card" aria-label="Linha do dia">
-      <button
-        type="button"
-        onClick={alternar}
-        aria-expanded={aberta}
-        className="flex w-full items-center justify-between gap-3 rounded-lg px-4 py-3 text-left hover:bg-muted/40"
-      >
-        <span className="flex items-center gap-2 text-sm font-semibold">
-          {aberta ? <ChevronDown className="h-4 w-4" aria-hidden /> : <ChevronRight className="h-4 w-4" aria-hidden />}
-          Linha do dia
-          <span className="font-normal text-muted-foreground">
+    <section className="rounded-md border bg-white p-4" style={{ fontFamily: FONTE, color: INK, borderColor: LINE }} aria-label="Linha do dia">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3.5 gap-y-1.5">
+        <button
+          type="button"
+          onClick={alternar}
+          aria-expanded={aberta}
+          className="flex items-baseline gap-2 text-left"
+          title={aberta ? "Recolher a linha do dia" : "Mostrar a linha do dia"}
+        >
+          {aberta ? <ChevronDown className="h-4 w-4 self-center" aria-hidden /> : <ChevronRight className="h-4 w-4 self-center" aria-hidden />}
+          <h2 className="m-0 text-[1.2rem] font-bold">Linha do dia</h2>
+          <span className="text-[0.85rem]" style={{ color: MUTED }}>
             {ativos.length} em andamento{atrasados > 0 ? `, ${atrasados} atrasado${atrasados > 1 ? "s" : ""}` : ""}
           </span>
-        </span>
-      </button>
+        </button>
+        {aberta && (
+          <div className="flex flex-wrap gap-4 text-[0.85rem]" style={{ color: MUTED }} aria-label="Legenda">
+            <span><i className="mr-1.5 inline-block h-[11px] w-6 rounded-[3px] border-2 align-[-1px]" style={{ borderColor: NORMAL, background: "#e3eef8" }} />aguardando a TI</span>
+            <span><i className="mr-1.5 inline-block h-[11px] w-6 rounded-[3px] border-2 align-[-1px]" style={{ borderColor: NORMAL, background: NORMAL }} />em atendimento</span>
+            <span><i className="mr-1.5 inline-block h-[11px] w-6 rounded-[3px] border-2 align-[-1px]" style={{ borderColor: URGENT, background: "repeating-linear-gradient(135deg,#fff 0 4px,#f2b8b8 4px 8px)" }} />passou do prazo</span>
+          </div>
+        )}
+      </div>
 
       {aberta && (
-        <div className="px-4 pb-4">
-          <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground" aria-label="Legenda">
-            <span className="inline-flex items-center gap-1.5"><i className="inline-block h-2.5 w-6 rounded-sm border-2 border-[var(--prio-normal,#2196f3)] bg-blue-50" />aguardando a TI</span>
-            <span className="inline-flex items-center gap-1.5"><i className="inline-block h-2.5 w-6 rounded-sm bg-[#2196f3]" />em atendimento</span>
-            <span className="inline-flex items-center gap-1.5"><i className="inline-block h-2.5 w-6 rounded-sm border-2 border-destructive" style={{ backgroundImage: "repeating-linear-gradient(135deg,#fff 0 4px,#f3b6b6 4px 8px)" }} />passou do prazo</span>
-          </div>
-
+        <>
           {ativos.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">Nenhum chamado em andamento.</p>
+            <p className="mt-3.5 py-6 text-center text-[0.88rem]" style={{ color: MUTED }}>Nenhum chamado em andamento.</p>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="relative mt-3.5 overflow-x-auto">
               <div className="relative min-w-[780px]">
                 <div className="grid grid-cols-[96px_1fr]">
-                  <div />
-                  <div className="relative h-5 text-xs text-muted-foreground" aria-hidden="true">
+                  <div className="sticky left-0 z-[3] bg-white" />
+                  <div className="relative h-[22px] text-[0.78rem]" style={{ color: MUTED }} aria-hidden="true">
                     {horas.map((h, i) => (
                       <span key={h} className="absolute top-0" style={{ left: `${(i / (H1 - H0)) * 100}%`, transform: i === 0 ? "none" : i === horas.length - 1 ? "translateX(-100%)" : "translateX(-50%)" }}>
                         {String(h).padStart(2, "0")}h
@@ -145,25 +156,26 @@ export function LinhaDoDia({
                 {lanes.map((lane) => {
                   const { barras, linhas } = barrasDaFaixa(lane.id)
                   return (
-                    <div key={lane.id || "sem"} className="grid grid-cols-[96px_1fr] border-t border-border">
-                      <div className="pt-2.5 pr-2 text-sm font-semibold">
+                    <div key={lane.id || "sem"} className="grid grid-cols-[96px_1fr] border-t" style={{ borderColor: LINE }}>
+                      <div className="sticky left-0 z-[3] bg-white pt-2.5 pr-2 text-[0.95rem] font-bold">
                         {lane.nome}
-                        <span className="block text-xs font-normal text-muted-foreground">{barras.length} em andamento</span>
+                        <small className="block text-[0.8rem] font-normal" style={{ color: MUTED }}>{barras.length} em aberto</small>
                       </div>
                       <div
                         className="relative"
                         style={{
-                          height: linhas * 32 + 14,
-                          backgroundImage: "linear-gradient(to right,var(--border) 1px,transparent 1px)",
+                          height: linhas * 32 + 16,
+                          backgroundImage: `linear-gradient(to right,${LINE} 1px,transparent 1px)`,
                           backgroundSize: `${100 / (H1 - H0)}% 100%`,
                         }}
                       >
-                        {barras.length === 0 && <span className="absolute top-3 left-2 text-xs text-muted-foreground">Nada na fila agora.</span>}
+                        {barras.length === 0 && <span className="absolute top-3 left-2.5 text-[0.88rem]" style={{ color: MUTED }}>Nada na fila agora.</span>}
                         {barras.map((b) => {
-                          const prio = PRIORITY_MAP[String(b.task.priority?.priority ?? "").toLowerCase()] ?? PRIORITY_MAP.normal
+                          const cor = COR_PRIO[String(b.task.priority?.priority ?? "").toLowerCase()] ?? NORMAL
                           const emAtendimento = (b.task.status?.status || "").toLowerCase() === "em atendimento"
                           const estado = b.atrasado ? "atrasado" : emAtendimento ? "em atendimento" : "aguardando"
                           const foco = focoId === b.task.id
+                          const prazoTxt = b.semPrazo ? "sem prazo definido" : "prazo " + fmtDate(b.task.due_date)
                           return (
                             <button
                               key={b.task.id}
@@ -171,26 +183,28 @@ export function LinhaDoDia({
                               data-barra-id={b.task.id}
                               data-atrasado={b.atrasado ? "sim" : "nao"}
                               onClick={() => onOpenTask(b.task)}
-                              title={`${b.task.name || "(sem título)"} — ${estado}, ${b.semPrazo ? "sem prazo definido" : "prazo " + fmtDate(b.task.due_date)}`}
-                              aria-label={`${b.task.name || "Chamado sem título"}, ${estado}, ${b.semPrazo ? "sem prazo definido" : "prazo " + fmtDate(b.task.due_date)}. Abrir`}
-                              className={`absolute h-[26px] overflow-hidden rounded border-2 ${b.semPrazo ? "border-dashed" : ""} px-1.5 text-left text-xs leading-[22px] text-ellipsis whitespace-nowrap ${foco ? "ring-2 ring-primary ring-offset-1" : ""}`}
+                              title={`${b.task.name || "(sem título)"} — ${estado}, ${prazoTxt}`}
+                              aria-label={`${b.task.name || "Chamado sem título"}, ${estado}, ${prazoTxt}. Abrir`}
+                              className={`absolute h-[26px] min-w-[56px] overflow-hidden rounded-[4px] border-2 px-[7px] text-left text-[0.78rem] text-ellipsis whitespace-nowrap ${b.semPrazo ? "border-dashed" : ""} ${foco ? "z-[3] outline outline-[3px] outline-offset-1 outline-[#0A3D62]" : "z-[2]"}`}
                               style={{
                                 left: `${b.left}%`,
-                                width: `${b.width}%`,
+                                width: `${Math.min(b.width, 100 - b.left)}%`,
                                 top: 8 + b.row * 32,
-                                borderColor: b.atrasado ? "var(--destructive)" : prio.color,
-                                color: b.atrasado ? "#7a1212" : emAtendimento ? "#fff" : "inherit",
+                                borderColor: b.atrasado ? URGENT : cor,
+                                color: b.atrasado ? "#7a1212" : emAtendimento ? "#fff" : INK,
                                 fontWeight: b.atrasado ? 700 : 400,
                                 background: b.atrasado
                                   ? "repeating-linear-gradient(135deg,#fff 0 6px,#f6c9c9 6px 12px)"
                                   : emAtendimento
-                                    ? prio.color
-                                    : `color-mix(in srgb, ${prio.color} 14%, #fff)`,
+                                    ? cor
+                                    : `color-mix(in srgb, ${cor} 14%, #fff)`,
                                 clipPath: b.cutDir ? "polygon(0 0,calc(100% - 10px) 0,100% 50%,calc(100% - 10px) 100%,0 100%)" : undefined,
                                 paddingRight: b.cutDir ? 16 : undefined,
+                                borderRightWidth: b.cutDir ? 0 : undefined,
                               }}
                             >
-                              {b.antesDeHoje ? `${fmtDate(b.task.due_date).slice(0, 5)} ` : ""}{b.semPrazo ? "sem prazo · " : ""}
+                              {b.antesDeHoje ? `${fmtDate(b.task.due_date).slice(0, 5)} ` : ""}
+                              {b.semPrazo ? "sem prazo · " : ""}
                               {b.task.name || "(sem título)"}
                             </button>
                           )
@@ -200,24 +214,25 @@ export function LinhaDoDia({
                   )
                 })}
 
-                {dentroDoExpediente && <div
-                  data-testid="agora"
-                  className="pointer-events-none absolute top-0 bottom-0 z-[1] w-0.5 bg-destructive"
-                  style={{ left: `calc(96px + (100% - 96px) * ${p})` }}
-                  aria-hidden="true"
-                >
-                  <span className="absolute top-0 left-1 rounded bg-destructive px-1 text-[0.68rem] font-bold text-white">
-                    {new Date(agora).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
-                  </span>
-                </div>}
+                {dentroDoExpediente && (
+                  <div
+                    data-testid="agora"
+                    className="pointer-events-none absolute top-0 bottom-0 z-[1] w-0.5"
+                    style={{ left: `calc(96px + (100% - 96px) * ${p})`, background: URGENT }}
+                    aria-hidden="true"
+                  >
+                    <span className="absolute -top-px left-1 rounded-[3px] px-[5px] text-[0.72rem] font-bold text-white" style={{ background: URGENT }}>
+                      {new Date(agora).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
           )}
           {!dentroDoExpediente && ativos.length > 0 && (
-            <p className="mt-2 text-xs text-muted-foreground">Fora do expediente (08h às 18h): a linha do “agora” fica escondida.</p>
+            <p className="mt-2 text-[0.85rem]" style={{ color: MUTED }}>Fora do expediente (08h às 18h): a linha do “agora” fica escondida.</p>
           )}
-
-        </div>
+        </>
       )}
     </section>
   )
