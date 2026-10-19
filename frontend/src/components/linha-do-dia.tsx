@@ -21,7 +21,7 @@ function useAgora(ms = 30_000) {
   return agora
 }
 
-type Barra = { task: Task; left: number; width: number; row: number; cutDir: boolean; antesDeHoje: boolean; atrasado: boolean }
+type Barra = { task: Task; left: number; width: number; row: number; cutDir: boolean; semPrazo: boolean; antesDeHoje: boolean; atrasado: boolean }
 
 export function LinhaDoDia({
   tasks,
@@ -59,19 +59,17 @@ export function LinhaDoDia({
     return s === "aberto" || s === "em atendimento"
   })
   const prazoOk = (t: Task) => !!t.due_date && Number.isFinite(Number(t.due_date))
-  const comPrazo = ativos.filter(prazoOk)
-  const semPrazo = ativos.filter((t) => !prazoOk(t))
   const inicioDe = (t: Task) => {
     const n = Number(t.start_date || t.date_created)
-    return Number.isFinite(n) ? n : Number(t.due_date)
+    return Number.isFinite(n) ? n : prazoOk(t) ? Number(t.due_date) : agora
   }
   const atrasados = ativos.filter((t) => isAtrasado(t)).length
 
   const lanes: { id: string; nome: string }[] = Object.entries(OPERADORES).map(([id, nome]) => ({ id, nome }))
-  if (comPrazo.some((t) => !OPERADORES[String(t.assignees?.[0]?.id ?? "")])) lanes.push({ id: "", nome: "Sem atendente" })
+  if (ativos.some((t) => !OPERADORES[String(t.assignees?.[0]?.id ?? "")])) lanes.push({ id: "", nome: "Sem atendente" })
 
   function barrasDaFaixa(id: string): { barras: Barra[]; linhas: number } {
-    const itens = comPrazo
+    const itens = ativos
       .filter((t) => {
         const a = String(t.assignees?.[0]?.id ?? "")
         return id === "" ? !OPERADORES[a] : a === id
@@ -81,7 +79,8 @@ export function LinhaDoDia({
     const barras: Barra[] = []
     for (const t of itens) {
       const ini = inicioDe(t)
-      const fim = Number(t.due_date)
+      const sp = !prazoOk(t)
+      const fim = sp ? Math.max(d1, ini) : Number(t.due_date) // sem prazo: vai até o fim da régua
       const antesDeHoje = fim < d0 // venceu antes do expediente de hoje: marcador na borda esquerda
       let left = antesDeHoje ? 0 : pct(Math.max(ini, d0))
       let width = antesDeHoje ? MIN_W : pct(Math.min(fim, d1)) - left
@@ -93,7 +92,7 @@ export function LinhaDoDia({
         fimDasLinhas.push(0)
       }
       fimDasLinhas[row] = left + width + 0.8
-      barras.push({ task: t, left, width, row, cutDir: fim > d1, antesDeHoje, atrasado: isAtrasado(t) })
+      barras.push({ task: t, left, width, row, cutDir: fim > d1, semPrazo: sp, antesDeHoje, atrasado: isAtrasado(t) })
     }
     return { barras, linhas: Math.max(1, fimDasLinhas.length) }
   }
@@ -149,7 +148,7 @@ export function LinhaDoDia({
                     <div key={lane.id || "sem"} className="grid grid-cols-[96px_1fr] border-t border-border">
                       <div className="pt-2.5 pr-2 text-sm font-semibold">
                         {lane.nome}
-                        <span className="block text-xs font-normal text-muted-foreground">{barras.length} com prazo</span>
+                        <span className="block text-xs font-normal text-muted-foreground">{barras.length} em andamento</span>
                       </div>
                       <div
                         className="relative"
@@ -159,7 +158,7 @@ export function LinhaDoDia({
                           backgroundSize: `${100 / (H1 - H0)}% 100%`,
                         }}
                       >
-                        {barras.length === 0 && <span className="absolute top-3 left-2 text-xs text-muted-foreground">Nada com prazo agora.</span>}
+                        {barras.length === 0 && <span className="absolute top-3 left-2 text-xs text-muted-foreground">Nada na fila agora.</span>}
                         {barras.map((b) => {
                           const prio = PRIORITY_MAP[String(b.task.priority?.priority ?? "").toLowerCase()] ?? PRIORITY_MAP.normal
                           const emAtendimento = (b.task.status?.status || "").toLowerCase() === "em atendimento"
@@ -172,9 +171,9 @@ export function LinhaDoDia({
                               data-barra-id={b.task.id}
                               data-atrasado={b.atrasado ? "sim" : "nao"}
                               onClick={() => onOpenTask(b.task)}
-                              title={`${b.task.name || "(sem título)"} — ${estado}, prazo ${fmtDate(b.task.due_date)}`}
-                              aria-label={`${b.task.name || "Chamado sem título"}, ${estado}, prazo ${fmtDate(b.task.due_date)}. Abrir`}
-                              className={`absolute h-[26px] overflow-hidden rounded border-2 px-1.5 text-left text-xs leading-[22px] text-ellipsis whitespace-nowrap ${foco ? "ring-2 ring-primary ring-offset-1" : ""}`}
+                              title={`${b.task.name || "(sem título)"} — ${estado}, ${b.semPrazo ? "sem prazo definido" : "prazo " + fmtDate(b.task.due_date)}`}
+                              aria-label={`${b.task.name || "Chamado sem título"}, ${estado}, ${b.semPrazo ? "sem prazo definido" : "prazo " + fmtDate(b.task.due_date)}. Abrir`}
+                              className={`absolute h-[26px] overflow-hidden rounded border-2 ${b.semPrazo ? "border-dashed" : ""} px-1.5 text-left text-xs leading-[22px] text-ellipsis whitespace-nowrap ${foco ? "ring-2 ring-primary ring-offset-1" : ""}`}
                               style={{
                                 left: `${b.left}%`,
                                 width: `${b.width}%`,
@@ -191,7 +190,7 @@ export function LinhaDoDia({
                                 paddingRight: b.cutDir ? 16 : undefined,
                               }}
                             >
-                              {b.antesDeHoje ? `${fmtDate(b.task.due_date).slice(0, 5)} ` : ""}
+                              {b.antesDeHoje ? `${fmtDate(b.task.due_date).slice(0, 5)} ` : ""}{b.semPrazo ? "sem prazo · " : ""}
                               {b.task.name || "(sem título)"}
                             </button>
                           )
@@ -218,22 +217,6 @@ export function LinhaDoDia({
             <p className="mt-2 text-xs text-muted-foreground">Fora do expediente (08h às 18h): a linha do “agora” fica escondida.</p>
           )}
 
-          {semPrazo.length > 0 && (
-            <p className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <span>Sem prazo definido ({semPrazo.length}):</span>
-              {semPrazo.slice(0, 6).map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => onOpenTask(t)}
-                  className="max-w-[16rem] truncate rounded-full border border-border bg-background px-2.5 py-0.5 text-foreground hover:bg-muted"
-                >
-                  {t.name || "(sem título)"}
-                </button>
-              ))}
-              {semPrazo.length > 6 && <span>e mais {semPrazo.length - 6}</span>}
-            </p>
-          )}
         </div>
       )}
     </section>

@@ -55,12 +55,14 @@ test.describe("Gestão — linha do dia", () => {
     await expect(page.getByRole("button", { name: /Linha do dia/ })).toHaveAttribute("aria-expanded", "false")
   })
 
-  test("sem prazo aparece numa lista à parte, sem quebrar", async ({ page }) => {
+  test("sem prazo também aparece na linha, com borda tracejada", async ({ page }) => {
     await mockAdminRoutes(page, { tasks: [makeTask({ id: "s1", name: "Sem prazo ainda", status: { status: "aberto" }, due_date: null })] })
     await gotoAdminLoggedIn(page, undefined, true)
-    const linha = page.getByRole("region", { name: "Linha do dia" })
-    await expect(linha.getByText("Sem prazo definido (1):")).toBeVisible()
-    await linha.getByRole("button", { name: "Sem prazo ainda" }).click()
+    const barra = page.locator('[data-barra-id="s1"]')
+    await expect(barra).toBeVisible()
+    await expect(barra).toHaveClass(/border-dashed/)
+    await expect(barra).toContainText("sem prazo")
+    await barra.click()
     await expect(page.getByRole("dialog")).toContainText("Sem prazo ainda")
   })
 })
