@@ -347,6 +347,12 @@ export function GestaoView() {
           lado, criando um scroll horizontal fantasma que não tinha nada a ver com
           a largura da tabela em si (o que pareceu ser "a tabela ainda não cabe"
           era na real esse truque de margem). */}
+      {/* Gestão à vista (pedido do usuário, 2026-10-19): a linha do dia é a PRIMEIRA coisa da tela, acima
+          dos filtros, e mostra todos os chamados em andamento (não muda com filtro/busca). */}
+      {!tasksQuery.isLoading && !!tasksQuery.data && (
+        <LinhaDoDia tasks={tasks} focoId={focoId} onOpenTask={(t) => { setFocoId(t.id); setSelectedTask(t) }} />
+      )}
+
       <div className="flex flex-col gap-4 bg-background pt-2 pb-3 md:sticky md:top-16 md:z-10">
         <FiltersBar
           filtros={filtros}
@@ -408,10 +414,6 @@ export function GestaoView() {
         <p role="status" className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           Sem conexão com o servidor. Os chamados abaixo podem estar desatualizados — tentando de novo automaticamente.
         </p>
-      )}
-
-      {!tasksQuery.isLoading && !!tasksQuery.data && (
-        <LinhaDoDia tasks={lastVisible} focoId={focoId} onOpenTask={(t) => { setFocoId(t.id); setSelectedTask(t) }} />
       )}
 
       {tasksQuery.isLoading ? (
