@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Download, LayoutGrid, List, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -8,10 +8,13 @@ import { KanbanBoard } from "@/components/kanban-board"
 import { TasksTable } from "@/components/tasks-table"
 import { TaskModal } from "@/components/task-modal"
 import { EncerrarComSolucaoDialog } from "@/components/encerrar-com-solucao-dialog"
+import { CommandPalette, type Comando } from "@/components/command-palette"
+import { DesfazerAviso } from "@/components/desfazer-aviso"
+import { useDesfazer } from "@/hooks/use-desfazer"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 import { useIsMobile } from "@/hooks/use-mobile"
-import { getCF, compararUrgencia, fetchSolicitanteNomes, fetchTasks, isSessionError, postTaskUpdate, postBulkUpdate, createAdminTask, type CreateTaskPayload, type Filtros, type Task, type UpdatePayload } from "@/lib/api"
-import { SOLUCAO_FIELD_ID } from "@/lib/constants"
+import { getCF, compararUrgencia, isAtrasado, venceLogo, fetchSolicitanteNomes, fetchTasks, isSessionError, postTaskUpdate, postBulkUpdate, createAdminTask, type CreateTaskPayload, type Filtros, type Task, type UpdatePayload } from "@/lib/api"
+import { OPERADORES, SOLUCAO_FIELD_ID, STATUS_ORDER } from "@/lib/constants"
 import { downloadTasksCsv } from "@/lib/export-csv"
 
 type ViewMode = "quadro" | "tabela"
@@ -39,6 +42,12 @@ export function GestaoView() {
   const [encerrarPendente, setEncerrarPendente] = useState<{ taskId: string; nomeTask: string; solucaoAtual: string } | null>(null)
   const [encerrarError, setEncerrarError] = useState<string | null>(null)
   const [createError, setCreateError] = useState<string | null>(null)
+  // Fase 3 do redesign de UX (2026-10-19): foco do teclado, filtro rápido, paleta e "Desfazer" seguro
+  const [focoId, setFocoId] = useState<string | null>(null)
+  const [rapido, setRapido] = useState<"todos" | "atrasados" | "hora">("todos")
+  const [paletaAberta, setPaletaAberta] = useState(false)
+  const [acaoErro, setAcaoErro] = useState<string | null>(null)
+  const desfazer = useDesfazer()
 
   function changeViewMode(mode: ViewMode) {
     setViewMode(mode)
@@ -65,7 +74,18 @@ export function GestaoView() {
     if (isSessionError(tasksQuery.error)) logout()
   }, [tasksQuery.error, logout])
 
-  const tasks = tasksQuery.data?.tasks ?? []
+  const tasksServidor = tasksQuery.data?.tasks ?? []
+  // Sobreposição LOCAL das ações "Aceitar" ainda dentro da janela do Desfazer. Não escreve no cache:
+  // assim uma atualização automática (a cada 60 s) não desfaz o efeito na tela, e desfazer só remove a
+  // sobreposição — sem restaurar um snapshot velho por cima de dados novos (achados do revisor, 19/10).
+  const [otimistas, setOtimistas] = useState<Record<string, { status: string; due_date: number }>>({})
+  const tasks = useMemo(
+    () =>
+      Object.keys(otimistas).length === 0
+        ? tasksServidor
+        : tasksServidor.map((t) => (otimistas[t.id] ? { ...t, status: { ...t.status, status: otimistas[t.id].status }, due_date: otimistas[t.id].due_date } : t)),
+    [tasksServidor, otimistas]
+  )
   // A ordem por urgência depende da hora (um chamado passa a "vence logo"/"atrasado" com o
   // tempo, sem o servidor mudar nada): reavalia a cada minuto, senão ele só subiria na coluna
   // quando outro dado mudasse (achado do revisor, 2026-10-16).
@@ -81,9 +101,18 @@ export function GestaoView() {
     const filtrados = term
       ? tasks.filter((t) => (t.name || "").toLowerCase().includes(term) || (t.solicitante || "").toLowerCase().includes(term))
       : tasks
-    return [...filtrados].sort(compararUrgencia)
+    // Filtros rápidos ("o que preciso atender agora"): só chamados em andamento, que são os que têm
+    // prazo correndo — pendente tem o SLA pausado e encerrado já acabou.
+    const rapidos = rapido === "todos"
+      ? filtrados
+      : filtrados.filter((t) => {
+          const st = (t.status?.status || "").toLowerCase()
+          if (st !== "aberto" && st !== "em atendimento") return false
+          return rapido === "atrasados" ? isAtrasado(t) : isAtrasado(t) || venceLogo(t, 60)
+        })
+    return [...rapidos].sort(compararUrgencia)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `tick` só força a reordenação por tempo
-  }, [tasks, busca, tick])
+  }, [tasks, busca, rapido, tick])
 
   const updateMutation = useMutation({
     mutationFn: (body: UpdatePayload) => {
@@ -122,6 +151,7 @@ export function GestaoView() {
   // Tabela (select inline) — abre o popup pedindo a solução em vez de mandar a
   // mutação direto. Qualquer outro status segue o caminho de sempre, sem popup.
   function pedirStatus(taskId: string, body: UpdatePayload) {
+    desfazer.enviar() // ação pendente do Desfazer sai antes, pra não competir com esta
     if (body.status === "encerrado") {
       const task = tasks.find((t) => t.id === taskId)
       const solucaoAtual = (task && (getCF(task, SOLUCAO_FIELD_ID) as string | null)) || ""
@@ -150,6 +180,142 @@ export function GestaoView() {
       setBulkMessage(err instanceof Error ? err.message : "Não foi possível aplicar a ação em lote.")
     },
   })
+
+  // Aceitar com "Desfazer" (Fase 3): aparece na tela na hora (sobreposição local), mas só é ENVIADO depois
+  // de 7 s (ver hooks/use-desfazer.tsx pro porquê). O commit não depende do componente continuar montado.
+  const JANELA_FINALIZACAO_MIN: Record<string, number> = { urgent: 15, high: 30, normal: 60 } // mesmo padrão do servidor
+  function aceitarComDesfazer(task: Task) {
+    const id = task.id
+    const nome = task.name || "(sem título)"
+    const prazoNovo = Date.now() + (JANELA_FINALIZACAO_MIN[String(task.priority?.priority ?? "").toLowerCase()] ?? 60) * 60_000
+    const limpar = () =>
+      setOtimistas((o) => {
+        const novo = { ...o }
+        delete novo[id]
+        return novo
+      })
+    desfazer.agendar(`Chamado aceito: ${nome}`, {
+      // status E prazo: sem isso o chamado recém-aceito aparecia "atrasado" em Em atendimento
+      apply: () => setOtimistas((o) => ({ ...o, [id]: { status: "em atendimento", due_date: prazoNovo } })),
+      commit: () => {
+        setAcaoErro(null)
+        // pré-condição: se o servidor já mostra outro status (outra pessoa/ação mexeu), não envia
+        const noServidor = queryClient
+          .getQueriesData<{ tasks: Task[] }>({ queryKey: ["admin-tasks"] })
+          .flatMap(([, d]) => d?.tasks ?? [])
+          .find((t) => t.id === id)
+        if (noServidor && (noServidor.status?.status || "").toLowerCase() !== "aberto") {
+          limpar()
+          setAcaoErro(`"${nome}" já mudou de status enquanto você aceitava. Nada foi enviado.`)
+          return
+        }
+        postTaskUpdate(secret, id, { status: "em atendimento" })
+          .catch((err) => {
+            if (isSessionError(err)) { logout(); return }
+            setAcaoErro(`Não foi possível aceitar "${nome}". Ele voltou para Aberto. Tente de novo.`)
+          })
+          .finally(async () => {
+            // só tira a sobreposição DEPOIS de recarregar, pra não piscar de volta pra "Aberto"
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: ["admin-tasks"] }),
+              queryClient.invalidateQueries({ queryKey: ["admin-open-count"] }),
+            ])
+            limpar()
+          })
+      },
+      rollback: limpar,
+    })
+  }
+
+  // Ordem do teclado: segue o que se vê na tela (colunas do Quadro / grupos da Tabela, da esquerda
+  // pra direita), sem os encerrados, que não pedem ação.
+  const ordemNav = useMemo(
+    () => STATUS_ORDER.filter((st) => st !== "encerrado").flatMap((st) => lastVisible.filter((t) => (t.status?.status || "").toLowerCase() === st)),
+    [lastVisible]
+  )
+  function mover(delta: number) {
+    if (!ordemNav.length) return
+    const i = ordemNav.findIndex((t) => t.id === focoId)
+    const n = i < 0 ? (delta > 0 ? 0 : ordemNav.length - 1) : Math.min(ordemNav.length - 1, Math.max(0, i + delta))
+    const id = ordemNav[n].id
+    setFocoId(id)
+    requestAnimationFrame(() => document.querySelector(`[data-task-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest" }))
+  }
+
+  // Foco do teclado só vale pra chamado que está na lista visível (filtro/busca podem esconder).
+  useEffect(() => {
+    if (focoId && !ordemNav.some((t) => t.id === focoId)) setFocoId(null)
+  }, [ordemNav, focoId])
+
+  // Atalhos (J/K/Enter/E/U, "/" e Ctrl+K). O handler fica numa ref (atualizada a cada render, dentro de um
+  // efeito) pra enxergar sempre o estado mais novo sem reinscrever o listener. Ignora campo em foco, diálogo
+  // aberto e QUALQUER controle Radix (Select/menu): lá as teclas são typeahead/escolha de opção, não nossas.
+  const teclaRef = useRef<(e: KeyboardEvent) => void>(() => {})
+  function aoTeclar(e: KeyboardEvent) {
+    const alvo = e.target as HTMLElement | null
+    const emCampo = alvo?.tagName === "INPUT" || alvo?.tagName === "TEXTAREA" || alvo?.tagName === "SELECT" || !!alvo?.isContentEditable
+    const haDialogo = !!document.querySelector('[role="dialog"]')
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault()
+      if (!haDialogo) setPaletaAberta(true)
+      return
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey || emCampo || haDialogo) return
+    const emRadix =
+      !!alvo?.closest('[role="combobox"],[role="listbox"],[role="option"],[role="menu"],[role="menuitem"],[role="checkbox"],[data-radix-popper-content-wrapper]') ||
+      alvo?.getAttribute("aria-expanded") === "true"
+    if (emRadix) return
+    const tecla = e.key.toLowerCase()
+    if (tecla === "/") { e.preventDefault(); document.getElementById("busca-chamados")?.focus(); return }
+    if (tecla === "j" || tecla === "k") { e.preventDefault(); mover(tecla === "j" ? 1 : -1); return }
+    if (e.repeat) return // segurar Enter/E/U não repete a ação
+    if (tecla === "escape") { setFocoId(null); return }
+    if (tecla === "u" && desfazer.aviso) { e.preventDefault(); desfazer.desfazer(); return }
+    const foco = ordemNav.find((t) => t.id === focoId)
+    if (!foco) return
+    const st = (foco.status?.status || "").toLowerCase()
+    if (tecla === "enter" && !alvo?.closest("button,a")) {
+      e.preventDefault()
+      if (st === "aberto") aceitarComDesfazer(foco)
+      else setSelectedTask(foco)
+    } else if (tecla === "e" && st !== "encerrado") {
+      e.preventDefault()
+      pedirStatus(foco.id, { status: "encerrado" })
+    }
+  }
+  useEffect(() => {
+    teclaRef.current = aoTeclar
+  })
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => teclaRef.current(e)
+    document.addEventListener("keydown", h)
+    return () => document.removeEventListener("keydown", h)
+  }, [])
+
+  const comandos = useMemo<Comando[]>(() => {
+    const cs: Comando[] = []
+    const foco = ordemNav.find((t) => t.id === focoId)
+    const st = (foco?.status?.status || "").toLowerCase()
+    if (foco && st === "aberto") cs.push({ id: "aceitar", rotulo: `Aceitar: ${foco.name}`, dica: "Enter", executar: () => aceitarComDesfazer(foco) })
+    if (foco && st !== "encerrado") cs.push({ id: "encerrar", rotulo: `Encerrar: ${foco.name}`, dica: "E", executar: () => pedirStatus(foco.id, { status: "encerrado" }) })
+    cs.push(
+      { id: "f-atrasados", rotulo: "Mostrar só os atrasados", dica: "filtro", executar: () => setRapido("atrasados") },
+      { id: "f-hora", rotulo: "Mostrar atrasados e o que vence em 1 hora", dica: "filtro", executar: () => setRapido("hora") },
+      ...Object.entries(OPERADORES).map(([opId, nome]) => ({
+        id: "f-op-" + opId,
+        rotulo: `Mostrar só os chamados de ${nome}`,
+        dica: "filtro",
+        executar: () => setFiltros((f) => ({ ...f, operador: opId })),
+      })),
+      { id: "f-limpar", rotulo: "Mostrar tudo (limpar filtros e busca)", dica: "filtro", executar: () => { setRapido("todos"); setFiltros({}); setBusca("") } },
+      { id: "csv", rotulo: "Exportar a lista na tela em CSV", dica: "arquivo", executar: () => downloadTasksCsv(lastVisible) }
+    )
+    for (const t of ordemNav.slice(0, 60)) {
+      cs.push({ id: "t-" + t.id, rotulo: `Abrir: ${t.name}${t.solicitante ? " (" + t.solicitante + ")" : ""}`, dica: "chamado", executar: () => { setFocoId(t.id); setSelectedTask(t) } })
+    }
+    return cs
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- aceitarComDesfazer/pedirStatus mudam a cada render, mas só leem estado já listado
+  }, [focoId, ordemNav, lastVisible])
 
   // "Adicionar Chamado" inline (2026-09-15) — ver criar-chamado-inline.tsx/
   // handleAdminCreateTask. Erro fica junto do próprio popover (não um Alert solto na
@@ -190,9 +356,18 @@ export function GestaoView() {
           mostrarStatus={modoVisao === "tabela"}
         />
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="whitespace-nowrap text-sm font-medium text-foreground">
-            Chamados {busca ? `(${lastVisible.length} de ${tasks.length})` : `(${tasks.length})`}
-          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="whitespace-nowrap text-sm font-medium text-foreground">
+              Chamados {busca || rapido !== "todos" ? `(${lastVisible.length} de ${tasks.length})` : `(${tasks.length})`}
+            </p>
+            <div className="flex items-center gap-1.5" role="group" aria-label="Filtros rápidos">
+              {([["todos", "Todos"], ["atrasados", "Atrasados"], ["hora", "Atrasados e até 1 h"]] as const).map(([k, rotulo]) => (
+                <Button key={k} size="sm" variant={rapido === k ? "default" : "outline"} aria-pressed={rapido === k} onClick={() => setRapido(k)}>
+                  {rotulo}
+                </Button>
+              ))}
+            </div>
+          </div>
           <div className="flex items-center gap-2">
           <Button
             size="sm"
@@ -269,6 +444,8 @@ export function GestaoView() {
       ) : modoVisao === "quadro" ? (
         <KanbanBoard
           semLimiteEncerrados={!!busca.trim()}
+          focoId={focoId}
+          onAceitar={aceitarComDesfazer}
           tasks={lastVisible}
           onOpenTask={setSelectedTask}
           onDropStatus={(taskId, status) => pedirStatus(taskId, { status })}
@@ -284,10 +461,11 @@ export function GestaoView() {
             </Alert>
           )}
           <TasksTable
+            focoId={focoId}
             tasks={lastVisible}
             onOpenTask={setSelectedTask}
             onQuickUpdate={pedirStatus}
-            onBulkUpdate={(taskIds, body) => { setBulkMessage(null); bulkMutation.mutate({ ids: taskIds, body }) }}
+            onBulkUpdate={(taskIds, body) => { desfazer.enviar(); setBulkMessage(null); bulkMutation.mutate({ ids: taskIds, body }) }}
             solicitantes={solicitantesQuery.data ?? []}
             onCreateTask={(payload) => createMutation.mutate(payload)}
             creatingTask={createMutation.isPending}
@@ -296,13 +474,25 @@ export function GestaoView() {
         </>
       )}
 
+      {acaoErro && (
+        <Alert variant="destructive">
+          <AlertDescription className="flex items-center justify-between gap-2">
+            {acaoErro}
+            <Button variant="ghost" size="sm" onClick={() => setAcaoErro(null)}>Fechar</Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <DesfazerAviso aviso={desfazer.aviso} onDesfazer={desfazer.desfazer} />
+      <CommandPalette aberto={paletaAberta} onFechar={() => setPaletaAberta(false)} comandos={comandos} />
+
       <TaskModal
         task={selectedTask}
         onClose={() => {
           setSelectedTask(null)
           setSaveError(null)
         }}
-        onSave={(body) => updateMutation.mutate(body)}
+        onSave={(body) => { desfazer.enviar(); updateMutation.mutate(body) }}
         saving={updateMutation.isPending}
         error={saveError}
       />

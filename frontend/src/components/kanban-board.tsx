@@ -30,10 +30,15 @@ export function KanbanBoard({
   onOpenTask,
   onDropStatus,
   semLimiteEncerrados = false,
+  focoId = null,
+  onAceitar,
 }: {
   // com busca ativa o limite de 10 encerrados some: senão o card achado ficava escondido atrás
   // de "Ver todos" enquanto o contador dizia que ele existia (achado do revisor, 2026-10-16)
   semLimiteEncerrados?: boolean
+  // chamado com o foco do teclado (J/K) e ação direta de aceitar (Fase 3 do redesign de UX)
+  focoId?: string | null
+  onAceitar?: (task: Task) => void
   tasks: Task[]
   onOpenTask: (task: Task) => void
   onDropStatus: (taskId: string, status: string) => void
@@ -94,6 +99,8 @@ export function KanbanBoard({
                   }}
                   onDragEnd={() => setDraggingId(null)}
                   onClick={() => onOpenTask(task)}
+                  foco={focoId === task.id}
+                  onAceitar={onAceitar ? () => onAceitar(task) : undefined}
                 />
               ))}
               {statusKey === "encerrado" && !semLimiteEncerrados && list.length > ENCERRADO_VISIVEIS && (
@@ -120,8 +127,12 @@ function KanbanCard({
   onDragStart,
   onDragEnd,
   onClick,
+  foco,
+  onAceitar,
 }: {
   task: Task
+  foco: boolean
+  onAceitar?: () => void
   isDragging: boolean
   onDragStart: (e: React.DragEvent) => void
   onDragEnd: () => void
@@ -139,12 +150,13 @@ function KanbanCard({
   return (
     <div
       draggable
+      data-task-id={task.id}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onClick={onClick}
       className={`cursor-grab rounded-md border bg-card p-3 shadow-sm transition-opacity hover:border-primary/40 active:cursor-grabbing ${
         isDragging ? "opacity-40" : ""
-      } ${atrasado ? "border-destructive/50" : venceEmBreve ? "border-amber-400" : "border-border"}`}
+      } ${foco ? "ring-2 ring-primary" : ""} ${atrasado ? "border-destructive/50" : venceEmBreve ? "border-amber-400" : "border-border"}`}
     >
       {/* break-words — achado 2026-08-17: line-clamp sozinho não impede overflow
           HORIZONTAL de uma palavra/string comprida sem espaço, só limita altura. */}
@@ -182,6 +194,21 @@ function KanbanCard({
           )}
         </span>
       </div>
+      {onAceitar && (task.status?.status || "").toLowerCase() === "aberto" && (
+        // 1 clique pra aceitar (antes: arrastar o card ou abrir o modal). Com "Desfazer" por 7 s.
+        <Button
+          type="button"
+          size="xs"
+          className="mt-2"
+          aria-label={`Aceitar chamado: ${task.name}`}
+          onClick={(e) => {
+            e.stopPropagation()
+            onAceitar()
+          }}
+        >
+          Aceitar
+        </Button>
+      )}
     </div>
   )
 }

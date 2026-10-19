@@ -81,6 +81,7 @@ export function FiltersBar({
       <div className="flex min-w-48 flex-1 items-center gap-1.5 rounded-md border border-input bg-transparent px-2.5 py-1.5">
         <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <input
+          id="busca-chamados"
           className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           placeholder="Buscar por título ou solicitante..."
           aria-label="Buscar chamados"

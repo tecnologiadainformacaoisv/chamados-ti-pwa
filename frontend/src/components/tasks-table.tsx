@@ -57,7 +57,9 @@ export function TasksTable({
   onCreateTask,
   creatingTask,
   createTaskError,
+  focoId = null,
 }: {
+  focoId?: string | null
   tasks: Task[]
   onOpenTask: (task: Task) => void
   onQuickUpdate: (taskId: string, body: UpdatePayload) => void
@@ -223,6 +225,7 @@ export function TasksTable({
                             onToggleSelected={(checked) => toggleSelected(task.id, checked)}
                             onOpen={() => onOpenTask(task)}
                             onQuickUpdate={(body) => onQuickUpdate(task.id, body)}
+                            foco={focoId === task.id}
                           />
                         ))}
                         {list.length > GROUP_TABLE_LIMIT && (
@@ -295,7 +298,9 @@ function TaskRow({
   onToggleSelected,
   onOpen,
   onQuickUpdate,
+  foco,
 }: {
+  foco: boolean
   task: Task
   selected: boolean
   groupHasSelection: boolean
@@ -322,7 +327,7 @@ function TaskRow({
     // dependia só do botão até agora. `group/row` + `stopPropagation()` nos controles
     // interativos (checkbox, selects inline) impedem que interagir com ELES também
     // abra o modal por cima.
-    <tr className="group/row cursor-pointer border-b border-border last:border-0 hover:bg-muted/30" onClick={onOpen}>
+    <tr data-task-id={task.id} className={`group/row cursor-pointer border-b border-border last:border-0 hover:bg-muted/30 ${foco ? "bg-primary/5 outline outline-2 -outline-offset-2 outline-primary" : ""}`} onClick={onOpen}>
       <td className="px-3 py-1" onClick={(e) => e.stopPropagation()}>
         {/* Checkbox só aparece no hover da linha (2026-09-15, mesma mecânica da
             ClickUp) — ou permanece visível se JÁ selecionada, ou se qualquer outra
