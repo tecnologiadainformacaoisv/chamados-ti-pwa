@@ -1,5 +1,5 @@
 import { test, expect } from "./helpers/fixtures"
-import { mockAdminRoutes, gotoAdminLoggedIn } from "./helpers/fixtures"
+import { mockAdminRoutes, gotoAdminLoggedIn, abrirSecaoAdmin } from "./helpers/fixtures"
 import { makeTask } from "./helpers/mock-data"
 
 test.describe("Alerta de chamado novo", () => {
@@ -96,5 +96,17 @@ test.describe("Alerta de chamado novo", () => {
     await expect(page.getByText("🔔 Chamado novo")).toBeVisible()
     await page.getByRole("button", { name: "Ver depois" }).click()
     await expect(page.getByText("🔔 Chamado novo")).not.toBeVisible()
+  })
+
+  // UX 2026-10-19: o sino mostrava o número e não fazia nada
+  test("clicar no sino leva pra Gestão e destaca a coluna Aberto", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "s1", name: "Chamado aberto", status: { status: "aberto" } })] })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Dashboard")
+    await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible()
+    await page.getByRole("button", { name: /aguardando atendimento\. Ver chamados abertos/ }).click()
+    await expect(page.getByRole("heading", { name: "Gestão" })).toBeVisible()
+    await expect(page.getByText("Chamado aberto").first()).toBeVisible()
+    await expect(page.locator('[data-status="aberto"]')).toHaveClass(/ring-primary/)
   })
 })

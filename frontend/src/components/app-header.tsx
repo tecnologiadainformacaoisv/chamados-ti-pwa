@@ -14,7 +14,7 @@ import logoIsv from "@/assets/logo-isv.svg"
 // recria o contador que a interface da ClickUp dava, agora que a TI não abre mais
 // ela. Vem de useNovosChamados, montado uma vez só lá em cima (AdminApp.tsx) — nunca
 // duplicado aqui, pra não rodar o polling/diff de "chamado novo" duas vezes.
-export function AppHeader({ countAberto }: { countAberto?: number }) {
+export function AppHeader({ countAberto, onVerAbertos }: { countAberto?: number; onVerAbertos?: () => void }) {
   const { logout } = useAdminAuth()
   const queryClient = useQueryClient()
 
@@ -42,12 +42,20 @@ export function AppHeader({ countAberto }: { countAberto?: number }) {
       </div>
       <div className="flex items-center gap-1">
         {!!countAberto && (
-          <div className="relative mr-1 flex h-8 w-8 items-center justify-center" title={`${countAberto} ${countAberto === 1 ? "chamado aberto aguardando" : "chamados abertos aguardando"} atendimento`}>
+          // Clicável (UX 2026-10-19): antes o sino mostrava o número e não fazia nada. Agora leva
+          // pra Gestão e destaca a coluna "Aberto".
+          <button
+            type="button"
+            onClick={onVerAbertos}
+            aria-label={`${countAberto} ${countAberto === 1 ? "chamado aberto aguardando" : "chamados abertos aguardando"} atendimento. Ver chamados abertos`}
+            className="relative mr-1 flex h-10 w-10 items-center justify-center rounded-md hover:bg-white/10"
+            title={`${countAberto} ${countAberto === 1 ? "chamado aberto aguardando" : "chamados abertos aguardando"} atendimento`}
+          >
             <Bell className="h-5 w-5" />
             <Badge variant="destructive" className="absolute -top-1 -right-1 h-4 min-w-4 justify-center bg-destructive px-1 text-[0.65rem] text-white">
               {countAberto > 99 ? "99+" : countAberto}
             </Badge>
-          </div>
+          </button>
         )}
         <Button
           size="icon"

@@ -40,6 +40,7 @@ export function UsuariosView() {
   const [emailError, setEmailError] = useState<string | null>(null)
   const [resetFeedback, setResetFeedback] = useState<string | null>(null)
   const [soExternos, setSoExternos] = useState(false)
+  const [busca, setBusca] = useState("")
 
   const solicitantesQuery = useQuery({
     queryKey: ["admin-solicitantes"],
@@ -120,7 +121,14 @@ export function UsuariosView() {
 
   const todos = solicitantesQuery.data?.solicitantes ?? []
   const totalExternos = todos.filter((s) => s.origem === "externo").length
-  const solicitantes = soExternos ? todos.filter((s) => s.origem === "externo") : todos
+  // Busca por nome ou e-mail, sem diferenciar acento/maiúscula (UX 2026-10-19: com ~48 pessoas
+  // mais os externos que se cadastram, não havia como achar alguém na lista).
+  const semAcento = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+  const termo = semAcento(busca.trim())
+  const porOrigem = soExternos ? todos.filter((s) => s.origem === "externo") : todos
+  const solicitantes = termo
+    ? porOrigem.filter((s) => semAcento(s.name).includes(termo) || semAcento(s.email ?? "").includes(termo))
+    : porOrigem
   const ativos = solicitantes.filter((s) => s.ativo === 1)
   const inativos = solicitantes.filter((s) => s.ativo !== 1)
   const comSenha = new Set((usersQuery.data?.users ?? []).map((u) => u.name))
@@ -175,6 +183,14 @@ export function UsuariosView() {
           nao sao os pre selecionados") — quem se autocadastra sem e-mail institucional
           (ver SolicitanteSetup) cai aqui como "Externo", distinto de quem a TI mesma
           cadastrou. Filtro rápido pra achar esses casos sem precisar ler linha por linha. */}
+      <input
+        type="search"
+        value={busca}
+        onChange={(e) => setBusca(e.target.value)}
+        placeholder="Buscar por nome ou e-mail"
+        aria-label="Buscar solicitante por nome ou e-mail"
+        className="w-full max-w-sm rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+      />
       {totalExternos > 0 && (
         <label className="flex w-fit items-center gap-2 text-xs text-muted-foreground">
           <input type="checkbox" checked={soExternos} onChange={(e) => setSoExternos(e.target.checked)} className="h-3.5 w-3.5" />
@@ -286,7 +302,9 @@ export function UsuariosView() {
               {solicitantes.length === 0 && (
                 <tr>
                   <td colSpan={6} className="px-3 py-6 text-center text-xs text-muted-foreground">
-                    {soExternos ? "Nenhum solicitante externo cadastrado ainda." : "Nenhum solicitante cadastrado ainda."}
+                    {busca.trim()
+                      ? `Nenhum solicitante com “${busca.trim()}”.`
+                      : soExternos ? "Nenhum solicitante externo cadastrado ainda." : "Nenhum solicitante cadastrado ainda."}
                   </td>
                 </tr>
               )}

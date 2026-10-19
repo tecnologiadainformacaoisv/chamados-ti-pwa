@@ -68,6 +68,19 @@ function AdminShell() {
   const [hovering, setHovering] = useState(false)
   const sidebarOpen = sidebarMode === "expanded" ? true : sidebarMode === "collapsed" ? false : hovering
 
+  // Sino do header: vai pra Gestão e destaca a coluna "Aberto" do Quadro por 1,5 s (UX 2026-10-19).
+  // Na Tabela não existe essa coluna: só troca de seção, sem erro.
+  function irParaAbertos() {
+    setSecaoAtiva("gestao")
+    setTimeout(() => {
+      const col = document.querySelector<HTMLElement>('[data-status="aberto"]')
+      if (!col) return
+      col.scrollIntoView({ behavior: "smooth", block: "center" })
+      col.classList.add("ring-2", "ring-primary")
+      setTimeout(() => col.classList.remove("ring-2", "ring-primary"), 1500)
+    }, 60)
+  }
+
   return (
     <TooltipProvider delayDuration={200}>
       <SidebarProvider
@@ -96,7 +109,7 @@ function AdminShell() {
             o conteúdo interno (tabela, sticky bar) rolar por conta própria em vez
             de empurrar a página inteira pra largura. */}
         <SidebarInset className="min-w-0">
-          <AppHeader countAberto={countAberto} />
+          <AppHeader countAberto={countAberto} onVerAbertos={irParaAbertos} />
           {/* <div>, não <main> (achado do revisor, 2026-09-16) — SidebarInset já
               renderiza o landmark <main> de verdade por baixo (ver ui/sidebar.tsx);
               ter outro <main> aninhado aqui dentro é semanticamente inválido em

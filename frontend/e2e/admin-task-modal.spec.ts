@@ -217,3 +217,49 @@ test.describe("Modal 'Gerenciar' — histórico e notas", () => {
     await expect(page.getByText("Erro ao gravar nota.")).toBeVisible()
   })
 })
+
+// UX 2026-10-19: contexto do chamado no modal e "Quem escreve?" que não precisa ser escolhido toda vez
+test.describe("Modal 'Gerenciar' — contexto e autor da nota", () => {
+  test("mostra solicitante, setor, tipo e prioridade no cabeçalho", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "c1", name: "Impressora sem tinta", solicitante: "Joana Alves", priority: { priority: "high" } })] })
+    await gotoAdminLoggedIn(page)
+    await page.getByText("Impressora sem tinta").first().click()
+    const dlg = page.getByRole("dialog")
+    await expect(dlg.getByText("Joana Alves")).toBeVisible()
+    await expect(dlg.getByText("Administrativo")).toBeVisible()
+    await expect(dlg.getByText("Notebooks")).toBeVisible()
+    await expect(dlg.getByText("Alta", { exact: true })).toBeVisible()
+  })
+
+  test("'Quem escreve?' já vem com o atendente do chamado, e dá pra adicionar nota sem escolher", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "c2", name: "Chamado do Henrique", assignees: [{ id: 200498355, username: "Henrique" }] })] })
+    let posted: Record<string, unknown> | null = null
+    await page.route(/\/admin\/tasks\/c2\/eventos/, (route) => {
+      if (route.request().method() === "OPTIONS") return route.fallback()
+      if (route.request().method() === "GET") return route.fulfill({ status: 200, contentType: "application/json", body: '{"eventos":[]}' })
+      posted = route.request().postDataJSON()
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ evento: {} }) })
+    })
+    await gotoAdminLoggedIn(page)
+    await page.getByText("Chamado do Henrique").first().click()
+    await page.getByPlaceholder(/Escrever nota interna/).fill("Ligar pro solicitante às 15h.")
+    await page.getByRole("button", { name: "Adicionar nota" }).click()
+    await expect.poll(() => posted).toMatchObject({ autor: "Henrique", texto: "Ligar pro solicitante às 15h." })
+  })
+
+  test("lembra a última escolha de 'Quem escreve?' ao abrir outro chamado", async ({ page }) => {
+    await mockAdminRoutes(page, {
+      tasks: [
+        makeTask({ id: "d1", name: "Primeiro chamado", assignees: [{ id: 170628721, username: "Everson" }] }),
+        makeTask({ id: "d2", name: "Segundo chamado", assignees: [{ id: 170628721, username: "Everson" }] }),
+      ],
+    })
+    await gotoAdminLoggedIn(page)
+    await page.getByText("Primeiro chamado").first().click()
+    await page.locator('[data-slot="dialog-content"] [data-slot="select-trigger"]').last().click()
+    await page.getByRole("option", { name: "Henrique" }).click()
+    await page.keyboard.press("Escape")
+    await page.getByText("Segundo chamado").first().click()
+    await expect(page.locator('[data-slot="dialog-content"] [data-slot="select-trigger"]').last()).toContainText("Henrique")
+  })
+})

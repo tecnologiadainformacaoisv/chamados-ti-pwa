@@ -179,4 +179,33 @@ test.describe("Usuários (gestão de solicitantes)", () => {
     await page.waitForTimeout(300)
     expect(called).toBe(false)
   })
+
+  // UX 2026-10-19: com ~48 pessoas (mais os externos) não havia como achar alguém na lista
+  test("buscar por nome ou e-mail filtra a lista, sem diferenciar acento", async ({ page }) => {
+    await mockAdminRoutes(page)
+    await page.route("**/admin/solicitantes", (route) => {
+      if (route.request().method() === "OPTIONS") return route.fallback()
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          solicitantes: [
+            { name: "João Lima", email: "joao@institutosaovicente.com.br", ativo: 1, created_at: Date.now(), origem: "interno" },
+            { name: "Maria Souza", email: "maria.souza@institutosaovicente.com.br", ativo: 1, created_at: Date.now(), origem: "interno" },
+          ],
+        }),
+      })
+    })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Usuários")
+    await expect(page.getByText("João Lima")).toBeVisible()
+    await page.getByPlaceholder("Buscar por nome ou e-mail").fill("joao")
+    await expect(page.getByText("João Lima")).toBeVisible()
+    await expect(page.getByText("Maria Souza")).toHaveCount(0)
+    await page.getByPlaceholder("Buscar por nome ou e-mail").fill("souza@")
+    await expect(page.getByText("Maria Souza")).toBeVisible()
+    await page.getByPlaceholder("Buscar por nome ou e-mail").fill("zzzz")
+    await expect(page.getByText("Nenhum solicitante com “zzzz”.")).toBeVisible()
+  })
 })

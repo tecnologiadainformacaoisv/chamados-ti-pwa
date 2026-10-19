@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { OPERADORES, SOLUCAO_FIELD_ID, STATUS_MAP, STATUS_ORDER } from "@/lib/constants"
+import { OPERADORES, PRIORITY_MAP, SETORES, SETOR_FIELD_ID, SOLUCAO_FIELD_ID, STATUS_MAP, STATUS_ORDER, TIPOS, TIPO_FIELD_ID, optionName } from "@/lib/constants"
 import { getCF, fetchEventos, postEvento, deleteTask, isSessionError, fmtDate, fmtDateFull, type ChamadoEvento, type Task, type UpdatePayload } from "@/lib/api"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 
@@ -60,7 +60,13 @@ export function TaskModal({
     queryFn: () => fetchEventos(secret, task!.id),
     enabled: !!task,
   })
-  const [notaAutor, setNotaAutor] = useState(SEM_ATRIBUICAO)
+  // "Quem escreve?" lembra a última escolha e, na primeira vez, já vem com o atendente do chamado
+  // (UX 2026-10-19: escolher toda vez era atrito, e o botão ficava desativado sem explicar).
+  const [notaAutor, setNotaAutorState] = useState(SEM_ATRIBUICAO)
+  function setNotaAutor(v: string) {
+    setNotaAutorState(v)
+    try { localStorage.setItem("admin_nota_autor", v) } catch { /* sem localStorage: segue sem lembrar */ }
+  }
   const [notaTexto, setNotaTexto] = useState("")
   const [notaError, setNotaError] = useState<string | null>(null)
 
@@ -110,7 +116,11 @@ export function TaskModal({
   useEffect(() => {
     if (!task) return
     setOperadorTouched(false)
-    setNotaAutor(SEM_ATRIBUICAO)
+    // autor da nota: última escolha salva; senão o atendente do chamado; senão vazio
+    let salvo: string | null = null
+    try { salvo = localStorage.getItem("admin_nota_autor") } catch { /* sem localStorage */ }
+    const atribuido = task.assignees?.[0] ? String(task.assignees[0].id) : null
+    setNotaAutorState(salvo && OPERADORES[salvo] ? salvo : atribuido && OPERADORES[atribuido] ? atribuido : SEM_ATRIBUICAO)
     setNotaTexto("")
     setNotaError(null)
     setDeleteError(null)
@@ -154,6 +164,19 @@ export function TaskModal({
             Aberto em {fmtDateFull(task.date_created)}
             {task.date_closed ? ` · Encerrado em ${fmtDateFull(task.date_closed)}` : ""}
             {task.due_date ? ` · Prazo ${fmtDateFull(task.due_date)}` : ""}
+          </p>
+          {/* Quem pediu e onde fica: a TI precisa disso ao atender e o card ficava escondido atrás
+              do modal (achado do ux-revisor, 2026-10-16). */}
+          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-foreground">
+            <span className="font-medium">{task.solicitante || "Solicitante não informado"}</span>
+            <span>{optionName(SETORES, getCF(task, SETOR_FIELD_ID) as number | null)}</span>
+            <span>{optionName(TIPOS, getCF(task, TIPO_FIELD_ID) as number | null)}</span>
+            {task.priority?.priority && PRIORITY_MAP[String(task.priority.priority).toLowerCase()] && (
+              <span className="inline-flex items-center gap-1 font-medium" style={{ color: PRIORITY_MAP[String(task.priority.priority).toLowerCase()].color }}>
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: PRIORITY_MAP[String(task.priority.priority).toLowerCase()].color }} />
+                {PRIORITY_MAP[String(task.priority.priority).toLowerCase()].label}
+              </span>
+            )}
           </p>
         </DialogHeader>
 
