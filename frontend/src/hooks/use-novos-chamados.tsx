@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { fetchTasks, isSessionError, type Task } from "@/lib/api"
 import { playNotificationSound } from "@/lib/sound"
+import { LISTA_POLL_MS } from "@/lib/constants"
 
-const POLL_MS = 20_000
+const POLL_MS = LISTA_POLL_MS < 20_000 ? LISTA_POLL_MS : 20_000
 
 // Alerta de chamado novo pro admin (2026-08-13) — recria o "número flutuante" que a
 // interface da ClickUp dava, agora que a TI não abre mais ela pra nada. Duas coisas

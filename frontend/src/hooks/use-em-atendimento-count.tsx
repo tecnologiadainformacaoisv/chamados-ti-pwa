@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query"
 import { fetchTasks } from "@/lib/api"
+import { LISTA_POLL_MS } from "@/lib/constants"
 
-const POLL_MS = 20_000 // mesmo intervalo de use-novos-chamados.tsx
+const POLL_MS = LISTA_POLL_MS < 20_000 ? LISTA_POLL_MS : 20_000 // mesmo intervalo de use-novos-chamados.tsx (curto no ambiente lado a lado)
 
 // Contagem de "em atendimento" (2026-09-15, pedido do usuário) — separado de propósito
 // de useNovosChamados: o sino/som/caixa de "chamado novo" continua contando só

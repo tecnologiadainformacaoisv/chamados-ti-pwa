@@ -14,6 +14,7 @@ import { OfflineBanner } from "@/components/offline-banner"
 import { InstallBanner } from "@/components/install-banner"
 import { fetchMyTasks, isAuthExpired } from "@/lib/app-api"
 import type { Task } from "@/lib/api"
+import { LISTA_POLL_MS } from "@/lib/constants"
 import logoIsv from "@/assets/logo-isv.svg"
 
 // Instância própria — SolicitanteApp e AdminApp nunca coexistem na mesma árvore hoje
@@ -80,7 +81,7 @@ function SolicitanteShell() {
   const tasksQuery = useQuery({
     queryKey: ["my-tasks"],
     queryFn: () => fetchMyTasks(sessionToken),
-    refetchInterval: 60_000,
+    refetchInterval: LISTA_POLL_MS,
   })
 
   useEffect(() => {

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 import { fetchMetrics, fmtMs, isSessionError, type OperadorTempo } from "@/lib/api"
-import { OPERADORES, SETORES, STATUS_MAP, STATUS_ORDER, TIPOS, type Opcao } from "@/lib/constants"
+import { LISTA_POLL_MS, OPERADORES, SETORES, STATUS_MAP, STATUS_ORDER, TIPOS, type Opcao } from "@/lib/constants"
 
 // yyyy-mm-dd (formato nativo de <input type="date">) -> epoch ms no início/fim do dia,
 // no fuso local de quem está usando o painel (não UTC) — é o que a pessoa espera ao
@@ -42,7 +42,7 @@ export function DashboardView() {
   const metricsQuery = useQuery({
     queryKey: ["admin-metrics", desdeMs, ateMs],
     queryFn: () => fetchMetrics(secret, { desde: desdeMs, ate: ateMs }),
-    refetchInterval: 60_000,
+    refetchInterval: LISTA_POLL_MS,
   })
 
   useEffect(() => {

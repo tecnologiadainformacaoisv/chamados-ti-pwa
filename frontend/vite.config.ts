@@ -26,7 +26,8 @@ export default defineConfig(() => ({
       filename: 'sw.ts',
       registerType: 'autoUpdate',
       injectRegister: false, // registro feito manualmente via useRegisterSW() em SolicitanteApp.tsx
-      devOptions: { enabled: true, type: 'module' },
+      // no ambiente lado a lado (backend local) o Service Worker só atrapalharia a recarga
+      devOptions: { enabled: !process.env.VITE_WORKER_URL, type: 'module' },
       manifest: {
         name: 'Chamados de TI – ISV',
         short_name: 'TI Chamados',

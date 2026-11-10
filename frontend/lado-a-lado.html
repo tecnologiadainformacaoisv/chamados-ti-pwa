@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lado a lado – desenvolvimento</title>
+    <!-- Só existe no servidor de desenvolvimento: não está em build.rollupOptions.input, então NÃO vai pra produção. -->
+    <style>
+      :root { --navy: #0a3d62; --linha: #d5dce1; --muted: #51636f; }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body { font: 14px/1.4 "Segoe UI", system-ui, sans-serif; background: #e9edf0; color: #17303f; display: flex; flex-direction: column; }
+      header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 8px 14px; background: var(--navy); color: #fff; }
+      header h1 { font-size: 15px; margin: 0; font-weight: 700; }
+      header .sp { flex: 1; }
+      label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+      select, button { font: inherit; border-radius: 5px; border: 1px solid rgba(255, 255, 255, 0.45); background: rgba(255, 255, 255, 0.12); color: #fff; padding: 4px 9px; cursor: pointer; }
+      select option { color: #17303f; }
+      button:hover, select:hover { background: rgba(255, 255, 255, 0.22); }
+      #estado { font-size: 12px; opacity: 0.9; }
+      #estado.erro { color: #ffb4b4; font-weight: 700; opacity: 1; }
+      main { flex: 1; min-height: 0; display: grid; gap: 10px; padding: 10px; grid-template-columns: minmax(0, var(--col-user, 1fr)) minmax(0, 1fr); }
+      main.empilhado { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+      section { min-height: 0; min-width: 0; display: flex; flex-direction: column; background: #fff; border: 1px solid var(--linha); border-radius: 8px; overflow: hidden; }
+      section h2 { margin: 0; padding: 6px 12px; font-size: 13px; background: #f4f7f9; border-bottom: 1px solid var(--linha); display: flex; gap: 10px; align-items: center; }
+      section h2 small { color: var(--muted); font-weight: 400; }
+      .quadro { flex: 1; min-height: 0; display: flex; justify-content: center; background: #cfd6db; }
+      iframe { border: 0; background: #fff; height: 100%; width: 100%; }
+      #quadro-user iframe { max-width: var(--larg-user, 100%); }
+      h2 button { margin-left: auto; color: var(--navy); border-color: var(--linha); background: #fff; padding: 2px 8px; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Chamados de TI – lado a lado (teste local)</h1>
+      <label>Entrar como
+        <select id="quem"></select>
+      </label>
+      <label>Tela do solicitante
+        <select id="larg">
+          <option value="390px">Celular (390 px)</option>
+          <option value="768px">Tablet (768 px)</option>
+          <option value="100%">Computador (inteira)</option>
+        </select>
+      </label>
+      <label>Disposição
+        <select id="disp">
+          <option value="lado">Lado a lado</option>
+          <option value="cima">Uma em cima da outra</option>
+        </select>
+      </label>
+      <span class="sp"></span>
+      <span id="estado">conectando…</span>
+      <button id="recarregar" title="Recarrega os dois lados">Recarregar tudo</button>
+    </header>
+    <main id="main">
+      <section>
+        <h2>Solicitante <small id="nome-user"></small><button id="r-user">recarregar</button></h2>
+        <div class="quadro" id="quadro-user"><iframe id="f-user" title="Tela do solicitante"></iframe></div>
+      </section>
+      <section>
+        <h2>Admin (TI) <small>chave de teste já preenchida</small><button id="r-admin">recarregar</button></h2>
+        <div class="quadro"><iframe id="f-admin" title="Painel de admin"></iframe></div>
+      </section>
+    </main>
+
+    <script type="module">
+      // Mesmos valores de scripts/dev-backend.mjs (só desenvolvimento).
+      const API = import.meta.env.VITE_WORKER_URL || "http://localhost:8787"
+      const APP_SECRET = "isv-chamados-2k26-9fQ3vM7xZp"
+      const ADMIN_SECRET = "admin-teste-local"
+      const SENHA = "teste1234"
+      const $ = (id) => document.getElementById(id)
+      const estado = $("estado")
+
+      const pessoas = [
+        ["Ana Paula Lima", "ana.lima@institutosaovicente.com.br"],
+        ["Sérgio Lima", "sergio.lima@institutosaovicente.com.br"],
+        ["Joana Alves", "joana.alves@institutosaovicente.com.br"],
+        ["Levy Perdigão", "levy.perdigao@institutosaovicente.com.br"],
+        ["Marta Dias", "marta.dias@institutosaovicente.com.br"],
+      ]
+      $("quem").innerHTML = pessoas.map(([n, e]) => `<option value="${e}">${n}</option>`).join("")
+      $("quem").value = localStorage.getItem("lado_quem") || pessoas[0][1]
+      $("larg").value = localStorage.getItem("lado_larg") || "390px"
+      $("disp").value = localStorage.getItem("lado_disp") || "lado"
+
+      async function auth(path, email) {
+        const r = await fetch(`${API}/auth${path}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-App-Secret": APP_SECRET },
+          body: JSON.stringify({ email, password: SENHA }),
+        })
+        return { status: r.status, dados: await r.json().catch(() => ({})) }
+      }
+
+      // Entra como o solicitante escolhido: login, e se for o 1º acesso, cadastra a senha de teste.
+      async function entrarComoUsuario() {
+        const email = $("quem").value
+        let r = await auth("/login", email)
+        if (r.status === 404) r = await auth("/register", email)
+        if (!r.dados.token) throw new Error(r.dados.error || "não foi possível entrar como " + email)
+        localStorage.setItem("session_token", r.dados.token)
+        localStorage.setItem("user_name", r.dados.name)
+        $("nome-user").textContent = r.dados.name
+      }
+
+      async function montar() {
+        try {
+          const ping = await fetch(`${API}/api/solicitantes`, { headers: { "X-App-Secret": APP_SECRET } })
+          if (!ping.ok) throw new Error("backend respondeu " + ping.status)
+          localStorage.setItem("admin_secret", ADMIN_SECRET)
+          await entrarComoUsuario()
+          $("f-user").src = "/index.html"
+          $("f-admin").src = "/admin.html"
+          estado.className = ""
+          estado.textContent = "backend local ligado · dados de teste"
+        } catch (e) {
+          estado.className = "erro"
+          estado.textContent = "sem backend local (" + e.message + "). Rode: npm run dev:tudo"
+        }
+      }
+
+      const aplicar = () => {
+        document.documentElement.style.setProperty("--larg-user", $("larg").value)
+        $("main").classList.toggle("empilhado", $("disp").value === "cima")
+      }
+      $("larg").onchange = () => { localStorage.setItem("lado_larg", $("larg").value); aplicar() }
+      $("disp").onchange = () => { localStorage.setItem("lado_disp", $("disp").value); aplicar() }
+      $("quem").onchange = async () => { localStorage.setItem("lado_quem", $("quem").value); await entrarComoUsuario(); $("f-user").contentWindow.location.reload() }
+      $("r-user").onclick = () => $("f-user").contentWindow.location.reload()
+      $("r-admin").onclick = () => $("f-admin").contentWindow.location.reload()
+      $("recarregar").onclick = () => montar()
+      aplicar()
+      montar()
+    </script>
+  </body>
+</html>

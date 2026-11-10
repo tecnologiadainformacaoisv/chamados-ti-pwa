@@ -2,7 +2,12 @@
 // (mesma obrigação de sync já documentada no CLAUDE.md). Fase F2 do roadmap de
 // modernização: porta a lógica do painel de admin atual pro React, mesmos endpoints.
 
-export const WORKER_URL = "https://chamados-ti-push.tecnologiadainformacao-isv.workers.dev"
+// Em desenvolvimento local (npm run dev:tudo) aponta pro backend de teste; em produção a variável não existe.
+export const WORKER_URL: string =
+  (import.meta.env.VITE_WORKER_URL as string | undefined) || "https://chamados-ti-push.tecnologiadainformacao-isv.workers.dev"
+// Intervalo de atualização das listas. No ambiente lado a lado (backend local) é curto pra ver o efeito de
+// uma tela na outra quase na hora; em produção continua 60 s.
+export const LISTA_POLL_MS = import.meta.env.VITE_WORKER_URL ? 4_000 : 60_000
 export const ADMIN_BASE = `${WORKER_URL}/admin`
 export const API_BASE = `${WORKER_URL}/api`
 export const AUTH_BASE = `${WORKER_URL}/auth`

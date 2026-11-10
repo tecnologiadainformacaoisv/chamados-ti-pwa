@@ -16,7 +16,7 @@ import { useDesfazer } from "@/hooks/use-desfazer"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { getCF, compararUrgencia, isAtrasado, venceLogo, fetchSolicitanteNomes, fetchTasks, isSessionError, postTaskUpdate, postBulkUpdate, createAdminTask, type CreateTaskPayload, type Filtros, type Task, type UpdatePayload } from "@/lib/api"
-import { OPERADORES, SOLUCAO_FIELD_ID, STATUS_ORDER } from "@/lib/constants"
+import { LISTA_POLL_MS, OPERADORES, SOLUCAO_FIELD_ID, STATUS_ORDER } from "@/lib/constants"
 import { downloadTasksCsv } from "@/lib/export-csv"
 
 type ViewMode = "fila" | "quadro" | "tabela"
@@ -68,7 +68,7 @@ export function GestaoView() {
     queryFn: () => fetchTasks(secret, filtros),
     // Mesmo "smart polling" do app principal/painel vanilla: atualiza sozinho, sem
     // precisar de F5 manual (mesma correção do incidente de 2026-08-10).
-    refetchInterval: 60_000,
+    refetchInterval: LISTA_POLL_MS,
   })
 
   // GET /admin/tasks também pode voltar 403 (segredo revogado/expirado enquanto já
