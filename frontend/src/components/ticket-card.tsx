@@ -271,7 +271,7 @@ export function TicketCard({ task }: { task: Task }) {
           href={waLinkForTask(task)}
           target="_blank"
           rel="noreferrer"
-          className="mt-3 inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-md bg-[#16A34A] px-4 text-[1rem] font-bold text-white shadow-sm transition-colors hover:bg-[#15803D] active:translate-y-px focus-visible:outline focus-visible:outline-[3px] focus-visible:outline-offset-2 focus-visible:outline-[#15803D]"
+          className="mt-3 flex min-h-11 w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-[#16A34A] px-4 text-[1rem] font-bold text-white shadow-sm transition-colors hover:bg-[#15803D] active:translate-y-px focus-visible:outline focus-visible:outline-[3px] focus-visible:outline-offset-2 focus-visible:outline-[#15803D]"
         >
           <MessageCircle className="h-5 w-5" /> Falar no WhatsApp
         </a>
