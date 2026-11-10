@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useRegisterSW } from "virtual:pwa-register/react"
 import { LogOut } from "lucide-react"
+import { useAgora } from "@/hooks/use-agora"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { SessionAuthProvider, useSessionAuth } from "@/hooks/use-session-auth"
@@ -103,8 +104,9 @@ function SolicitanteShell() {
               (mesmo achado 2026-08-14: logo esmagada numa caixa quadrada e com
               cores erradas por causa de invert() sozinho, sem brightness-0 antes) */}
           <img src={logoIsv} alt="" className="h-9 w-auto brightness-0 invert" />
-          <p className="text-[0.95rem] font-bold">Chamados de TI</p>
+          <p className="text-[0.95rem] font-bold whitespace-nowrap">Chamados de TI</p>
         </div>
+        <RelogioAoVivo />
         <Button
           size="icon"
           variant="ghost"
@@ -119,7 +121,11 @@ function SolicitanteShell() {
 
       <main className="mx-auto max-w-2xl p-4">
         <NotifBanner sessionToken={sessionToken} />
-        <div className="mb-3 px-1">
+        <div className="mb-4 flex items-center gap-3 px-1">
+          <span className="bg-brand-gradient grid h-12 w-12 shrink-0 place-items-center rounded-full text-lg font-bold text-white shadow-md" aria-hidden="true">
+            {userName.trim().charAt(0).toUpperCase()}
+          </span>
+          <div>
           <h1 className="m-0 text-[1.35rem] leading-tight font-bold">Olá, {userName.split(" ")[0]}</h1>
           <p className="m-0 text-[0.95rem] text-[#51636F]" aria-live="polite">
             {tasksQuery.isLoading
@@ -130,6 +136,7 @@ function SolicitanteShell() {
                   ? "Você tem 1 chamado em andamento."
                   : `Você tem ${ativos.length} chamados em andamento.`}
           </p>
+          </div>
         </div>
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className={ABAS_LISTA}>
@@ -206,7 +213,21 @@ function SolicitanteBoot() {
 // Abas sublinhadas (redesign 2026-11-10): menos "caixa", mais leve; a aba atual ganha o traço azul.
 const ABAS_LISTA = "h-auto! w-full gap-0 rounded-none border-b border-[#D5DCE1] bg-transparent p-0"
 const ABA =
-  "min-h-12 flex-1 rounded-none border-0 border-b-[3px] border-transparent px-1 text-[0.95rem] data-[state=active]:border-b-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+  "min-h-12 flex-1 rounded-t-lg rounded-b-none border-0 border-b-[3px] border-transparent px-1 text-[0.95rem] data-[state=active]:border-b-[#1F6FB2] data-[state=active]:bg-[#DCEBFA] data-[state=active]:text-[#0A3D62] data-[state=active]:shadow-none"
+
+// Relógio + ponto verde que pulsa: mostra que a tela está "ligada" e atualizando sozinha (a lista renova a cada minuto).
+function RelogioAoVivo() {
+  const agora = useAgora(10_000)
+  return (
+    <div className="ml-auto mr-1 flex items-center gap-2 text-white" title="A tela atualiza sozinha">
+      <span className="ponto-ao-vivo h-2.5 w-2.5 rounded-full bg-[#43d17a]" aria-hidden="true" />
+      <span className="hidden text-[0.8rem] whitespace-nowrap text-white/80 min-[430px]:inline">ao vivo</span>
+      <span className="text-[1.05rem] font-bold tabular-nums" aria-label="Hora atual">
+        {new Date(agora).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+      </span>
+    </div>
+  )
+}
 
 export function SolicitanteApp() {
   // Registra o Service Worker só aqui — admin.html/AdminApp nunca é PWA (ver CLAUDE.md,

@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { ChevronDown, ChevronRight } from "lucide-react"
 import { OPERADORES } from "@/lib/constants"
+import { useAgora } from "@/hooks/use-agora"
 import { fmtDate, isAtrasado, type Task } from "@/lib/api"
 import { COR_PRIO, FONTE, INK, LINE, MUTED, NORMAL, URGENT } from "@/lib/mvp-visual"
 
@@ -13,15 +14,6 @@ const H0 = 8 // expediente: 08h às 18h (hora local do navegador)
 const H1 = 18
 const SPAN_MS = (H1 - H0) * 3_600_000
 const MIN_W = 3.2 // largura mínima da barra, em % (igual ao protótipo)
-
-function useAgora(ms = 30_000) {
-  const [agora, setAgora] = useState(() => Date.now())
-  useEffect(() => {
-    const id = setInterval(() => setAgora(Date.now()), ms)
-    return () => clearInterval(id)
-  }, [ms])
-  return agora
-}
 
 type Barra = { task: Task; left: number; width: number; row: number; cutDir: boolean; semPrazo: boolean; antesDeHoje: boolean; atrasado: boolean }
 

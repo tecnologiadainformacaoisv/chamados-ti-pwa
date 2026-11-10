@@ -131,11 +131,11 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
       {/* Cabeçalho do cartão (redesign 2026-11-10): o gradiente grande saiu; o título e a promessa
           do prazo ficam em texto simples, no mesmo tom do resto do app. A faixa azul de 7px à
           esquerda é a mesma linguagem dos cartões de chamado. */}
-      <div className="flex border-b border-[#D5DCE1]">
-        <span className="w-[7px] shrink-0 bg-[#0A3D62]" aria-hidden="true" />
-        <div className="px-5 py-4">
-          <h2 className="m-0 text-[1.15rem] font-bold">Novo Chamado</h2>
-          <p className="m-0 text-[0.92rem] text-[#51636F]">Conte o que está acontecendo. Você acompanha tudo na aba Meus Chamados.</p>
+      <div className="bg-brand-gradient flex items-center gap-3 px-5 py-4 text-white">
+        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/15 text-xl" aria-hidden="true">🛠️</span>
+        <div>
+          <h2 className="m-0 text-[1.2rem] font-bold">Novo Chamado</h2>
+          <p className="m-0 text-[0.92rem] text-white/80">Conte o que está acontecendo. Você acompanha tudo na aba Meus Chamados.</p>
         </div>
       </div>
       <form onSubmit={handleSubmit} onPaste={handlePaste} className="flex flex-col gap-5 p-5 pb-0">
@@ -177,7 +177,7 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
           </SelectContent>
         </Select>
         {/* Dica na hora da escolha: a pessoa sabe QUANDO a TI deve responder antes de enviar. */}
-        <p className="m-0 min-h-5 text-[0.88rem] text-[#51636F]" aria-live="polite">
+        <p className="m-0 min-h-5 text-[0.9rem] font-medium text-[#1F6FB2]" aria-live="polite">
           {tipo ? `A TI deve aceitar em até ${(PRIORITY[CATEGORIA_PRIORIDADE[Number(tipo)] ?? 3] ?? PRIORITY[3]).slaLabel}.` : ""}
         </p>
       </div>
@@ -189,7 +189,7 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
             <label
               key={id}
               htmlFor={`op-${id}`}
-              className="flex min-h-12 cursor-pointer items-center gap-2.5 rounded-md border-2 border-[#D5DCE1] bg-white px-3 py-2 text-[0.95rem] font-medium transition-colors hover:bg-[#E8F0F6] has-[[data-state=checked]]:border-[#0A3D62] has-[[data-state=checked]]:bg-[#E8F0F6] has-[[data-state=checked]]:font-bold"
+              className="flex min-h-12 cursor-pointer items-center gap-2.5 rounded-md border-2 border-[#D5DCE1] bg-white px-3 py-2 text-[0.95rem] font-medium transition-colors hover:bg-[#E8F0F6] has-[[data-state=checked]]:border-[#1F6FB2] has-[[data-state=checked]]:bg-[#DCEBFA] has-[[data-state=checked]]:font-bold has-[[data-state=checked]]:text-[#0A3D62]"
             >
               <RadioGroupItem value={id} id={`op-${id}`} />
               {nome}
