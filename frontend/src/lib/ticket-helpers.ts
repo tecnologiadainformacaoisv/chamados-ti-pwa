@@ -58,6 +58,19 @@ export function slaProgressInfo(task: Task): { pct: number; color: string } | nu
   return { pct: Math.max(0, Math.min(pct, 100)), color }
 }
 
+// "até 11:22", "até amanhã 08:50" ou "até 22/10 08:50": o prazo como a pessoa fala, não como o banco guarda.
+export function ateQuando(due: number): string {
+  const d = new Date(due)
+  const hoje = new Date()
+  const amanha = new Date(hoje)
+  amanha.setDate(hoje.getDate() + 1)
+  const hora = d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+  if (d.toDateString() === hoje.toDateString()) return `até ${hora}`
+  if (d.toDateString() === amanha.toDateString()) return `até amanhã ${hora}`
+  const dia = d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })
+  return `até ${dia} ${hora}`
+}
+
 export function waNumberForTask(task: Task): string {
   const assigneeId = task.assignees?.[0]?.id != null ? String(task.assignees[0].id) : null
   return (assigneeId && OPERADOR_WHATSAPP[assigneeId]) || WA_NUMBER_PADRAO

@@ -30,7 +30,14 @@ test.describe("Regressão: texto sem espaço não estoura layout", () => {
     await page.getByRole("tab", { name: /Meus Chamados/ }).click()
     const card = page.locator('[data-task-id="t-overflow"]')
     await expect(card).toBeVisible()
-    expectNoOverflow(await card.boundingBox(), page.viewportSize()!)
+    // só o eixo HORIZONTAL importa aqui: o cartão do solicitante cresce pra baixo (e a página rola) com um texto
+    // de 300 caracteres; o que não pode é vazar pros lados
+    const box = await card.boundingBox()
+    const vp = page.viewportSize()!
+    expect(box).not.toBeNull()
+    expect(box!.x).toBeGreaterThanOrEqual(-1)
+    expect(box!.x + box!.width).toBeLessThanOrEqual(vp.width + 1)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true)
   })
 
   test("card do Kanban (admin) não vaza", async ({ page }) => {

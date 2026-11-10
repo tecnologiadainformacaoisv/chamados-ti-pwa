@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { SETORES, SETOR_FIELD_ID, TIPOS, TIPO_FIELD_ID, SOLUCAO_FIELD_ID, OPERADORES, PRIORITY_MAP, optionName } from "@/lib/constants"
 import { getCF, isAtrasado, venceLogo, fmtDate, fmtMs, type Task } from "@/lib/api"
+import { ateQuando } from "@/lib/ticket-helpers"
 import { COR_PRIO, FONTE, INK, LINE, MUTED, NAVY, NORMAL, URGENT } from "@/lib/mvp-visual"
 
 // Fila de atendimento (pedido do usuário, 2026-10-19: "gostaria deste tipo de lista", do protótipo):
@@ -17,18 +18,6 @@ function atendenteDe(t: Task): string {
   const a = t.assignees?.[0]
   if (!a) return "Sem atendente"
   return OPERADORES[String(a.id)] || a.username || `#${a.id}`
-}
-
-// "até 11:22", "até amanhã 08:50" ou "até 22/10 08:50": o prazo como a pessoa fala, não como o banco guarda.
-function ateQuando(due: number): string {
-  const d = new Date(due)
-  const hoje = new Date()
-  const amanha = new Date(hoje)
-  amanha.setDate(hoje.getDate() + 1)
-  const hora = d.toLocaleTimeString("pt-BR", HORA)
-  if (d.toDateString() === hoje.toDateString()) return `até ${hora}`
-  if (d.toDateString() === amanha.toDateString()) return `até amanhã ${hora}`
-  return `até ${fmtDate(due)}`
 }
 
 function quando(t: Task): { texto: string; cor: string; peso: number } {

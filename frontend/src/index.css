@@ -163,6 +163,7 @@
    (mouse wheel/touch/teclado), só a barra visual some — mesmo comportamento do
    app antigo, não trava a página numa altura fixa. */
 body.app-solicitante {
+  font-family: "Atkinson Hyperlegible Next", "Segoe UI", system-ui, sans-serif;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
@@ -253,7 +254,7 @@ body.app-solicitante::-webkit-scrollbar {
    visível) — `bg-muted/30` (usado até aqui) lava quase pra branco puro. Só pro app
    do solicitante (admin usa `bg-muted/30` de propósito, sem essa queixa). */
 .bg-app-shell {
-  background: #f0f4f8;
+  background: #edf0f2; /* mesmo cinza-azulado do protótipo */
 }
 /* Pill de contagem nas abas (Meus Chamados/Histórico) — mesmo `.count-pill` do
    vanilla (fundo levemente tingido de primary, texto primary, bem arredondado). */

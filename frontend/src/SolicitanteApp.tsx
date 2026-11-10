@@ -97,16 +97,13 @@ function SolicitanteShell() {
     // quase pra branco puro; #f0f4f8 (index.css) é o valor real do vanilla.
     <div className="min-h-svh bg-app-shell">
       <OfflineBanner />
-      <header className="bg-brand-gradient flex h-16 items-center justify-between px-4 text-primary-foreground shadow-[0_2px_12px_rgba(0,0,0,0.2)]">
+      <header className="bg-brand-gradient flex h-14 items-center justify-between px-4 text-primary-foreground shadow-[0_2px_12px_rgba(0,0,0,0.2)]">
         <div className="flex items-center gap-3">
           {/* w-auto + brightness-0 invert — ver comentário em app-header.tsx
               (mesmo achado 2026-08-14: logo esmagada numa caixa quadrada e com
               cores erradas por causa de invert() sozinho, sem brightness-0 antes) */}
-          <img src={logoIsv} alt="" className="h-10 w-auto brightness-0 invert" />
-          <div className="leading-tight">
-            <p className="text-sm font-semibold">Chamados de TI</p>
-            <p className="text-xs text-primary-foreground/70">{userName}</p>
-          </div>
+          <img src={logoIsv} alt="" className="h-9 w-auto brightness-0 invert" />
+          <p className="text-[0.95rem] font-bold">Chamados de TI</p>
         </div>
         <Button
           size="icon"
@@ -122,13 +119,25 @@ function SolicitanteShell() {
 
       <main className="mx-auto max-w-2xl p-4">
         <NotifBanner sessionToken={sessionToken} />
+        <div className="mb-3 px-1">
+          <h1 className="m-0 text-[1.35rem] leading-tight font-bold">Olá, {userName.split(" ")[0]}</h1>
+          <p className="m-0 text-[0.95rem] text-[#51636F]" aria-live="polite">
+            {tasksQuery.isLoading
+              ? "Buscando seus chamados…"
+              : ativos.length === 0
+                ? "Você não tem chamados em andamento."
+                : ativos.length === 1
+                  ? "Você tem 1 chamado em andamento."
+                  : `Você tem ${ativos.length} chamados em andamento.`}
+          </p>
+        </div>
         <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="w-full">
-            <TabsTrigger value="novo-chamado" className="min-h-11 flex-1">Novo Chamado</TabsTrigger>
-            <TabsTrigger value="meus-chamados" className="min-h-11 flex-1 gap-1.5">
+          <TabsList className={ABAS_LISTA}>
+            <TabsTrigger value="novo-chamado" className={ABA}>Novo Chamado</TabsTrigger>
+            <TabsTrigger value="meus-chamados" className={`${ABA} gap-1.5`}>
               Meus Chamados{ativos.length > 0 && <span className="count-pill">{ativos.length}</span>}
             </TabsTrigger>
-            <TabsTrigger value="todos-chamados" className="min-h-11 flex-1 gap-1.5">
+            <TabsTrigger value="todos-chamados" className={`${ABA} gap-1.5`}>
               Histórico{encerrados.length > 0 && <span className="count-pill">{encerrados.length}</span>}
             </TabsTrigger>
           </TabsList>
@@ -150,7 +159,10 @@ function SolicitanteShell() {
           <TabsContent value="meus-chamados" className="mt-4 flex flex-col gap-3">
             {tasksQuery.isLoading && <p className="py-8 text-center text-sm text-muted-foreground">Carregando…</p>}
             {!tasksQuery.isLoading && ativos.length === 0 && (
-              <p className="py-8 text-center text-sm text-muted-foreground">Nenhum chamado em aberto.</p>
+              <div className="flex flex-col items-center gap-3 rounded-md border border-dashed border-[#D5DCE1] bg-white px-4 py-10 text-center">
+                <p className="m-0 text-[0.95rem] text-[#51636F]">Nenhum chamado em aberto.</p>
+                <Button onClick={() => setTab("novo-chamado")}>Abrir um chamado</Button>
+              </div>
             )}
             {ativos.map((t) => <TicketCard key={t.id} task={t} />)}
           </TabsContent>
@@ -190,6 +202,11 @@ function SolicitanteBoot() {
   }
   return <SolicitanteSetup />
 }
+
+// Abas sublinhadas (redesign 2026-11-10): menos "caixa", mais leve; a aba atual ganha o traço azul.
+const ABAS_LISTA = "h-auto! w-full gap-0 rounded-none border-b border-[#D5DCE1] bg-transparent p-0"
+const ABA =
+  "min-h-12 flex-1 rounded-none border-0 border-b-[3px] border-transparent px-1 text-[0.95rem] data-[state=active]:border-b-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
 
 export function SolicitanteApp() {
   // Registra o Service Worker só aqui — admin.html/AdminApp nunca é PWA (ver CLAUDE.md,

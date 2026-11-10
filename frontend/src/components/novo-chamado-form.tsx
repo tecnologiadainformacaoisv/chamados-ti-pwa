@@ -127,15 +127,18 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-card shadow-md">
-      {/* Faixa colorida do topo do card — existia como .form-card-header no vanilla
-          (css/style.css) e nunca foi portada quando o formulário virou React na Fase
-          F4 (2026-08-11); achado 2026-08-14 (2ª rodada da regressão visual). */}
-      <div className="bg-brand-gradient px-6 py-5 text-center text-primary-foreground">
-        <h2 className="text-lg font-bold">Novo Chamado</h2>
-        <p className="text-sm text-primary-foreground/70">Preencha os dados abaixo pra abrir um chamado de suporte</p>
+    <div className="overflow-hidden rounded-md border border-[#D5DCE1] bg-card shadow-[0_1px_2px_rgba(10,61,98,0.06)]">
+      {/* Cabeçalho do cartão (redesign 2026-11-10): o gradiente grande saiu; o título e a promessa
+          do prazo ficam em texto simples, no mesmo tom do resto do app. A faixa azul de 7px à
+          esquerda é a mesma linguagem dos cartões de chamado. */}
+      <div className="flex border-b border-[#D5DCE1]">
+        <span className="w-[7px] shrink-0 bg-[#0A3D62]" aria-hidden="true" />
+        <div className="px-5 py-4">
+          <h2 className="m-0 text-[1.15rem] font-bold">Novo Chamado</h2>
+          <p className="m-0 text-[0.92rem] text-[#51636F]">Conte o que está acontecendo. Você acompanha tudo na aba Meus Chamados.</p>
+        </div>
       </div>
-      <form onSubmit={handleSubmit} onPaste={handlePaste} className="flex flex-col gap-4 p-6">
+      <form onSubmit={handleSubmit} onPaste={handlePaste} className="flex flex-col gap-5 p-5 pb-0">
       {/* Solicitante + Setor pareados na mesma linha (pedido do usuário, 2026-08-15:
           "coloque o Setor do lado de solicitante") — simétrico, mesma largura de
           coluna pros dois. Tipo de solicitação desceu pra sua própria linha, largura
@@ -173,13 +176,21 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
             ))}
           </SelectContent>
         </Select>
+        {/* Dica na hora da escolha: a pessoa sabe QUANDO a TI deve responder antes de enviar. */}
+        <p className="m-0 min-h-5 text-[0.88rem] text-[#51636F]" aria-live="polite">
+          {tipo ? `A TI deve aceitar em até ${(PRIORITY[CATEGORIA_PRIORIDADE[Number(tipo)] ?? 3] ?? PRIORITY[3]).slaLabel}.` : ""}
+        </p>
       </div>
 
       <div className="flex flex-col gap-1.5">
         <Label>Quem vai atender? *</Label>
-        <RadioGroup value={operador} onValueChange={setOperador} className="flex gap-4">
+        <RadioGroup value={operador} onValueChange={setOperador} className="grid grid-cols-2 gap-3">
           {Object.entries(OPERADORES).map(([id, nome]) => (
-            <label key={id} htmlFor={`op-${id}`} className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted">
+            <label
+              key={id}
+              htmlFor={`op-${id}`}
+              className="flex min-h-12 cursor-pointer items-center gap-2.5 rounded-md border-2 border-[#D5DCE1] bg-white px-3 py-2 text-[0.95rem] font-medium transition-colors hover:bg-[#E8F0F6] has-[[data-state=checked]]:border-[#0A3D62] has-[[data-state=checked]]:bg-[#E8F0F6] has-[[data-state=checked]]:font-bold"
+            >
               <RadioGroupItem value={id} id={`op-${id}`} />
               {nome}
             </label>
@@ -247,9 +258,13 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
 
       {/* w-full (não self-start) — .btn-full no vanilla era largura cheia/centralizado;
           "self-start" colava o botão na esquerda, achado 2026-08-14. */}
-      <Button type="submit" disabled={submitting} size="lg" className="w-full justify-center">
-        {submitting ? "Enviando…" : "Abrir Chamado"}
-      </Button>
+      {/* Barra do botão presa no rodapé da tela (celular): o formulário é comprido e o botão fica
+          sempre à mão, sem precisar rolar até o fim. */}
+      <div className="sticky bottom-0 -mx-5 border-t border-[#D5DCE1] bg-card px-5 py-3">
+        <Button type="submit" disabled={submitting} size="lg" className="w-full justify-center">
+          {submitting ? "Enviando…" : "Abrir Chamado"}
+        </Button>
+      </div>
       </form>
     </div>
   )
