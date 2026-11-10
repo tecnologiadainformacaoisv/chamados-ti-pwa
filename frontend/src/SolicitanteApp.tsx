@@ -103,8 +103,8 @@ function SolicitanteShell() {
           {/* w-auto + brightness-0 invert — ver comentário em app-header.tsx
               (mesmo achado 2026-08-14: logo esmagada numa caixa quadrada e com
               cores erradas por causa de invert() sozinho, sem brightness-0 antes) */}
-          <img src={logoIsv} alt="" className="h-9 w-auto brightness-0 invert" />
-          <p className="text-[0.95rem] font-bold whitespace-nowrap">Chamados de TI</p>
+          <img src={logoIsv} alt="" className="h-7 w-auto brightness-0 invert min-[430px]:h-9" />
+          <p className="text-[0.85rem] font-bold whitespace-nowrap min-[430px]:text-[0.95rem]">Chamados de TI</p>
         </div>
         <RelogioAoVivo />
         <Button
@@ -219,7 +219,7 @@ const ABA =
 function RelogioAoVivo() {
   const agora = useAgora(10_000)
   return (
-    <div className="ml-auto mr-1 flex items-center gap-2 text-white" title="A tela atualiza sozinha">
+    <div className="mr-1 ml-auto flex shrink-0 items-center gap-2 pl-2 text-white" title="A tela atualiza sozinha">
       <span className="ponto-ao-vivo h-2.5 w-2.5 rounded-full bg-[#43d17a]" aria-hidden="true" />
       <span className="hidden text-[0.8rem] whitespace-nowrap text-white/80 min-[430px]:inline">ao vivo</span>
       <span className="text-[1.05rem] font-bold tabular-nums" aria-label="Hora atual">
