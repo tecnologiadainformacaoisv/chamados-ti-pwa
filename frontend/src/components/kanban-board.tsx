@@ -13,7 +13,7 @@ import {
 } from "@/lib/constants"
 import { getCF, isAtrasado, venceLogo, fmtDate, fmtDateFull, type Task } from "@/lib/api"
 import { Clock } from "lucide-react"
-import { timeUntil } from "@/lib/ticket-helpers"
+import { numeroChamado, timeUntil } from "@/lib/ticket-helpers"
 import { Button } from "@/components/ui/button"
 
 const KANBAN_CARD_LIMIT = 100 // mesmo teto por coluna que admin.js já usa
@@ -160,6 +160,7 @@ function KanbanCard({
     >
       {/* break-words — achado 2026-08-17: line-clamp sozinho não impede overflow
           HORIZONTAL de uma palavra/string comprida sem espaço, só limita altura. */}
+      {numeroChamado(task) && <p className="mb-0.5 text-xs font-bold tabular-nums text-muted-foreground">{numeroChamado(task)}</p>}
       <p className="mb-2 line-clamp-2 text-sm font-medium break-words text-foreground" title={task.name}>
         {task.name || "(sem título)"}
       </p>

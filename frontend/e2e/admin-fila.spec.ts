@@ -32,6 +32,21 @@ test.describe("Gestão — fila de atendimento", () => {
     await expect(fila.locator('[data-task-id="z1"]')).toBeVisible()
   })
 
+  test("mostra o número do chamado na linha e a busca acha por número (142, #142 ou 0142)", async ({ page }) => {
+    const tasks = tarefas()
+    tasks[0] = makeTask({ ...tasks[0], numero: 142 })
+    tasks[1] = makeTask({ ...tasks[1], numero: 7 })
+    await abrirFila(page, tasks)
+    const fila = page.getByRole("region", { name: "Fila de atendimento" })
+    await expect(fila.locator('[data-task-id="a1"]')).toContainText("#0142")
+    await expect(fila.locator('[data-task-id="b1"]')).toContainText("#0007")
+    for (const termo of ["142", "#142", "0142"]) {
+      await page.locator("#busca-chamados").fill(termo)
+      await expect(fila.locator('[data-task-id="a1"]')).toBeVisible()
+      await expect(fila.locator('[data-task-id="b1"]')).toHaveCount(0)
+    }
+  })
+
   test("cada linha tem a próxima ação: Aceitar, Encerrar ou Retomar", async ({ page }) => {
     await abrirFila(page)
     const fila = page.getByRole("region", { name: "Fila de atendimento" })

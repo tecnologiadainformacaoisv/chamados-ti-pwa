@@ -9,6 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { OPERADORES, PRIORITY_MAP, SETORES, SETOR_FIELD_ID, SOLUCAO_FIELD_ID, STATUS_MAP, STATUS_ORDER, TIPOS, TIPO_FIELD_ID, optionName } from "@/lib/constants"
 import { getCF, fetchEventos, fetchAnexosAdmin, openAnexoAdmin, postEvento, deleteTask, isSessionError, fmtDate, fmtDateFull, type ChamadoEvento, type Task, type UpdatePayload } from "@/lib/api"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
+import { numeroChamado } from "@/lib/ticket-helpers"
 
 const SEM_ATRIBUICAO = "__sem__"
 
@@ -181,7 +182,10 @@ export function TaskModal({
     <Dialog open={!!task} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{task.name || "(sem título)"}</DialogTitle>
+          <DialogTitle>
+            {numeroChamado(task) && <span className="mr-2 tabular-nums text-muted-foreground">{numeroChamado(task)}</span>}
+            {task.name || "(sem título)"}
+          </DialogTitle>
           <p className="text-xs text-muted-foreground">
             Aberto em {fmtDateFull(task.date_created)}
             {task.date_closed ? ` · Encerrado em ${fmtDateFull(task.date_closed)}` : ""}

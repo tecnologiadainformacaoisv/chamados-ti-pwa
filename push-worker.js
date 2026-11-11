@@ -222,6 +222,7 @@ async function routeRequest(request, env) {
       if (pathname === '/admin/migrate-schema-solicitantes-email') return handleAdminMigrateSchemaSolicitantesEmail(request, env);
       if (pathname === '/admin/migrate-schema-solicitantes-origem') return handleAdminMigrateSchemaSolicitantesOrigem(request, env);
       if (pathname === '/admin/migrate-schema-chamados-nota') return handleAdminMigrateSchemaChamadosNota(request, env);
+      if (pathname === '/admin/migrate-schema-chamados-numero') return handleAdminMigrateSchemaChamadosNumero(request, env);
       if (pathname === '/admin/solicitantes') return handleAdminCreateSolicitante(request, env);
       if (pathname === '/admin/solicitantes/emails/bulk') return handleAdminBulkSetSolicitanteEmails(request, env);
       const solAtivoMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/ativo$/);
@@ -1596,16 +1597,26 @@ async function d1CreateChamado(env, data) {
   if (!D1_VALID_STATUSES.includes(row.status)) {
     throw new Error(`status inválido: ${row.status}`);
   }
-  const mainStmt = env.CHAMADOS_DB.prepare(
-    `INSERT INTO chamados
-      (id, name, description, status, priority, tipo, setor, solicitante, email, solucao,
-       assignee_id, due_date, date_created, date_closed, start_date, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
+  // `numero` (2026-11-11): número sequencial legível ("#0142") pra a pessoa citar o chamado
+  // por telefone/WhatsApp — o id continua sendo UUID. Calculado DENTRO do INSERT
+  // (MAX+1), não lido antes: o D1 serializa escritas, então dois chamados simultâneos não
+  // pegam o mesmo número.
+  const colunas = `id, name, description, status, priority, tipo, setor, solicitante, email, solucao,
+       assignee_id, due_date, date_created, date_closed, start_date, created_at, updated_at`;
+  const valores = [
     row.id, row.name, row.description, row.status, row.priority, row.tipo, row.setor,
     row.solicitante, row.email, row.solucao, row.assignee_id, row.due_date, row.date_created,
-    row.date_closed, row.start_date, row.created_at, row.updated_at
-  );
+    row.date_closed, row.start_date, row.created_at, row.updated_at,
+  ];
+  const marcas = '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?';
+  const mainStmt = env.CHAMADOS_DB.prepare(
+    `INSERT INTO chamados (${colunas}, numero)
+     VALUES (${marcas}, (SELECT COALESCE(MAX(numero), 0) + 1 FROM chamados))`
+  ).bind(...valores);
+  // Rede de segurança de deploy: o código novo pode entrar no ar um instante antes de
+  // POST /admin/migrate-schema-chamados-numero criar a coluna. Nesse intervalo grava sem
+  // número (a migração numera depois) em vez de impedir a abertura de chamados.
+  const mainSemNumero = () => env.CHAMADOS_DB.prepare(`INSERT INTO chamados (${colunas}) VALUES (${marcas})`).bind(...valores);
   // Mantém chamado_assignees em sincronia, no MESMO .batch() da linha principal — atômico
   // (B7 parte 2, fase 2, 2026-08-12; achado do revisor sobre handleAdminUpdateTask
   // aplicado aqui também, ver comentário em d1UpdateChamado). Aceita `data.assignee_ids`
@@ -1616,7 +1627,20 @@ async function d1CreateChamado(env, data) {
   // "quem está atribuído" — sem isso, qualquer chamado criado por aqui no futuro ficaria
   // invisível pro filtro "operador" e pro tempo médio de atendimento.
   const assigneeIds = data.assignee_ids ?? (row.assignee_id != null ? [row.assignee_id] : []);
-  await env.CHAMADOS_DB.batch([mainStmt, ...buildSetAssigneesStatements(env, row.id, assigneeIds)]);
+  let semColuna = false;
+  try {
+    await env.CHAMADOS_DB.batch([mainStmt, ...buildSetAssigneesStatements(env, row.id, assigneeIds)]);
+  } catch (err) {
+    if (!/no column named numero|no such column: numero/i.test(String(err && err.message))) throw err;
+    semColuna = true;
+    await env.CHAMADOS_DB.batch([mainSemNumero(), ...buildSetAssigneesStatements(env, row.id, assigneeIds)]);
+  }
+  // Devolve a linha COM o número que o banco atribuiu (o INSERT calcula no servidor).
+  row.numero = null;
+  if (!semColuna) {
+    const salvo = await env.CHAMADOS_DB.prepare('SELECT numero FROM chamados WHERE id = ?').bind(row.id).first();
+    row.numero = salvo?.numero ?? null;
+  }
   return d1Row(row);
 }
 
@@ -1698,6 +1722,7 @@ function d1RowToTaskShape(row) {
     assignees: assigneeIds.map(id => ({ id })),
     solicitante: row.solicitante || null,
     nota: row.nota ?? null,
+    numero: row.numero ?? null,
     due_date: row.due_date != null ? String(row.due_date) : null,
     date_created: String(row.date_created),
     date_updated: String(row.updated_at),
@@ -2476,6 +2501,43 @@ async function handleAdminMigrateSchemaChamadosNota(request, env) {
     if (!/duplicate column/i.test(err.message)) {
       return jsonRes({ error: `migração de schema falhou (nota): ${err.message}` }, 500);
     }
+  }
+  return jsonRes({ ok: true });
+}
+
+// =====================================================================
+// POST /admin/migrate-schema-chamados-numero — migração de schema ÚNICA (2026-11-11,
+// pré-implantação): número sequencial legível do chamado. Adiciona a coluna `numero` e
+// numera os chamados que já existem pela ordem de abertura (1 = o mais antigo). Idempotente:
+// o ALTER tolera "duplicate column" e a numeração só toca em chamados SEM número (rodar de
+// novo não renumera nada, e os que faltarem entram depois do maior número já em uso).
+// =====================================================================
+async function handleAdminMigrateSchemaChamadosNumero(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  try {
+    await env.CHAMADOS_DB.prepare(`ALTER TABLE chamados ADD COLUMN numero INTEGER`).run();
+  } catch (err) {
+    if (!/duplicate column/i.test(err.message)) {
+      return jsonRes({ error: `migração de schema falhou (numero): ${err.message}` }, 500);
+    }
+  }
+  try {
+    // Numera só os que ainda não têm número, do mais antigo pro mais novo, DEPOIS do maior
+    // número já em uso (assim um chamado criado entre o deploy e esta migração não colide).
+    const { results } = await env.CHAMADOS_DB.prepare(
+      `SELECT id FROM chamados WHERE numero IS NULL ORDER BY date_created ASC, id ASC`
+    ).all();
+    const semNumero = results || [];
+    if (semNumero.length) {
+      const maxRow = await env.CHAMADOS_DB.prepare(`SELECT COALESCE(MAX(numero), 0) AS m FROM chamados`).first();
+      let proximo = (maxRow?.m || 0) + 1;
+      const stmts = semNumero.map(r => env.CHAMADOS_DB.prepare(`UPDATE chamados SET numero = ? WHERE id = ? AND numero IS NULL`).bind(proximo++, r.id));
+      // lotes de 100: um .batch() é 1 subrequest, e assim nenhum lote fica gigante
+      for (let i = 0; i < stmts.length; i += 100) await env.CHAMADOS_DB.batch(stmts.slice(i, i + 100));
+    }
+    await env.CHAMADOS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_chamados_numero ON chamados (numero)`).run();
+  } catch (err) {
+    return jsonRes({ error: `numeração dos chamados falhou: ${err.message}` }, 500);
   }
   return jsonRes({ ok: true });
 }

@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { SETORES, SETOR_FIELD_ID, TIPOS, TIPO_FIELD_ID, SOLUCAO_FIELD_ID, OPERADORES, PRIORITY_MAP, optionName } from "@/lib/constants"
 import { getCF, isAtrasado, venceLogo, fmtDate, fmtMs, type Task } from "@/lib/api"
-import { ateQuando } from "@/lib/ticket-helpers"
+import { ateQuando, numeroChamado } from "@/lib/ticket-helpers"
 import { useAgora } from "@/hooks/use-agora"
 import { COR_PRIO, FONTE, INK, LINE, MUTED, NAVY, NORMAL, URGENT } from "@/lib/mvp-visual"
 
@@ -114,6 +114,7 @@ export function FilaAtendimento({
                 <span className="self-stretch" style={{ background: cor }} aria-hidden="true" />
                 <div className="min-w-0">
                   <p className="m-0 truncate font-bold" title={t.name}>
+                    {numeroChamado(t) && <span className="mr-2 font-bold tabular-nums" style={{ color: MUTED }}>{numeroChamado(t)}</span>}
                     {/* botão de verdade: abre o resumo pelo teclado/leitor de tela (a linha toda continua clicável com o mouse) */}
                     <button type="button" aria-expanded={expandido} className="max-w-full cursor-pointer truncate text-left font-bold focus-visible:outline focus-visible:outline-[3px] focus-visible:outline-offset-2 focus-visible:outline-[#0A3D62]">
                       {t.name || "(sem título)"}

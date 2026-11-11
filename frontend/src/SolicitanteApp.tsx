@@ -11,6 +11,7 @@ import { NovoChamadoForm } from "@/components/novo-chamado-form"
 import { TicketCard } from "@/components/ticket-card"
 import { WaModal } from "@/components/wa-modal"
 import { NotifBanner } from "@/components/notif-banner"
+import { IosInstallHint } from "@/components/ios-install-hint"
 import { OfflineBanner } from "@/components/offline-banner"
 import { InstallBanner } from "@/components/install-banner"
 import { fetchMyTasks, isAuthExpired } from "@/lib/app-api"
@@ -120,6 +121,7 @@ function SolicitanteShell() {
       </header>
 
       <main className="mx-auto max-w-2xl p-4">
+        <IosInstallHint />
         <NotifBanner sessionToken={sessionToken} />
         <div className="mb-4 flex items-center gap-3 px-1">
           <span className="bg-brand-gradient grid h-12 w-12 shrink-0 place-items-center rounded-full text-lg font-bold text-white shadow-md" aria-hidden="true">

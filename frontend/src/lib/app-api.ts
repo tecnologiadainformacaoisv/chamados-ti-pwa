@@ -28,13 +28,31 @@ async function authRequest(path: string, body: unknown): Promise<{ token: string
 // lista" por e-mail+senha. O servidor resolve email->nome internamente
 // (d1GetSolicitanteByEmail) e continua devolvendo `name` na resposta — a sessão em
 // si (token, identidade interna) não muda nada, só o campo de entrada do login.
-export async function loginOrRegister(email: string, password: string): Promise<{ token: string; name: string }> {
+//
+// Primeiro acesso com confirmação (2026-11-11): a senha do primeiro acesso é definitiva, então
+// um erro de digitação às cegas virava pedido de reset na TI. Quando o servidor diz que ainda
+// não há senha (404), lança PrimeiroAcessoError em vez de cadastrar na hora — a tela pede
+// "Repita a senha" e chama de novo com `confirmacao`.
+export class PrimeiroAcessoError extends Error {
+  constructor() {
+    super("Primeiro acesso: crie sua senha repetindo-a no campo abaixo.")
+  }
+}
+
+export async function loginOrRegister(
+  email: string,
+  password: string,
+  confirmacao?: string
+): Promise<{ token: string; name: string }> {
+  // Já estamos na etapa de confirmação: não tenta logar de novo, só confere e cadastra.
+  if (confirmacao !== undefined) {
+    if (confirmacao !== password) throw new AuthError("As duas senhas não são iguais. Digite de novo.")
+    return await authRequest("/register", { email, password })
+  }
   try {
     return await authRequest("/login", { email, password })
   } catch (err) {
-    if (err instanceof AuthError && err.status === 404) {
-      return await authRequest("/register", { email, password })
-    }
+    if (err instanceof AuthError && err.status === 404) throw new PrimeiroAcessoError()
     throw err
   }
 }
@@ -154,9 +172,23 @@ export async function fetchAnexoBlob(sessionToken: string, url: string): Promise
 // (2026-08-13, migração de saída da ClickUp): passou a ler de uma tabela própria no D1
 // (`solicitantes`, gerida pela TI numa tela nova no admin) em vez do campo customizado
 // da ClickUp — já vem ordenado do servidor, sem precisar reconstruir orderindex/nome.
+//
+// Tempo limite (2026-11-11): sem isso, uma rede que "pendura" deixava a tela de
+// "Carregando…" girando pra sempre. Passados BOOT_TIMEOUT_MS vira erro, e o app mostra
+// "Não foi possível conectar" com o botão de tentar de novo.
+const BOOT_TIMEOUT_MS = 12_000
 export async function fetchSolicitanteNomes(): Promise<string[]> {
-  const res = await fetch(`${API_BASE}/solicitantes`, { headers: { "X-App-Secret": APP_SHARED_SECRET } })
-  if (!res.ok) throw new Error(`Erro HTTP ${res.status} ao buscar solicitantes`)
-  const data = await res.json()
-  return data.names ?? []
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), BOOT_TIMEOUT_MS)
+  try {
+    const res = await fetch(`${API_BASE}/solicitantes`, { headers: { "X-App-Secret": APP_SHARED_SECRET }, signal: ctrl.signal })
+    if (!res.ok) throw new Error(`Erro HTTP ${res.status} ao buscar solicitantes`)
+    const data = await res.json()
+    return data.names ?? []
+  } catch (err) {
+    if (ctrl.signal.aborted) throw new Error("A conexão demorou demais para responder.")
+    throw err
+  } finally {
+    clearTimeout(timer)
+  }
 }

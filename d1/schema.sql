@@ -32,13 +32,17 @@ CREATE TABLE IF NOT EXISTS chamados (
   start_date    INTEGER,            -- epoch ms — preenchido quando status vira "em atendimento" (início da fase de finalização do SLA)
   created_at    INTEGER NOT NULL,   -- epoch ms — bookkeeping interno (quando a linha foi inserida neste banco)
   updated_at    INTEGER NOT NULL,   -- epoch ms — bookkeeping interno (última mutação)
-  nota          INTEGER             -- 2026-09-21, pedido do usuário: nota de satisfação (1-5)
+  nota          INTEGER,            -- 2026-09-21, pedido do usuário: nota de satisfação (1-5)
                                       -- que o solicitante dá ao próprio chamado depois de
                                       -- encerrado. NULL = ainda não avaliado. Em produção,
                                       -- adicionada via `ALTER TABLE` (ver
                                       -- POST /admin/migrate-schema-chamados-nota) numa tabela
                                       -- que já existia — este CREATE TABLE só importa pra um
                                       -- banco novo do zero.
+  numero        INTEGER             -- 2026-11-11: número sequencial legível ("#0142") pra citar o
+                                      -- chamado por telefone/WhatsApp (o id é UUID). Atribuído no
+                                      -- INSERT (MAX+1). Em produção, via
+                                      -- POST /admin/migrate-schema-chamados-numero.
 );
 
 -- Índices nos mesmos campos que /admin/tasks já filtra hoje (status, setor, tipo,

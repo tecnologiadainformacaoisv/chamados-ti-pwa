@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { MessageCircle, Paperclip, Star } from "lucide-react"
 import { getCF, fmtDate, type Attachment, type Task } from "@/lib/api"
-import { ateQuando, isOverdue, overdueFor, timeAgo, waLinkForTask } from "@/lib/ticket-helpers"
+import { ateQuando, isOverdue, numeroChamado, overdueFor, timeAgo, waLinkForTask } from "@/lib/ticket-helpers"
 import { OPERADORES, PRIORITY_MAP, SETORES, SETOR_FIELD_ID, SOLUCAO_FIELD_ID, TIPOS, TIPO_FIELD_ID, optionName, type StatusKey } from "@/lib/constants"
 import { COR_PRIO, INK, LINE, MUTED, NORMAL } from "@/lib/mvp-visual"
 import { useSessionAuth } from "@/hooks/use-session-auth"
@@ -220,6 +220,9 @@ export function TicketCard({ task }: { task: Task }) {
 
         {/* break-words — achado 2026-08-17: título/descrição são texto livre do próprio solicitante,
             sem isso uma string comprida sem espaço estourava a largura do card. */}
+        {numeroChamado(task) && (
+          <p className="m-0 mb-0.5 text-[0.85rem] font-bold tabular-nums" style={{ color: MUTED }}>Chamado {numeroChamado(task)}</p>
+        )}
         <p className="m-0 text-[1.05rem] leading-snug font-bold break-words">{task.name || "(sem título)"}</p>
         {desc && <p className="mt-1 mb-0 text-[0.92rem] break-words" style={{ color: MUTED }}>{desc}</p>}
 

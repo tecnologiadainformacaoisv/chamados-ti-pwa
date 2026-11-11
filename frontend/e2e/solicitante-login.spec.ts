@@ -101,19 +101,81 @@ test.describe("Login/cadastro do solicitante", () => {
     await expect(page.getByRole("button", { name: "Tentar de novo" })).toBeVisible()
   })
 
-  test("primeiro acesso: login 404 cai pra registro automático", async ({ page }) => {
+  // Primeiro acesso com confirmação (2026-11-11): login 404 não cadastra na hora, pede a senha
+  // de novo; só cadastra quando as duas batem.
+  test("primeiro acesso: login 404 pede 'Repita a senha' e só cadastra quando as duas batem", async ({ page }) => {
     await mockSolicitanteRoutes(page)
-    // Sobrescreve /auth/login pra simular "sem senha cadastrada" (404) — loginOrRegister
-    // deve cair sozinho pro /auth/register (já mockado com sucesso pelos defaults).
     await page.route("**/auth/login", (route) => route.fulfill({ status: 404, contentType: "application/json", body: "{}" }))
+    let senhaCadastrada = ""
+    await page.route("**/auth/register", (route) => {
+      senhaCadastrada = (route.request().postDataJSON() as { password?: string }).password ?? ""
+      return route.fallback()
+    })
     await page.goto("/")
 
     await page.locator("#setup-email").fill("fulano@institutosaovicente.com.br")
     await page.locator("#setup-password").fill("senha12345")
     await page.getByRole("button", { name: "Entrar" }).click()
 
+    // ainda não cadastrou: apareceu o campo de confirmação
+    await expect(page.locator("#setup-password-confirm")).toBeVisible()
+    await expect(page.getByText("Este é o seu primeiro acesso")).toBeVisible()
+    expect(senhaCadastrada).toBe("")
+
+    // senhas diferentes: erro em português, não cadastra
+    await page.locator("#setup-password-confirm").fill("senha12346")
+    await page.getByRole("button", { name: "Criar senha e entrar" }).click()
+    await expect(page.getByText("As duas senhas não são iguais. Digite de novo.")).toBeVisible()
+    expect(senhaCadastrada).toBe("")
+
+    // senhas iguais: cadastra e entra
+    await page.locator("#setup-password-confirm").fill("senha12345")
+    await page.getByRole("button", { name: "Criar senha e entrar" }).click()
     await expect(page.getByRole("tab", { name: "Novo Chamado" })).toBeVisible()
+    expect(senhaCadastrada).toBe("senha12345")
     expect(await page.evaluate(() => localStorage.getItem("session_token"))).toBe("fake-session-token")
+  })
+
+  test("primeiro acesso: trocar o e-mail esconde a confirmação (valia pro e-mail anterior)", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    await page.route("**/auth/login", (route) => route.fulfill({ status: 404, contentType: "application/json", body: "{}" }))
+    await page.goto("/")
+    await page.locator("#setup-email").fill("fulano@institutosaovicente.com.br")
+    await page.locator("#setup-password").fill("senha12345")
+    await page.getByRole("button", { name: "Entrar" }).click()
+    await expect(page.locator("#setup-password-confirm")).toBeVisible()
+    await page.locator("#setup-email").fill("outra@institutosaovicente.com.br")
+    await expect(page.locator("#setup-password-confirm")).toHaveCount(0)
+  })
+
+  test("primeiro acesso: senha com menos de 8 caracteres é barrada na confirmação, sem cadastrar", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    await page.route("**/auth/login", (route) => route.fulfill({ status: 404, contentType: "application/json", body: "{}" }))
+    let chamouRegistro = false
+    await page.route("**/auth/register", (route) => { chamouRegistro = true; return route.fallback() })
+    await page.goto("/")
+    await page.locator("#setup-email").fill("fulano@institutosaovicente.com.br")
+    await page.locator("#setup-password").fill("curta")
+    await page.getByRole("button", { name: "Entrar" }).click()
+    await page.locator("#setup-password-confirm").fill("curta")
+    await page.getByRole("button", { name: "Criar senha e entrar" }).click()
+    await expect(page.getByText("A senha precisa ter pelo menos 8 caracteres.")).toBeVisible()
+    expect(chamouRegistro).toBe(false)
+  })
+
+  test("login mostra como pedir ajuda pra quem esqueceu a senha", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    await page.goto("/")
+    const link = page.getByRole("link", { name: "Peça à TI pelo WhatsApp" })
+    await expect(link).toBeVisible()
+    await expect(link).toHaveAttribute("href", /^https:\/\/wa\.me\/\d+\?text=.*senha/)
+  })
+
+  test("quem já tem sessão salva entra mesmo com a lista de solicitantes fora do ar", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    await page.route("**/api/solicitantes", (route) => route.fulfill({ status: 500, contentType: "application/json", body: "{}" }))
+    await gotoSolicitanteLoggedIn(page)
+    await expect(page.getByRole("tab", { name: "Novo Chamado" })).toBeVisible()
   })
 
   test("login normal entra direto na tela principal", async ({ page }) => {

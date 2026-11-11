@@ -2431,6 +2431,73 @@ async function test(name, fn) {
     assert.strictEqual(inexistente.status, 404);
   });
 
+  // 8) número sequencial legível do chamado (2026-11-11)
+  console.log('--- número do chamado ---');
+  await test('chamados novos recebem numero 1, 2, 3… e ele aparece em /api/my-tasks', async () => {
+    const nEnv = { ...hEnv, CHAMADOS_DB: freshD1(), SUBSCRIPTIONS: makeMockKV() };
+    const a = await d1CreateChamado(nEnv, { name: 'A', priority: 3, tipo: 0, setor: 0, solicitante: 'Fulano' });
+    const b = await d1CreateChamado(nEnv, { name: 'B', priority: 3, tipo: 0, setor: 0, solicitante: 'Fulano' });
+    const c = await d1CreateChamado(nEnv, { name: 'C', priority: 3, tipo: 0, setor: 0, solicitante: 'Fulano' });
+    assert.deepStrictEqual([a.numero, b.numero, c.numero], [1, 2, 3]);
+    assert.strictEqual((await d1GetChamado(nEnv, b.id)).numero, 2);
+    assert.strictEqual((await d1GetChamado(nEnv, a.id)).numero, 1);
+    assert.strictEqual((await d1GetChamado(nEnv, c.id)).numero, 3);
+  });
+  await test('o número chega ao solicitante pela API (/api/tasks e /api/my-tasks)', async () => {
+    const t = await cadastra('Pessoa Numero');
+    const criado = await doPost('/api/tasks', comSessao(t), { name: 'Com número', custom_fields: tipoOk });
+    assert.strictEqual(criado.status, 200);
+    const corpo = await criado.json();
+    assert.ok(Number.isInteger(corpo.numero) && corpo.numero > 0, 'resposta da criação traz o numero');
+    const lista = await (await worker.fetch(req('GET', '/api/my-tasks', { headers: comSessao(t) }), hEnv)).json();
+    assert.strictEqual(lista.tasks.find(x => x.id === corpo.id).numero, corpo.numero);
+  });
+  await test('migração do número: exige admin, numera os antigos por data de abertura e é idempotente', async () => {
+    const mEnv = { ...hEnv, CHAMADOS_DB: freshD1(), SUBSCRIPTIONS: makeMockKV() };
+    const t0 = Date.now() - 100000;
+    await seedChamadoComId(mEnv, 'z-mais-novo', { name: 'Novo', priority: 3, tipo: 0, setor: 0, solicitante: 'X', date_created: t0 + 2000 });
+    await seedChamadoComId(mEnv, 'a-mais-antigo', { name: 'Antigo', priority: 3, tipo: 0, setor: 0, solicitante: 'X', date_created: t0 });
+    await seedChamadoComId(mEnv, 'm-meio', { name: 'Meio', priority: 3, tipo: 0, setor: 0, solicitante: 'X', date_created: t0 + 1000 });
+    const sem = await worker.fetch(req('POST', '/admin/migrate-schema-chamados-numero', { headers: {} }), mEnv);
+    assert.strictEqual(sem.status, 403);
+    const r1 = await worker.fetch(req('POST', '/admin/migrate-schema-chamados-numero', { headers: ADM }), mEnv);
+    assert.strictEqual(r1.status, 200);
+    const num = async (id) => (await d1GetChamado(mEnv, id)).numero;
+    assert.deepStrictEqual([await num('a-mais-antigo'), await num('m-meio'), await num('z-mais-novo')], [1, 2, 3]);
+    // um chamado novo depois da migração continua a sequência; rodar de novo não renumera nada
+    const novo = await d1CreateChamado(mEnv, { name: 'Depois', priority: 3, tipo: 0, setor: 0, solicitante: 'X' });
+    assert.strictEqual(novo.numero, 4);
+    const r2 = await worker.fetch(req('POST', '/admin/migrate-schema-chamados-numero', { headers: ADM }), mEnv);
+    assert.strictEqual(r2.status, 200);
+    assert.deepStrictEqual([await num('a-mais-antigo'), await num('m-meio'), await num('z-mais-novo'), await num(novo.id)], [1, 2, 3, 4]);
+  });
+  await test('migração do número: chamado criado ANTES dela (entre deploy e migração) não colide com os antigos', async () => {
+    const gEnv = { ...hEnv, CHAMADOS_DB: freshD1(), SUBSCRIPTIONS: makeMockKV() };
+    const t0 = Date.now() - 100000;
+    await seedChamadoComId(gEnv, 'velho-1', { name: 'V1', priority: 3, tipo: 0, setor: 0, solicitante: 'X', date_created: t0 });
+    await seedChamadoComId(gEnv, 'velho-2', { name: 'V2', priority: 3, tipo: 0, setor: 0, solicitante: 'X', date_created: t0 + 1000 });
+    const entreOsDois = await d1CreateChamado(gEnv, { name: 'Criado no intervalo', priority: 3, tipo: 0, setor: 0, solicitante: 'X' });
+    assert.strictEqual(entreOsDois.numero, 1); // MAX de NULLs = 0, então começa em 1
+    await worker.fetch(req('POST', '/admin/migrate-schema-chamados-numero', { headers: ADM }), gEnv);
+    const numeros = [(await d1GetChamado(gEnv, 'velho-1')).numero, (await d1GetChamado(gEnv, 'velho-2')).numero, (await d1GetChamado(gEnv, entreOsDois.id)).numero];
+    assert.strictEqual(new Set(numeros).size, 3, `números repetidos: ${numeros}`);
+    assert.deepStrictEqual(numeros.slice(0, 2), [2, 3]);
+  });
+
+  await test('deploy antes da migração: sem a coluna numero, abrir chamado ainda funciona (sem número)', async () => {
+    const raw = new DatabaseSync(':memory:');
+    raw.exec(fs.readFileSync(path.join(__dirname, '..', 'd1', 'schema.sql'), 'utf8'));
+    raw.exec('ALTER TABLE chamados DROP COLUMN numero');
+    const sEnv = { ...hEnv, CHAMADOS_DB: makeD1FromSqlite(raw), SUBSCRIPTIONS: makeMockKV() };
+    const c = await d1CreateChamado(sEnv, { name: 'Sem coluna', priority: 3, tipo: 0, setor: 0, solicitante: 'X', assignee_id: 170628721 });
+    assert.strictEqual(c.numero, null);
+    assert.strictEqual((await d1GetChamado(sEnv, c.id)).name, 'Sem coluna');
+    // e a migração, rodada depois, cria a coluna e numera
+    const r = await worker.fetch(req('POST', '/admin/migrate-schema-chamados-numero', { headers: ADM }), sEnv);
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual((await d1GetChamado(sEnv, c.id)).numero, 1);
+  });
+
   console.log(`\n${passed} passaram, ${failed} falharam`);
   process.exit(failed > 0 ? 1 : 0);
 })();

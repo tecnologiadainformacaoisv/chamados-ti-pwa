@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { TIPO_FIELD_ID, SETOR_FIELD_ID, TIPOS, SETORES, PRIORITY_MAP, OPERADORES, optionName } from "@/lib/constants"
 import { getCF, isSessionError, postTaskUpdate, fmtDate, type Task } from "@/lib/api"
-import { timeUntil } from "@/lib/ticket-helpers"
+import { numeroChamado, timeUntil } from "@/lib/ticket-helpers"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 
 // A "caixa" que aparece quando um chamado novo chega (2026-08-13) — diferente do modal
@@ -59,6 +59,7 @@ export function NovoChamadoAlert({ fila, onFechar }: { fila: Task[]; onFechar: (
           {/* break-words — achado 2026-08-17: título é texto livre do solicitante
               (sem espaço garantido), uma string comprida sem quebra natural
               estourava a largura do modal inteiro (visto em produção). */}
+          {numeroChamado(task) && <p className="-mb-2 text-sm font-bold tabular-nums text-muted-foreground">Chamado {numeroChamado(task)}</p>}
           <p className="text-lg font-semibold break-words text-foreground">{task.name || "(sem título)"}</p>
           <div className="flex min-w-0 flex-wrap gap-2 text-xs text-muted-foreground">
             <span className="max-w-full truncate rounded-full border border-border px-2 py-0.5">{task.solicitante || "—"}</span>

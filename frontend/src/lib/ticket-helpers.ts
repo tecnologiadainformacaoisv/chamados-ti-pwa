@@ -69,6 +69,23 @@ export function ateQuando(due: number): string {
   return `até ${dia} ${hora}`
 }
 
+// Número sequencial legível do chamado ("#0142"), pra citar por telefone/WhatsApp. null
+// enquanto o servidor não tiver numerado (chamado antigo ou migração ainda não rodada).
+export function numeroChamado(task: Pick<Task, "numero">): string | null {
+  const n = Number(task.numero)
+  return Number.isInteger(n) && n > 0 ? `#${String(n).padStart(4, "0")}` : null
+}
+
+// Busca por número: "142", "#142" ou "0142" acham o chamado #0142. Só vale com 2+ dígitos
+// ou "#", pra uma letra/dígito solto na busca não puxar chamado à toa.
+export function bateNumero(task: Pick<Task, "numero">, termo: string): boolean {
+  const n = Number(task.numero)
+  if (!Number.isInteger(n) || n <= 0) return false
+  const t = termo.trim().replace(/^#/, "")
+  if (!/^\d+$/.test(t) || (t.length < 2 && !termo.trim().startsWith("#"))) return false
+  return Number(t) === n
+}
+
 export function waNumberForTask(task: Task): string {
   const assigneeId = task.assignees?.[0]?.id != null ? String(task.assignees[0].id) : null
   return (assigneeId && OPERADOR_WHATSAPP[assigneeId]) || WA_NUMBER_PADRAO
@@ -76,6 +93,7 @@ export function waNumberForTask(task: Task): string {
 
 export function waLinkForTask(task: Task): string {
   const status = STATUS_MAP[(task.status?.status as StatusKey) ?? "aberto"]?.label ?? "Aberto"
-  const msg = `Olá! Gostaria de informações sobre meu chamado de TI:\n*${task.name}*\nStatus: ${status}`
+  const num = numeroChamado(task)
+  const msg = `Olá! Gostaria de informações sobre meu chamado de TI${num ? ` ${num}` : ""}:\n*${task.name}*\nStatus: ${status}`
   return `https://wa.me/${waNumberForTask(task)}?text=${encodeURIComponent(msg)}`
 }

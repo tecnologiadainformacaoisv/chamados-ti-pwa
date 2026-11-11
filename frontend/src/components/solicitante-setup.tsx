@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { PrimeiroAcessoError } from "@/lib/app-api"
+import { WA_NUMBER_PADRAO } from "@/lib/constants"
 import iconIsv from "@/assets/icon-isv.svg"
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -59,11 +61,16 @@ export function SolicitanteSetup() {
   const [modoExterno, setModoExterno] = useState(false)
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  // Primeiro acesso (2026-11-11): o servidor ainda não tem senha pra esse e-mail, então a tela
+  // pede pra repetir a senha antes de cadastrar (um erro de digitação aqui seria definitivo).
+  const [primeiroAcesso, setPrimeiroAcesso] = useState(false)
+  const [confirmacao, setConfirmacao] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Foco vai pro campo com problema quando a validação falha (leitor de tela e teclado).
   const emailRef = useRef<HTMLInputElement>(null)
   const passwordRef = useRef<HTMLInputElement>(null)
+  const confirmacaoRef = useRef<HTMLInputElement>(null)
 
   if (bootError) {
     return (
@@ -95,16 +102,38 @@ export function SolicitanteSetup() {
       passwordRef.current?.focus()
       return
     }
+    if (primeiroAcesso) {
+      if (password.length < 8) {
+        setError(MSG_SENHA)
+        passwordRef.current?.focus()
+        return
+      }
+      if (confirmacao !== password) {
+        setError("As duas senhas não são iguais. Digite de novo.")
+        confirmacaoRef.current?.focus()
+        return
+      }
+    }
     setSubmitting(true)
     setError(null)
     try {
-      await login(email.trim(), password)
+      await login(email.trim(), password, primeiroAcesso ? confirmacao : undefined)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Não foi possível entrar. Verifique sua conexão.")
+      if (err instanceof PrimeiroAcessoError) {
+        // Ainda sem senha: abre o campo "Repita a senha" e espera a pessoa confirmar.
+        setPrimeiroAcesso(true)
+        setConfirmacao("")
+        setError(null)
+        setTimeout(() => confirmacaoRef.current?.focus(), 0)
+      } else {
+        setError(err instanceof Error ? err.message : "Não foi possível entrar. Verifique sua conexão.")
+      }
     } finally {
       setSubmitting(false)
     }
   }
+
+  const linkEsqueci = `https://wa.me/${WA_NUMBER_PADRAO}?text=${encodeURIComponent("Olá! Esqueci minha senha do sistema de chamados de TI. Pode resetar pra mim?")}`
 
   return (
     <div className="relative flex min-h-svh items-center justify-center p-4">
@@ -138,12 +167,16 @@ export function SolicitanteSetup() {
                   autoComplete="username"
                   placeholder="voce@institutosaovicente.com.br"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(e) => {
+                    setEmail(e.target.value)
+                    // Trocou o e-mail: a etapa de "primeiro acesso" valia pro e-mail anterior.
+                    if (primeiroAcesso) { setPrimeiroAcesso(false); setConfirmacao("") }
+                  }}
                 />
               </div>
 
               <div className="flex flex-col gap-2">
-                <Label htmlFor="setup-password">Senha *</Label>
+                <Label htmlFor="setup-password">{primeiroAcesso ? "Crie sua senha *" : "Senha *"}</Label>
                 <PasswordInput
                   id="setup-password"
                   inputRef={passwordRef}
@@ -154,10 +187,28 @@ export function SolicitanteSetup() {
                   onChange={setPassword}
                 />
                 <p id="setup-password-hint" className="rounded-md bg-muted px-2.5 py-2 text-xs text-foreground">
-                  <strong>Primeiro acesso?</strong> A senha que você digitar agora será a sua senha. Use o olho para
-                  conferir antes de entrar (mínimo 8 caracteres).
+                  <strong>Primeiro acesso?</strong> A senha que você digitar agora será a sua senha. Vamos pedir para
+                  você repeti-la (mínimo 8 caracteres).
                 </p>
               </div>
+
+              {primeiroAcesso && (
+                <div className="flex flex-col gap-2" role="group" aria-label="Confirmação da senha">
+                  <p className="m-0 rounded-md bg-primary/10 px-2.5 py-2 text-sm font-medium text-foreground" role="status">
+                    Este é o seu primeiro acesso. Crie sua senha e repita no campo abaixo. Se o e-mail estiver errado,
+                    corrija-o acima.
+                  </p>
+                  <Label htmlFor="setup-password-confirm">Repita a senha *</Label>
+                  <PasswordInput
+                    id="setup-password-confirm"
+                    inputRef={confirmacaoRef}
+                    autoComplete="new-password"
+                    placeholder="Digite a mesma senha de novo"
+                    value={confirmacao}
+                    onChange={setConfirmacao}
+                  />
+                </div>
+              )}
 
               {error && (
                 <Alert variant="destructive">
@@ -166,8 +217,17 @@ export function SolicitanteSetup() {
               )}
 
               <Button type="submit" disabled={submitting}>
-                {submitting ? "Entrando…" : "Entrar"}
+                {submitting ? "Entrando…" : primeiroAcesso ? "Criar senha e entrar" : "Entrar"}
               </Button>
+
+              {/* Sem recuperação automática por e-mail: quem esqueceu a senha pede o reset à TI
+                  (tela Usuários do painel), então o caminho precisa estar à vista. */}
+              <p className="m-0 text-center text-sm text-muted-foreground">
+                Esqueceu a senha?{" "}
+                <a href={linkEsqueci} target="_blank" rel="noreferrer" className="font-medium text-primary underline underline-offset-2">
+                  Peça à TI pelo WhatsApp
+                </a>
+              </p>
             </form>
 
             {/* variant="secondary", não "outline" — --background e --card são o MESMO

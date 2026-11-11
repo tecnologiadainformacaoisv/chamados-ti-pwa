@@ -18,6 +18,7 @@ import { useIsMobile } from "@/hooks/use-mobile"
 import { getCF, compararUrgencia, isAtrasado, venceLogo, fetchSolicitanteNomes, fetchTasks, isSessionError, postTaskUpdate, postBulkUpdate, createAdminTask, type CreateTaskPayload, type Filtros, type Task, type UpdatePayload } from "@/lib/api"
 import { LISTA_POLL_MS, OPERADORES, SOLUCAO_FIELD_ID, STATUS_ORDER } from "@/lib/constants"
 import { downloadTasksCsv } from "@/lib/export-csv"
+import { bateNumero } from "@/lib/ticket-helpers"
 
 type ViewMode = "fila" | "quadro" | "tabela"
 
@@ -102,7 +103,7 @@ export function GestaoView() {
     // A busca olha o título E o nome de quem abriu (achado de UX 2026-10-16: "achar o chamado
     // da Fulana" só funcionava pelo filtro de Solicitante, a busca ignorava o nome).
     const filtrados = term
-      ? tasks.filter((t) => (t.name || "").toLowerCase().includes(term) || (t.solicitante || "").toLowerCase().includes(term))
+      ? tasks.filter((t) => (t.name || "").toLowerCase().includes(term) || (t.solicitante || "").toLowerCase().includes(term) || bateNumero(t, term))
       : tasks
     // Filtros rápidos ("o que preciso atender agora"): só chamados em andamento, que são os que têm
     // prazo correndo — pendente tem o SLA pausado e encerrado já acabou.

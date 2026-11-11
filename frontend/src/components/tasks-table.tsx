@@ -13,7 +13,7 @@ import {
   OPERADORES,
   PRIORITY_MAP,
 } from "@/lib/constants"
-import { timeUntil } from "@/lib/ticket-helpers"
+import { numeroChamado, timeUntil } from "@/lib/ticket-helpers"
 import { getCF, isAtrasado, venceLogo, fmtDate, type CreateTaskPayload, type Task, type UpdatePayload } from "@/lib/api"
 import type { StatusKey } from "@/lib/constants"
 
@@ -342,6 +342,7 @@ function TaskRow({
         />
       </td>
       <td className="max-w-48 truncate px-3 py-1 font-medium" title={task.name}>
+        {numeroChamado(task) && <span className="mr-1.5 font-bold tabular-nums text-muted-foreground">{numeroChamado(task)}</span>}
         {task.name || "(sem título)"}
       </td>
       <td className="px-3 py-1">

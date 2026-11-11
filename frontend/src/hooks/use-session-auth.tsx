@@ -13,7 +13,7 @@ type SessionAuthValue = {
   nomes: string[]
   bootError: string | null
   retryBoot: () => void
-  login: (email: string, password: string) => Promise<void>
+  login: (email: string, password: string, confirmacao?: string) => Promise<void>
   // Autocadastro externo (2026-09-17) — quem não está na lista pré-aprovada pela TI
   // digita o próprio nome/e-mail em vez de escolher/entrar com um já cadastrado.
   loginExterno: (name: string, email: string, password: string, telefone?: string) => Promise<void>
@@ -52,6 +52,16 @@ export function SessionAuthProvider({ children }: { children: ReactNode }) {
         setState("setup")
       }
     } catch (err) {
+      // Quem já tem sessão salva entra mesmo com a lista de nomes fora do ar: o login nem usa
+      // mais essa lista, e a primeira chamada real da API trata uma sessão expirada (401).
+      const storedToken = localStorage.getItem(TOKEN_KEY)
+      const storedName = localStorage.getItem(NAME_KEY)
+      if (storedToken && storedName) {
+        setSessionToken(storedToken)
+        setUserName(storedName)
+        setState("app")
+        return
+      }
       setBootError(err instanceof Error ? err.message : "Não foi possível carregar a lista de solicitantes.")
       setState("boot-error")
     }
@@ -63,8 +73,8 @@ export function SessionAuthProvider({ children }: { children: ReactNode }) {
     boot()
   }, [boot])
 
-  const login = useCallback(async (email: string, password: string) => {
-    const result = await loginOrRegister(email, password)
+  const login = useCallback(async (email: string, password: string, confirmacao?: string) => {
+    const result = await loginOrRegister(email, password, confirmacao)
     localStorage.setItem(TOKEN_KEY, result.token)
     localStorage.setItem(NAME_KEY, result.name)
     setSessionToken(result.token)

@@ -2,7 +2,7 @@ import { Check } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { waNumberForTask } from "@/lib/ticket-helpers"
+import { numeroChamado, waNumberForTask } from "@/lib/ticket-helpers"
 import type { Task } from "@/lib/api"
 
 // Porta openWaModal()/closeWaModal() de app.js — aparece assim que o chamado é aberto,
@@ -16,7 +16,8 @@ import type { Task } from "@/lib/api"
 // (css/style.css) sempre teve.
 export function WaModal({ task, slaLabel, anexoWarning, onClose }: { task: Task | null; slaLabel: string; anexoWarning?: string; onClose: () => void }) {
   if (!task) return null
-  const msg = `Olá! Acabei de abrir um chamado de TI:\n*${task.name}*\nGostaria de acompanhar meu atendimento.`
+  const num = numeroChamado(task)
+  const msg = `Olá! Acabei de abrir um chamado de TI${num ? ` ${num}` : ""}:\n*${task.name}*\nGostaria de acompanhar meu atendimento.`
   const link = `https://wa.me/${waNumberForTask(task)}?text=${encodeURIComponent(msg)}`
 
   return (
@@ -30,6 +31,7 @@ export function WaModal({ task, slaLabel, anexoWarning, onClose }: { task: Task 
             <Check className="h-8 w-8 text-white" strokeWidth={3} />
           </div>
           <h2 className="text-lg font-bold text-foreground">Chamado aberto!</h2>
+          {num && <p className="m-0 text-base font-bold tabular-nums text-foreground">Chamado {num}</p>}
           <span className="mt-1 inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-4 py-1.5 text-sm font-bold text-primary">
             Prazo de atendimento: {slaLabel}
           </span>

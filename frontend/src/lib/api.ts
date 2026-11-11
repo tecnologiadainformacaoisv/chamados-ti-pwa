@@ -26,6 +26,8 @@ export type Task = {
   // Nota de satisfação (1-5) que o solicitante dá ao próprio chamado depois de
   // encerrado (2026-09-21) — null enquanto não avaliado.
   nota?: number | null
+  // Número sequencial do chamado (2026-11-11); ausente/null em chamado ainda não numerado.
+  numero?: number | null
   custom_fields?: CustomField[]
   // Só presente no GET de uma task individual (GET /tasks/:id) — a listagem não devolve.
   attachments?: Attachment[]
