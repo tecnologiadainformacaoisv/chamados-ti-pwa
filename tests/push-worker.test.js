@@ -113,6 +113,7 @@ async function toBytesR2(body) {
 function makeMockR2() {
   const store = new Map();
   return {
+    _store: store,
     async put(key, body, options) {
       const bytes = await toBytesR2(body);
       store.set(key, { bytes, httpMetadata: options?.httpMetadata || {} });
@@ -828,6 +829,13 @@ async function test(name, fn) {
     // E consegue cadastrar uma senha nova, normalmente.
     const registro = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), password: 'senhaNovaDepoisDoReset' }) }), env);
     assert.strictEqual(registro.status, 200);
+    // O reset derruba as sessões antigas (2026-11-11): o token de antes não vale mais...
+    const velho = await worker.fetch(req('GET', '/api/my-tasks', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token } }), env);
+    assert.strictEqual(velho.status, 401, 'sessão anterior ao reset deveria ter sido revogada');
+    // ...mas a sessão criada no novo cadastro vale, e vira o token dos testes seguintes.
+    token = (await registro.json()).token;
+    const novo = await worker.fetch(req('GET', '/api/my-tasks', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token } }), env);
+    assert.strictEqual(novo.status, 200);
   });
   await test('resetar quem nunca teve senha é um no-op (200, não é erro)', async () => {
     const res = await worker.fetch(req('POST', `/admin/users/${encodeURIComponent('Ninguém Nunca Registrou')}/reset-senha`, {
@@ -2210,6 +2218,217 @@ async function test(name, fn) {
     assert.strictEqual(after.assignee_id, 170628721, 'assignee_id NÃO deveria ter mudado — o batch falhou, nada aplicou');
     const { results } = await atomicEnv.CHAMADOS_DB.prepare('SELECT assignee_id FROM chamado_assignees WHERE chamado_id = ?').bind(created.id).all();
     assert.deepStrictEqual(results.map(r => r.assignee_id), [170628721], 'tabela de junção também não deveria ter mudado — sem isso, ficaria mostrando o Henrique enquanto assignee_id ainda diz Everson (ou pior, vazia)');
+  });
+
+  // ===================================================================
+  // Endurecimento do servidor (2026-11-11) — env isolado pra não mexer no estado dos
+  // testes acima.
+  // ===================================================================
+  console.log('--- endurecimento do servidor (2026-11-11) ---');
+  const hEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1(), ANEXOS: makeMockR2(), VAPID_PRIVATE_JWK: vapidPrivateJwkAdmin, VAPID_PUBLIC_KEY: 'fake-vapid-public-key' };
+  const ADM = { 'X-Admin-Secret': 'admin-secret' };
+  const doPost = (path, headers, body) => worker.fetch(req('POST', path, { headers, body: typeof body === 'string' ? body : JSON.stringify(body) }), hEnv);
+  async function cadastra(nome, ip = '10.0.0.1') {
+    await d1CreateSolicitante(hEnv, nome, emailFor(nome));
+    const r = await doPost('/auth/register', { ...SECRET_HEADERS, 'CF-Connecting-IP': ip }, { email: emailFor(nome), password: 'senhaboa123' });
+    return (await r.json()).token;
+  }
+  const comSessao = (t, extra = {}) => ({ ...SECRET_HEADERS, 'X-Session-Token': t, ...extra });
+  const tipoOk = [{ id: TIPO_FIELD_ID, value: 0 }];
+
+  // 1) validação da criação de chamado
+  const tCriar = await cadastra('Pessoa Criar');
+  await test('criar chamado sem título dá 400 e NÃO ativa o throttle', async () => {
+    const r1 = await doPost('/api/tasks', comSessao(tCriar), { name: '   ', description: 'x', custom_fields: tipoOk });
+    assert.strictEqual(r1.status, 400);
+    const r2 = await doPost('/api/tasks', comSessao(tCriar), { name: 'Título válido', description: 'x', custom_fields: tipoOk });
+    assert.strictEqual(r2.status, 200, 'pedido inválido anterior não podia travar a pessoa');
+  });
+  await test('criar chamado com título/descrição gigantes ou assignees lixo dá 400', async () => {
+    const t2 = await cadastra('Pessoa Criar Dois');
+    const casos = [
+      { name: 'a'.repeat(201) },
+      { name: 'ok', description: 'd'.repeat(5001) },
+      { name: 'ok', description: 123 },
+      { name: 'ok', assignees: 'não é lista' },
+      { name: 'ok', assignees: [1, 2, 3, 4, 5, 6] },
+      { name: 'ok', assignees: ['abc'] },
+      { name: 'ok', assignees: [-5] },
+    ];
+    for (const c of casos) {
+      const r = await doPost('/api/tasks', comSessao(t2), { ...c, custom_fields: tipoOk });
+      assert.strictEqual(r.status, 400, JSON.stringify(c).slice(0, 60));
+    }
+  });
+  await test('throttle: segundo chamado em seguida ainda dá 429', async () => {
+    const r = await doPost('/api/tasks', comSessao(tCriar), { name: 'Outro', custom_fields: tipoOk });
+    assert.strictEqual(r.status, 429);
+  });
+
+  // 2) revogação de sessão
+  await test('desativar o solicitante derruba a sessão dele', async () => {
+    const t = await cadastra('Pessoa Desativada');
+    const antes = await worker.fetch(req('GET', '/api/my-tasks', { headers: comSessao(t) }), hEnv);
+    assert.strictEqual(antes.status, 200);
+    await doPost(`/admin/solicitantes/${encodeURIComponent('Pessoa Desativada')}/ativo`, ADM, { ativo: false });
+    const depois = await worker.fetch(req('GET', '/api/my-tasks', { headers: comSessao(t) }), hEnv);
+    assert.strictEqual(depois.status, 401);
+  });
+  await test('reset de senha derruba a sessão; entrar de novo cria sessão válida', async () => {
+    const t = await cadastra('Pessoa Resetada');
+    await doPost(`/admin/users/${encodeURIComponent('Pessoa Resetada')}/reset-senha`, ADM, {});
+    const morta = await worker.fetch(req('GET', '/api/my-tasks', { headers: comSessao(t) }), hEnv);
+    assert.strictEqual(morta.status, 401);
+    const reg = await doPost('/auth/register', SECRET_HEADERS, { email: emailFor('Pessoa Resetada'), password: 'senhaNova123' });
+    const novo = (await reg.json()).token;
+    const viva = await worker.fetch(req('GET', '/api/my-tasks', { headers: comSessao(novo) }), hEnv);
+    assert.strictEqual(viva.status, 200);
+  });
+  await test('desativado não consegue logar mesmo com a senha certa', async () => {
+    const r = await doPost('/auth/login', SECRET_HEADERS, { email: emailFor('Pessoa Desativada'), password: 'senhaboa123' });
+    assert.strictEqual(r.status, 401);
+  });
+
+  // 3) primeiro acesso: tentativas com e-mail desconhecido têm teto por IP (generoso)
+  await test('varredura de e-mails desconhecidos no primeiro acesso é freada por IP (429), outro IP segue livre', async () => {
+    const ip = '203.0.113.200';
+    let ultimo;
+    for (let i = 0; i < 41; i++) {
+      ultimo = await doPost('/auth/register', { ...SECRET_HEADERS, 'CF-Connecting-IP': ip }, { email: `ninguem${i}@institutosaovicente.com.br`, password: 'senhaboa123' });
+    }
+    assert.strictEqual(ultimo.status, 429);
+    const outro = await doPost('/auth/register', { ...SECRET_HEADERS, 'CF-Connecting-IP': '203.0.113.201' }, { email: 'ninguem@institutosaovicente.com.br', password: 'senhaboa123' });
+    assert.strictEqual(outro.status, 403);
+  });
+  await test('cadastro legítimo de muita gente no mesmo IP (escritório) não é barrado', async () => {
+    for (let i = 0; i < 12; i++) {
+      const nome = `Colega Escritorio ${'abcdefghijkl'[i]}`;
+      await d1CreateSolicitante(hEnv, nome, emailFor(nome));
+      const r = await doPost('/auth/register', { ...SECRET_HEADERS, 'CF-Connecting-IP': '198.18.0.1' }, { email: emailFor(nome), password: 'senhaboa123' });
+      assert.strictEqual(r.status, 200, nome);
+    }
+  });
+
+  // 4) lockout por nome+IP
+  await test('errar a senha de outro IP não tranca o dono da conta', async () => {
+    await cadastra('Pessoa Alvo');
+    for (let i = 0; i < 6; i++) {
+      await doPost('/auth/login', { ...SECRET_HEADERS, 'CF-Connecting-IP': '192.0.2.250' }, { email: emailFor('Pessoa Alvo'), password: 'errada' });
+    }
+    const atacante = await doPost('/auth/login', { ...SECRET_HEADERS, 'CF-Connecting-IP': '192.0.2.250' }, { email: emailFor('Pessoa Alvo'), password: 'senhaboa123' });
+    assert.strictEqual(atacante.status, 429, 'o IP que errou fica travado');
+    const dono = await doPost('/auth/login', { ...SECRET_HEADERS, 'CF-Connecting-IP': '192.0.2.10' }, { email: emailFor('Pessoa Alvo'), password: 'senhaboa123' });
+    assert.strictEqual(dono.status, 200, 'o dono, de outro IP, continua entrando');
+  });
+  await test('ataque distribuído (muitos IPs) esbarra no teto por nome', async () => {
+    await cadastra('Pessoa Distribuida');
+    for (let i = 0; i < 30; i++) {
+      await doPost('/auth/login', { ...SECRET_HEADERS, 'CF-Connecting-IP': `100.64.0.${i + 1}` }, { email: emailFor('Pessoa Distribuida'), password: 'errada' });
+    }
+    const r = await doPost('/auth/login', { ...SECRET_HEADERS, 'CF-Connecting-IP': '100.64.1.1' }, { email: emailFor('Pessoa Distribuida'), password: 'senhaboa123' });
+    assert.strictEqual(r.status, 429);
+  });
+
+  // 5) /subscribe
+  await test('/subscribe rejeita endpoint http, sem chaves ou lixo; aceita subscription válida', async () => {
+    const t = await cadastra('Pessoa Push');
+    const ok = { endpoint: 'https://push.example.test/abc', keys: { p256dh: 'AAAA', auth: 'BBBB' } };
+    for (const ruim of [
+      { endpoint: 'http://push.example.test/abc', keys: ok.keys },
+      { endpoint: 'não é url', keys: ok.keys },
+      { endpoint: ok.endpoint },
+      { endpoint: ok.endpoint, keys: { p256dh: 1, auth: 2 } },
+      { endpoint: 'https://x.test/' + 'a'.repeat(1100), keys: ok.keys },
+    ]) {
+      const r = await doPost('/subscribe', comSessao(t), { subscription: ruim });
+      assert.strictEqual(r.status, 400, JSON.stringify(ruim).slice(0, 60));
+    }
+    const bom = await doPost('/subscribe', comSessao(t), { subscription: ok });
+    assert.strictEqual(bom.status, 200);
+  });
+
+  // 6) anexos
+  const tAnexo = await cadastra('Pessoa Anexo');
+  const chamadoAnexo = await (await doPost('/api/tasks', comSessao(tAnexo), { name: 'Com anexos', custom_fields: tipoOk })).json();
+  const anexoForm = (nome, tipo, conteudo = 'bytes') => { const f = new FormData(); f.append('attachment', new File([conteudo], nome, { type: tipo })); return f; };
+  const subir = (nome, tipo, conteudo) => worker.fetch(req('POST', `/api/tasks/${chamadoAnexo.id}/attachment`, { headers: { 'X-App-Secret': 'shared-secret', 'X-Session-Token': tAnexo }, body: anexoForm(nome, tipo, conteudo) }), hEnv);
+  await test('anexo HTML/SVG é servido como download (octet-stream + attachment + nosniff + CSP)', async () => {
+    const up = await subir('pagina.html', 'text/html', '<script>alert(1)</script>');
+    assert.strictEqual(up.status, 200);
+    const { id } = await up.json();
+    const r = await worker.fetch(req('GET', `/api/anexos/${id}`, { headers: comSessao(tAnexo) }), hEnv);
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.headers.get('Content-Type'), 'application/octet-stream');
+    assert.ok(r.headers.get('Content-Disposition').startsWith('attachment;'));
+    assert.strictEqual(r.headers.get('X-Content-Type-Options'), 'nosniff');
+    assert.ok(r.headers.get('Content-Security-Policy').includes('sandbox'));
+  });
+  await test('anexo PNG continua aparecendo inline', async () => {
+    const up = await subir('foto ç.png', 'image/png');
+    const { id } = await up.json();
+    const r = await worker.fetch(req('GET', `/api/anexos/${id}`, { headers: comSessao(tAnexo) }), hEnv);
+    assert.strictEqual(r.headers.get('Content-Type'), 'image/png');
+    assert.ok(r.headers.get('Content-Disposition').startsWith('inline;'));
+    assert.ok(r.headers.get('Content-Disposition').includes("filename*=UTF-8''foto%20%C3%A7.png"));
+  });
+  await test('limite de 5 anexos por chamado', async () => {
+    for (let i = 0; i < 3; i++) await subir(`extra${i}.png`, 'image/png'); // já tem 2 -> 5
+    const r = await subir('sexto.png', 'image/png');
+    assert.strictEqual(r.status, 400);
+  });
+  await test('se o INSERT do anexo falhar, o arquivo não fica órfão no R2', async () => {
+    const t = await cadastra('Pessoa Orfao');
+    const c = await (await doPost('/api/tasks', comSessao(t), { name: 'Orfão', custom_fields: tipoOk })).json();
+    const antes = hEnv.ANEXOS._store ? hEnv.ANEXOS._store.size : null;
+    const prep = hEnv.CHAMADOS_DB.prepare.bind(hEnv.CHAMADOS_DB);
+    hEnv.CHAMADOS_DB.prepare = (sql) => {
+      if (/INSERT INTO chamado_anexos/.test(sql)) return { bind: () => ({ run: async () => { throw new Error('D1 fora (simulado)'); } }) };
+      return prep(sql);
+    };
+    let r;
+    try {
+      r = await worker.fetch(req('POST', `/api/tasks/${c.id}/attachment`, { headers: { 'X-App-Secret': 'shared-secret', 'X-Session-Token': t }, body: anexoForm('a.png', 'image/png') }), hEnv);
+    } finally { hEnv.CHAMADOS_DB.prepare = prep; }
+    assert.strictEqual(r.status, 500);
+    if (antes !== null) assert.strictEqual(hEnv.ANEXOS._store.size, antes, 'objeto no R2 deveria ter sido apagado');
+  });
+  await test('TI abre os anexos pelo admin (lista + arquivo); sem segredo dá 403', async () => {
+    const lista = await worker.fetch(req('GET', `/admin/tasks/${chamadoAnexo.id}/anexos`, { headers: ADM }), hEnv);
+    assert.strictEqual(lista.status, 200);
+    const { anexos } = await lista.json();
+    assert.strictEqual(anexos.length, 5);
+    assert.ok(anexos[0].url.includes('/admin/anexos/'));
+    const arq = await worker.fetch(req('GET', `/admin/anexos/${anexos[0].id}`, { headers: ADM }), hEnv);
+    assert.strictEqual(arq.status, 200);
+    assert.strictEqual(arq.headers.get('X-Content-Type-Options'), 'nosniff');
+    const sem = await worker.fetch(req('GET', `/admin/anexos/${anexos[0].id}`, {}), hEnv);
+    assert.strictEqual(sem.status, 403);
+    const semLista = await worker.fetch(req('GET', `/admin/tasks/${chamadoAnexo.id}/anexos`, {}), hEnv);
+    assert.strictEqual(semLista.status, 403);
+  });
+
+  // 7) renomear solicitante (conta "Outros" -> conta de TI/testes)
+  await test('renomear cascateia: solicitantes, chamados, senha e push; sessão antiga morre', async () => {
+    await d1CreateSolicitante(hEnv, 'Outros', null);
+    const c = await d1CreateChamado(hEnv, { name: 'Teste antigo', status: 'aberto', priority: 3, tipo: 0, setor: 0, solicitante: 'Outros', due_date: Date.now() + 1000 });
+    await hEnv.SUBSCRIPTIONS.put('usub_Outros', '{"endpoint":"https://x.test/"}');
+    await hEnv.SUBSCRIPTIONS.put('auth_Outros', '{"algo":"x"}');
+    const sem = await doPost(`/admin/solicitantes/Outros/renomear`, {}, { novoNome: 'TI Testes' });
+    assert.strictEqual(sem.status, 403);
+    const ruimEmail = await doPost(`/admin/solicitantes/Outros/renomear`, ADM, { novoNome: 'TI Testes', email: 'x@gmail.com' });
+    assert.strictEqual(ruimEmail.status, 400);
+    const r = await doPost(`/admin/solicitantes/Outros/renomear`, ADM, { novoNome: 'TI Testes', email: 'ti.testes@institutosaovicente.com.br' });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual((await d1GetChamado(hEnv, c.id)).solicitante, 'TI Testes');
+    const sol = await hEnv.CHAMADOS_DB.prepare('SELECT name, email FROM solicitantes WHERE email = ?').bind('ti.testes@institutosaovicente.com.br').first();
+    assert.strictEqual(sol.name, 'TI Testes');
+    assert.ok(await hEnv.SUBSCRIPTIONS.get('auth_TI Testes'));
+    assert.ok(!(await hEnv.SUBSCRIPTIONS.get('auth_Outros')));
+    assert.ok(await hEnv.SUBSCRIPTIONS.get('usub_TI Testes'));
+    const dup = await doPost(`/admin/solicitantes/${encodeURIComponent('Pessoa Alvo')}/renomear`, ADM, { novoNome: 'TI Testes' });
+    assert.strictEqual(dup.status, 409);
+    const inexistente = await doPost(`/admin/solicitantes/Fantasma/renomear`, ADM, { novoNome: 'Qualquer Um' });
+    assert.strictEqual(inexistente.status, 404);
   });
 
   console.log(`\n${passed} passaram, ${failed} falharam`);

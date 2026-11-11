@@ -108,6 +108,7 @@ export async function mockAdminRoutes(
     tasks?: ReturnType<typeof makeTask>[]
     metrics?: ReturnType<typeof makeMetrics>
     eventos?: unknown[]
+    anexos?: { id: string; name: string; size: number | null; content_type: string | null; url: string }[]
     secret?: string
   } = {}
 ) {
@@ -130,6 +131,8 @@ export async function mockAdminRoutes(
   })
   await on(page, /\/admin\/tasks\/[^/]+\/eventos/, "GET", (route) => fulfillJson(route, { eventos }))
   await on(page, /\/admin\/tasks\/[^/]+\/eventos/, "POST", (route) => fulfillJson(route, { evento: { id: "ev-nova", tipo: "nota", autor: "x", texto: "y", de_valor: null, para_valor: null, created_at: Date.now() } }))
+  await on(page, /\/admin\/tasks\/[^/]+\/anexos/, "GET", (route) => fulfillJson(route, { anexos: opts.anexos ?? [] }))
+  await on(page, /\/admin\/anexos\/[^/]+$/, "GET", (route) => route.fulfill({ status: 200, contentType: "image/png", body: Buffer.from("png") }))
   await on(page, /\/admin\/tasks\/bulk/, "POST", (route) => fulfillJson(route, { total: 0, sucesso: 0, falha: 0, results: [] }))
   await on(page, /\/admin\/tasks\/[^/]+\/delete$/, "POST", (route) => fulfillJson(route, { ok: true }))
   await on(page, /\/admin\/tasks\/[^/]+$/, "POST", (route) => {

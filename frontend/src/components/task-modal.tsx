@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { OPERADORES, PRIORITY_MAP, SETORES, SETOR_FIELD_ID, SOLUCAO_FIELD_ID, STATUS_MAP, STATUS_ORDER, TIPOS, TIPO_FIELD_ID, optionName } from "@/lib/constants"
-import { getCF, fetchEventos, postEvento, deleteTask, isSessionError, fmtDate, fmtDateFull, type ChamadoEvento, type Task, type UpdatePayload } from "@/lib/api"
+import { getCF, fetchEventos, fetchAnexosAdmin, openAnexoAdmin, postEvento, deleteTask, isSessionError, fmtDate, fmtDateFull, type ChamadoEvento, type Task, type UpdatePayload } from "@/lib/api"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 
 const SEM_ATRIBUICAO = "__sem__"
@@ -60,6 +60,28 @@ export function TaskModal({
     queryFn: () => fetchEventos(secret, task!.id),
     enabled: !!task,
   })
+  const anexosQuery = useQuery({
+    queryKey: ["chamado-anexos", task?.id],
+    queryFn: () => fetchAnexosAdmin(secret, task!.id),
+    enabled: !!task,
+  })
+  const [anexoErro, setAnexoErro] = useState<string | null>(null)
+  async function abrirAnexo(id: string, nome: string) {
+    setAnexoErro(null)
+    try {
+      const url = await openAnexoAdmin(secret, id)
+      const a = document.createElement("a")
+      a.href = url
+      a.target = "_blank"
+      a.rel = "noopener"
+      // imagens/PDF abrem numa aba nova; o servidor só marca como "inline" o que é seguro
+      a.title = nome
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch (e) {
+      setAnexoErro(e instanceof Error ? e.message : "Não foi possível abrir o anexo.")
+    }
+  }
   // "Quem escreve?" lembra a última escolha e, na primeira vez, já vem com o atendente do chamado
   // (UX 2026-10-19: escolher toda vez era atrito, e o botão ficava desativado sem explicar).
   const [notaAutor, setNotaAutorState] = useState(SEM_ATRIBUICAO)
@@ -250,6 +272,26 @@ export function TaskModal({
             <Alert variant="destructive">
               <AlertDescription>{error}</AlertDescription>
             </Alert>
+          )}
+
+          {!!anexosQuery.data?.anexos.length && (
+            <div className="flex flex-col gap-2 border-t border-border pt-4">
+              <Label>Anexos do solicitante</Label>
+              <ul className="flex min-w-0 flex-col gap-1.5">
+                {anexosQuery.data.anexos.map((a) => (
+                  <li key={a.id} className="min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => abrirAnexo(a.id, a.name)}
+                      className="max-w-full cursor-pointer truncate rounded-md border border-border px-2.5 py-1.5 text-left text-sm hover:bg-muted"
+                    >
+                      📎 {a.name}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {anexoErro && <p className="text-xs text-destructive">{anexoErro}</p>}
+            </div>
           )}
 
           <div className="flex flex-col gap-2 border-t border-border pt-4">

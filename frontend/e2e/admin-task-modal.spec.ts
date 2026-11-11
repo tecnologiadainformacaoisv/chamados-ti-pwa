@@ -177,6 +177,20 @@ test.describe("Modal 'Gerenciar' — histórico e notas", () => {
     await expect(page.getByText("Henrique", { exact: true })).toBeVisible()
   })
 
+  test("mostra os anexos do solicitante e abre o arquivo com a chave de admin", async ({ page }) => {
+    const anexos = [{ id: "ax1", name: "print-do-erro.png", size: 10, content_type: "image/png", url: "x" }]
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga" })], anexos })
+    await gotoAdminLoggedIn(page)
+    await abrirModal(page)
+    const botao = page.getByRole("button", { name: /print-do-erro\.png/ })
+    await expect(botao).toBeVisible()
+    const req = page.waitForRequest(/\/admin\/anexos\/ax1$/)
+    await page.evaluate(() => { window.open = () => null })
+    await botao.click()
+    const r = await req
+    expect(r.headers()["x-admin-secret"]).toBeTruthy()
+  })
+
   test("adiciona nota nova e ela aparece na lista", async ({ page }) => {
     await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga" })] })
     let notaPostada: Record<string, unknown> | null = null

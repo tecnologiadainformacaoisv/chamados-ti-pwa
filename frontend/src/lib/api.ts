@@ -159,6 +159,21 @@ export async function fetchEventos(secret: string, taskId: string): Promise<{ ev
   return adminRequest(secret, `/tasks/${taskId}/eventos`)
 }
 
+// Anexos do chamado vistos pela TI (2026-11-11) — antes só o dono abria.
+export type AnexoAdmin = { id: string; name: string; size: number | null; content_type: string | null; url: string }
+
+export async function fetchAnexosAdmin(secret: string, taskId: string): Promise<{ anexos: AnexoAdmin[] }> {
+  return adminRequest(secret, `/tasks/${taskId}/anexos`)
+}
+
+/** Baixa o arquivo com a chave de admin e devolve um object URL (o navegador não manda cabeçalho num link comum). */
+export async function openAnexoAdmin(secret: string, anexoId: string): Promise<string> {
+  const res = await fetch(`${ADMIN_BASE}/anexos/${anexoId}`, { headers: { "X-Admin-Secret": secret } })
+  if (res.status === 403) throw new AdminApiError("Segredo de admin inválido ou expirado. Entre de novo.", 403)
+  if (!res.ok) throw new AdminApiError("Não foi possível abrir o anexo.", res.status)
+  return URL.createObjectURL(await res.blob())
+}
+
 export async function postEvento(secret: string, taskId: string, autor: string, texto: string): Promise<{ evento: ChamadoEvento }> {
   const res = await fetch(`${ADMIN_BASE}/tasks/${taskId}/eventos`, {
     method: "POST",

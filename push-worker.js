@@ -127,6 +127,22 @@ const LOGIN_LOCKOUT_SECONDS = 15 * 60;
 // ver comentário em handleRegisterExterno.
 const MAX_REGISTER_EXTERNO_PER_IP = 5;
 const REGISTER_EXTERNO_WINDOW_SECONDS = 60 * 60;
+// Lockout de login por nome+IP (2026-11-11): travar só por nome deixava qualquer pessoa
+// bloquear a conta de um colega errando a senha dele de propósito. Agora o limite de 5
+// vale por (nome, IP) — o dono, de outro IP, continua entrando — e um teto maior por nome
+// (backstop) barra ataque distribuído.
+const MAX_LOGIN_FAILURES_NAME_BACKSTOP = 30;
+// Tentativas de primeiro acesso com e-mail desconhecido, por IP/hora. Generoso de propósito:
+// o escritório inteiro (48 pessoas) sai por um IP só, e todo mundo se cadastra no mesmo dia.
+const MAX_REGISTER_FAIL_PER_IP = 40;
+const REGISTER_FAIL_WINDOW_SECONDS = 60 * 60;
+// Limites de entrada do chamado e de anexos por chamado
+const MAX_CHAMADO_NAME_LEN = 200;
+const MAX_CHAMADO_DESC_LEN = 5000;
+const MAX_CHAMADO_ASSIGNEES = 5;
+const MAX_ANEXOS_POR_CHAMADO = 5;
+// Tipos que o navegador pode mostrar na própria tela sem risco; o resto só baixa.
+const ANEXO_TIPOS_INLINE = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf']);
 
 // =====================================================================
 // ROUTER
@@ -210,6 +226,8 @@ async function routeRequest(request, env) {
       if (pathname === '/admin/solicitantes/emails/bulk') return handleAdminBulkSetSolicitanteEmails(request, env);
       const solAtivoMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/ativo$/);
       if (solAtivoMatch) return handleAdminSetSolicitanteAtivo(request, env, solAtivoMatch[1]);
+      const solRenomearMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/renomear$/);
+      if (solRenomearMatch) return handleAdminRenomearSolicitante(request, env, solRenomearMatch[1]);
       const solEmailMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/email$/);
       if (solEmailMatch) return handleAdminSetSolicitanteEmail(request, env, solEmailMatch[1]);
       const resetSenhaMatch = pathname.match(/^\/admin\/users\/([^/]+)\/reset-senha$/);
@@ -234,6 +252,10 @@ async function routeRequest(request, env) {
       if (eventosGetMatch) return handleAdminListEventos(request, env, eventosGetMatch[1]);
       const anexoMatch = pathname.match(/^\/api\/anexos\/([^/]+)$/);
       if (anexoMatch) return handleGetAnexo(request, env, anexoMatch[1]);
+      const adminAnexoMatch = pathname.match(/^\/admin\/anexos\/([^/]+)$/);
+      if (adminAnexoMatch) return handleAdminGetAnexo(request, env, adminAnexoMatch[1]);
+      const adminAnexosListMatch = pathname.match(/^\/admin\/tasks\/([^/]+)\/anexos$/);
+      if (adminAnexosListMatch) return handleAdminListAnexos(request, env, adminAnexosListMatch[1]);
       const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
       if (taskMatch) return handleGetTask(request, env, taskMatch[1]);
       return new Response('Chamados TI – Push Worker OK', { status: 200 });
@@ -267,7 +289,18 @@ async function requireSession(request, env) {
   const token = request.headers.get('X-Session-Token');
   if (!token) return null;
   const raw = await env.SUBSCRIPTIONS.get(`session_${token}`);
-  return raw ? JSON.parse(raw) : null;
+  if (!raw) return null;
+  const session = JSON.parse(raw);
+  // Revogação em massa (2026-11-11): reset de senha e desativação gravam `sessver_<nome>`
+  // (momento da revogação); sessão criada antes (ou sem `createdAt`, as antigas) morre.
+  const ver = await env.SUBSCRIPTIONS.get(`sessver_${session.name}`);
+  if (ver && (session.createdAt ?? 0) <= Number(ver)) return null;
+  return session;
+}
+
+// Invalida todas as sessões abertas de alguém (reset de senha, desativação).
+async function revokeSessions(env, name) {
+  await env.SUBSCRIPTIONS.put(`sessver_${name}`, String(Date.now()), { expirationTtl: SESSION_TTL_SECONDS });
 }
 
 // Fase B7 (2026-08-12): lê do D1 em vez de paginar a ClickUp — é a rota mais chamada
@@ -350,13 +383,33 @@ async function handleCreateTask(request, env) {
   if (await env.SUBSCRIPTIONS.get(throttleKey)) {
     return jsonRes({ error: 'Aguarde alguns segundos antes de abrir outro chamado' }, 429);
   }
-  await env.SUBSCRIPTIONS.put(throttleKey, '1', { expirationTtl: 60 });
 
+  // Validação de entrada (2026-11-11): antes, qualquer corpo virava chamado (título
+  // vazio, descrição gigante, assignees lixo). Validado ANTES de gravar o throttle, pra
+  // um pedido inválido não travar a pessoa por 60 s sem ter criado nada.
+  if (!payload || typeof payload !== 'object') return jsonRes({ error: 'corpo inválido' }, 400);
+  if (typeof payload.name !== 'string' || !payload.name.trim()) {
+    return jsonRes({ error: 'o título do chamado é obrigatório' }, 400);
+  }
+  if (payload.name.length > MAX_CHAMADO_NAME_LEN) {
+    return jsonRes({ error: `título muito longo (máximo ${MAX_CHAMADO_NAME_LEN} caracteres)` }, 400);
+  }
+  if (payload.description != null && (typeof payload.description !== 'string' || payload.description.length > MAX_CHAMADO_DESC_LEN)) {
+    return jsonRes({ error: `descrição inválida ou muito longa (máximo ${MAX_CHAMADO_DESC_LEN} caracteres)` }, 400);
+  }
+  if (payload.assignees != null && (!Array.isArray(payload.assignees) || payload.assignees.length > MAX_CHAMADO_ASSIGNEES)) {
+    return jsonRes({ error: 'lista de atendentes inválida' }, 400);
+  }
   const assigneeIds = (payload.assignees || []).map(Number);
+  if (assigneeIds.some(n => !Number.isInteger(n) || n <= 0)) {
+    return jsonRes({ error: 'lista de atendentes inválida' }, 400);
+  }
+  // Marca o throttle antes de gravar (cobre o duplo-clique concorrente); desfeito se falhar.
+  await env.SUBSCRIPTIONS.put(throttleKey, '1', { expirationTtl: 60 });
   let row;
   try {
     row = await d1CreateChamado(env, {
-      name: payload.name,
+      name: payload.name.trim(),
       description: payload.description ?? null,
       status: 'aberto',
       priority: prio,
@@ -371,6 +424,8 @@ async function handleCreateTask(request, env) {
       assignee_ids: assigneeIds,
     });
   } catch (err) {
+    // Falha de gravação não pode travar a pessoa por 60 s: desfaz o throttle.
+    await env.SUBSCRIPTIONS.delete(throttleKey);
     return jsonRes({ error: `não foi possível criar o chamado: ${err.message}` }, 400);
   }
 
@@ -408,11 +463,22 @@ async function handleUploadAttachment(request, env, taskId) {
     return jsonRes({ error: `arquivo muito grande — limite de ${MAX_ANEXO_BYTES / 1024 / 1024}MB` }, 413);
   }
 
+  const existentes = await d1ListAnexos(env, taskId);
+  if (existentes.length >= MAX_ANEXOS_POR_CHAMADO) {
+    return jsonRes({ error: `limite de ${MAX_ANEXOS_POR_CHAMADO} anexos por chamado` }, 400);
+  }
+
   const { key, size, contentType } = await r2UploadAnexo(env, taskId, file.name, file.type, file.stream());
   const anexoId = crypto.randomUUID();
-  await env.CHAMADOS_DB.prepare(
-    'INSERT INTO chamado_anexos (id, chamado_id, r2_key, filename, content_type, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).bind(anexoId, taskId, key, file.name, contentType, size, Date.now()).run();
+  try {
+    await env.CHAMADOS_DB.prepare(
+      'INSERT INTO chamado_anexos (id, chamado_id, r2_key, filename, content_type, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).bind(anexoId, taskId, key, file.name, contentType, size, Date.now()).run();
+  } catch (err) {
+    // Sem o registro no D1 o arquivo ficaria órfão no R2 — apaga antes de falhar.
+    await r2DeleteAnexo(env, key).catch(() => {});
+    return jsonRes({ error: 'não foi possível salvar o anexo' }, 500);
+  }
 
   return jsonRes({ ok: true, id: anexoId });
 }
@@ -487,7 +553,7 @@ async function verifyPassword(password, record) {
 
 async function createSession(name, env) {
   const token = bytesToUrlB64(crypto.getRandomValues(new Uint8Array(32)));
-  await env.SUBSCRIPTIONS.put(`session_${token}`, JSON.stringify({ name }), { expirationTtl: SESSION_TTL_SECONDS });
+  await env.SUBSCRIPTIONS.put(`session_${token}`, JSON.stringify({ name, createdAt: Date.now() }), { expirationTtl: SESSION_TTL_SECONDS });
   return token;
 }
 
@@ -560,8 +626,19 @@ async function handleRegister(request, env) {
   // e-mail: só deixa criar senha se o e-mail já estiver cadastrado e ativo na
   // tabela `solicitantes` (a TI cadastra o e-mail de cada um antes, tela
   // "Usuários") — sem isso, qualquer e-mail viraria conta.
+  // Limite de tentativas com e-mail desconhecido, por IP (2026-11-11): sem isso, dava pra
+  // varrer e-mails à vontade e descobrir quem existe pela diferença de resposta. Teto
+  // generoso (o escritório todo sai por um IP e se cadastra no mesmo dia).
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const regFailKey = `regfail_${ip}`;
+  const regFails = parseInt(await env.SUBSCRIPTIONS.get(regFailKey) || '0');
+  if (regFails >= MAX_REGISTER_FAIL_PER_IP) {
+    return jsonRes({ error: 'Muitas tentativas. Aguarde um pouco e tente de novo.' }, 429);
+  }
+
   const solicitante = await d1GetSolicitanteByEmail(env, email);
   if (!solicitante || solicitante.ativo !== 1) {
+    await env.SUBSCRIPTIONS.put(regFailKey, String(regFails + 1), { expirationTtl: REGISTER_FAIL_WINDOW_SECONDS });
     return jsonRes({ error: 'E-mail não encontrado na lista de solicitantes. Fale com a TI.' }, 403);
   }
   const name = solicitante.name;
@@ -695,9 +772,15 @@ async function handleLogin(request, env) {
   // nenhum — ver comentário lá).
   if (!name) return jsonRes({ error: 'Sem senha cadastrada pra esse e-mail ainda' }, 404);
 
-  const failKey = `loginfail_${name}`;
+  // Lockout por nome+IP (quem erra de um IP não tranca o dono da conta em outro) e um
+  // teto maior só por nome contra ataque vindo de muitos IPs.
+  if (solicitante.ativo !== 1) return jsonRes({ error: 'Senha incorreta' }, 401);
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const failKey = `loginfail_${name}_${ip}`;
+  const nameKey = `loginfail_${name}`;
   const failCount = parseInt(await env.SUBSCRIPTIONS.get(failKey) || '0');
-  if (failCount >= MAX_LOGIN_FAILURES) {
+  const nameCount = parseInt(await env.SUBSCRIPTIONS.get(nameKey) || '0');
+  if (failCount >= MAX_LOGIN_FAILURES || nameCount >= MAX_LOGIN_FAILURES_NAME_BACKSTOP) {
     return jsonRes({ error: 'Muitas tentativas erradas. Aguarde 15 minutos e tente de novo.' }, 429);
   }
 
@@ -708,6 +791,7 @@ async function handleLogin(request, env) {
   const ok = await verifyPassword(password, record);
   if (!ok) {
     await env.SUBSCRIPTIONS.put(failKey, String(failCount + 1), { expirationTtl: LOGIN_LOCKOUT_SECONDS });
+    await env.SUBSCRIPTIONS.put(nameKey, String(nameCount + 1), { expirationTtl: LOGIN_LOCKOUT_SECONDS });
     return jsonRes({ error: 'Senha incorreta' }, 401);
   }
 
@@ -792,6 +876,11 @@ async function handleAdminResetSenha(request, env, name) {
   const decoded = decodeURIComponent(name);
   await env.SUBSCRIPTIONS.delete(`auth_${decoded}`);
   await env.SUBSCRIPTIONS.delete(`loginfail_${decoded}`);
+  // Lockouts por IP (loginfail_<nome>_<ip>) também saem, e as sessões abertas morrem —
+  // senão quem tinha a senha antiga (ou o token roubado) continuaria logado por 90 dias.
+  const lista = await env.SUBSCRIPTIONS.list({ prefix: `loginfail_${decoded}_` });
+  await Promise.all(lista.keys.map(k => env.SUBSCRIPTIONS.delete(k.name)));
+  await revokeSessions(env, decoded);
   return jsonRes({ ok: true });
 }
 
@@ -1142,6 +1231,17 @@ async function handleSubscribe(request, env) {
 
     const { subscription } = await request.json();
     if (!subscription?.endpoint) return jsonRes({ error: 'subscription ausente' }, 400);
+    // Validação (2026-11-11): só https (os serviços de push reais são todos https), chaves
+    // presentes e tamanhos razoáveis — antes qualquer JSON era gravado como está.
+    let endpointUrl = null;
+    try { endpointUrl = new URL(subscription.endpoint); } catch { /* inválido */ }
+    if (
+      !endpointUrl || endpointUrl.protocol !== 'https:' || subscription.endpoint.length > 1000 ||
+      typeof subscription.keys?.p256dh !== 'string' || typeof subscription.keys?.auth !== 'string' ||
+      subscription.keys.p256dh.length > 200 || subscription.keys.auth.length > 100
+    ) {
+      return jsonRes({ error: 'subscription inválida (precisa de endpoint https e keys.p256dh/keys.auth)' }, 400);
+    }
 
     // Fase M5 (2026-08-13, migração de saída da ClickUp): a chave passou de
     // `u_<orderindex da ClickUp>` (exigia resolver o índice via getSolicitanteMaps a
@@ -2059,7 +2159,55 @@ async function handleAdminSetSolicitanteAtivo(request, env, name) {
 
   const { updated } = await d1SetSolicitanteAtivo(env, decodeURIComponent(name), body.ativo);
   if (!updated) return jsonRes({ error: 'solicitante não encontrado' }, 404);
+  // Desativar derruba as sessões abertas da pessoa (antes ela seguia logada por até 90 dias).
+  if (!body.ativo) await revokeSessions(env, decodeURIComponent(name));
   return jsonRes({ ok: true });
+}
+
+// POST /admin/solicitantes/:nome/renomear (2026-11-11) — body { novoNome, email? }.
+// Nasceu pra transformar a conta genérica "Outros" numa conta de TI/testes, mas serve pra
+// corrigir qualquer nome. `name` é a identidade em vários lugares, então a troca cascateia:
+// solicitantes (PK), chamados.solicitante (num batch atômico) e as chaves do KV (senha e
+// inscrição de push). Sessões abertas da conta são revogadas (guardavam o nome antigo).
+async function handleAdminRenomearSolicitante(request, env, name) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  const antigo = decodeURIComponent(name);
+  const novo = typeof body.novoNome === 'string' ? body.novoNome.trim().replace(/\s+/g, ' ') : '';
+  if (!novo || novo.length > 100) return jsonRes({ error: 'novoNome inválido' }, 400);
+  const email = body.email == null ? undefined : normalizeEmail(body.email);
+  if (email !== undefined && (!EMAIL_FORMATO_REGEX.test(email) || !isEmailDoDominio(email))) {
+    return jsonRes({ error: `e-mail precisa ser do domínio @${EMAIL_DOMAIN}` }, 400);
+  }
+  if (antigo === novo) return jsonRes({ error: 'o novo nome é igual ao atual' }, 400);
+
+  const atual = await env.CHAMADOS_DB.prepare('SELECT name FROM solicitantes WHERE name = ?').bind(antigo).first();
+  if (!atual) return jsonRes({ error: 'solicitante não encontrado' }, 404);
+  const ocupado = await env.CHAMADOS_DB.prepare('SELECT name FROM solicitantes WHERE name = ?').bind(novo).first();
+  if (ocupado) return jsonRes({ error: 'já existe um solicitante com o novo nome' }, 409);
+
+  const stmts = [
+    email !== undefined
+      ? env.CHAMADOS_DB.prepare('UPDATE solicitantes SET name = ?, email = ? WHERE name = ?').bind(novo, email, antigo)
+      : env.CHAMADOS_DB.prepare('UPDATE solicitantes SET name = ? WHERE name = ?').bind(novo, antigo),
+    env.CHAMADOS_DB.prepare('UPDATE chamados SET solicitante = ? WHERE solicitante = ?').bind(novo, antigo),
+  ];
+  try {
+    await env.CHAMADOS_DB.batch(stmts);
+  } catch (err) {
+    return jsonRes({ error: /unique/i.test(err.message) ? 'e-mail já usado por outro solicitante' : err.message }, 409);
+  }
+
+  for (const prefixo of ['auth_', 'usub_']) {
+    const valor = await env.SUBSCRIPTIONS.get(`${prefixo}${antigo}`);
+    if (valor) {
+      await env.SUBSCRIPTIONS.put(`${prefixo}${novo}`, valor);
+      await env.SUBSCRIPTIONS.delete(`${prefixo}${antigo}`);
+    }
+  }
+  await revokeSessions(env, antigo);
+  return jsonRes({ ok: true, nome: novo });
 }
 
 // Fase M5 (2026-08-13): POST /admin/migrate-solicitantes removida — já rodou em
@@ -2439,10 +2587,51 @@ async function handleGetAnexo(request, env, anexoId) {
   const obj = await r2GetAnexo(env, row.r2_key);
   if (!obj) return jsonRes({ error: 'arquivo não encontrado no armazenamento' }, 404);
 
+  return anexoResponse(obj, row.filename);
+}
+
+// Resposta de anexo segura (2026-11-11): o Content-Type vem do cliente no upload, então
+// nunca é confiável. Só tipos da lista (imagem/PDF) são servidos como são; qualquer outro
+// (HTML, SVG, script…) vira octet-stream + download. `nosniff` impede o navegador de
+// "adivinhar" outro tipo, e o CSP com sandbox neutraliza script mesmo se algo escapar.
+function anexoResponse(obj, filename) {
+  const tipo = (obj.contentType || '').split(';')[0].trim().toLowerCase();
+  const inline = ANEXO_TIPOS_INLINE.has(tipo);
+  const nome = encodeURIComponent(filename || 'anexo').replace(/['()]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
   return new Response(obj.body, {
     status: 200,
-    headers: { ...CORS, 'Content-Type': obj.contentType || 'application/octet-stream' },
+    headers: {
+      ...CORS,
+      'Content-Type': inline ? tipo : 'application/octet-stream',
+      'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${nome}`,
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+      'Cache-Control': 'private, no-store',
+    },
   });
+}
+
+// Acesso da TI aos anexos (2026-11-11): antes só o dono (sessão) abria, então a TI não via
+// o print que o solicitante mandou. Mesma proteção ADMIN_SECRET das outras rotas /admin/*.
+async function handleAdminListAnexos(request, env, taskId) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  const origin = new URL(request.url).origin;
+  const anexos = await d1ListAnexos(env, taskId);
+  return jsonRes({
+    anexos: anexos.map(a => ({
+      id: a.id, name: a.filename, size: a.size, content_type: a.content_type,
+      url: `${origin}/admin/anexos/${a.id}`,
+    })),
+  });
+}
+
+async function handleAdminGetAnexo(request, env, anexoId) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  const row = await d1GetAnexoRow(env, anexoId);
+  if (!row) return jsonRes({ error: 'anexo não encontrado' }, 404);
+  const obj = await r2GetAnexo(env, row.r2_key);
+  if (!obj) return jsonRes({ error: 'arquivo não encontrado no armazenamento' }, 404);
+  return anexoResponse(obj, row.filename);
 }
 
 // =====================================================================
