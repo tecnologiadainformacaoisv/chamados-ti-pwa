@@ -97,6 +97,31 @@ test.describe("Usuários (gestão de solicitantes)", () => {
     await expect(page.locator("tr", { hasText: "Nunca Entrou" }).getByRole("button", { name: "Resetar senha" })).not.toBeVisible()
   })
 
+  test("quem já acessou fica no topo e o filtro mostra só eles", async ({ page }) => {
+    await mockAdminRoutes(page)
+    await page.route("**/admin/solicitantes", (route) => {
+      if (route.request().method() === "OPTIONS") return route.fallback()
+      return route.fulfill({
+        status: 200, contentType: "application/json",
+        body: JSON.stringify({ solicitantes: [
+          { name: "Ana Sem Acesso", email: null, ativo: 1, created_at: Date.now() },
+          { name: "Bia Sem Acesso", email: null, ativo: 1, created_at: Date.now() },
+          { name: "Caio Com Acesso", email: null, ativo: 1, created_at: Date.now() },
+        ] }),
+      })
+    })
+    await page.route("**/admin/users", (route) => {
+      if (route.request().method() === "OPTIONS") return route.fallback()
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ total: 1, users: [{ name: "Caio Com Acesso", createdAt: Date.now(), lastLoginAt: Date.now() }] }) })
+    })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Usuários")
+    await expect(page.locator("tbody tr").first()).toContainText("Caio Com Acesso")
+    await page.getByLabel(/Mostrar só quem já acessou/).check()
+    await expect(page.locator("tbody tr")).toHaveCount(1)
+    await expect(page.getByText("Ana Sem Acesso")).toHaveCount(0)
+  })
+
   test("editar e-mail: clica, digita, salva, chama a rota certa", async ({ page }) => {
     await mockAdminRoutes(page)
     await page.route("**/admin/solicitantes", (route) => {

@@ -40,6 +40,7 @@ export function UsuariosView() {
   const [emailError, setEmailError] = useState<string | null>(null)
   const [resetFeedback, setResetFeedback] = useState<string | null>(null)
   const [soExternos, setSoExternos] = useState(false)
+  const [soAcessaram, setSoAcessaram] = useState(false)
   const [busca, setBusca] = useState("")
 
   const solicitantesQuery = useQuery({
@@ -129,9 +130,14 @@ export function UsuariosView() {
   const solicitantes = termo
     ? porOrigem.filter((s) => semAcento(s.name).includes(termo) || semAcento(s.email ?? "").includes(termo))
     : porOrigem
-  const ativos = solicitantes.filter((s) => s.ativo === 1)
-  const inativos = solicitantes.filter((s) => s.ativo !== 1)
   const comSenha = new Set((usersQuery.data?.users ?? []).map((u) => u.name))
+  const totalAcessaram = todos.filter((s) => comSenha.has(s.name)).length
+  const visiveis = soAcessaram ? solicitantes.filter((s) => comSenha.has(s.name)) : solicitantes
+  // Quem já acessou sobe pro topo (pedido 2026-11-11); sort estável mantém a ordem alfabética
+  // dentro de cada grupo.
+  const jaAcessou = (s: AdminSolicitante) => (comSenha.has(s.name) ? 0 : 1)
+  const ativos = visiveis.filter((s) => s.ativo === 1).sort((a, b) => jaAcessou(a) - jaAcessou(b))
+  const inativos = visiveis.filter((s) => s.ativo !== 1).sort((a, b) => jaAcessou(a) - jaAcessou(b))
 
   return (
     <div className="flex flex-col gap-4">
@@ -191,6 +197,10 @@ export function UsuariosView() {
         aria-label="Buscar solicitante por nome ou e-mail"
         className="w-full max-w-sm rounded-md border border-input bg-background px-3 py-1.5 text-sm"
       />
+      <label className="flex w-fit items-center gap-2 text-xs text-muted-foreground">
+        <input type="checkbox" checked={soAcessaram} onChange={(e) => setSoAcessaram(e.target.checked)} className="h-3.5 w-3.5" />
+        Mostrar só quem já acessou ({totalAcessaram})
+      </label>
       {totalExternos > 0 && (
         <label className="flex w-fit items-center gap-2 text-xs text-muted-foreground">
           <input type="checkbox" checked={soExternos} onChange={(e) => setSoExternos(e.target.checked)} className="h-3.5 w-3.5" />
