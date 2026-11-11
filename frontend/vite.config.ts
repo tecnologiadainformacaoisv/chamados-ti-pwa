@@ -12,7 +12,11 @@ import { VitePWA } from 'vite-plugin-pwa'
 // tipo de lista fixa que causou o incidente real de cache em 2026-08-10).
 //
 // https://vite.dev/config/
-export default defineConfig(() => ({
+export default defineConfig(({ command }) => {
+  if (command === 'build' && process.env.VITE_WORKER_URL) {
+    throw new Error('VITE_WORKER_URL está definida: o build de produção sairia apontando pro backend de teste. Remova a variável e rode o build de novo.')
+  }
+  return {
   // Domínio próprio (chamados.institutosaovicente.com.br, desde 2026-10-16): o site fica
   // na RAIZ do domínio, então os assets usam base '/'. Antes, no project site do GitHub
   // Pages (tecnologiadainformacaoisv.github.io/chamados-ti-pwa/), isso era '/chamados-ti-pwa/'.
@@ -62,4 +66,5 @@ export default defineConfig(() => ({
       },
     },
   },
-}))
+}
+})

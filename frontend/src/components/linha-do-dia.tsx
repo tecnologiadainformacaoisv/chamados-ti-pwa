@@ -42,9 +42,9 @@ export function LinhaDoDia({
     })
   }
 
-  const hoje = new Date(agora)
-  hoje.setHours(H0, 0, 0, 0)
-  const d0 = hoje.getTime()
+  // início do expediente (08h) no horário de Fortaleza (UTC-3, sem horário de verão), não no fuso do computador
+  const f = new Date(agora - 3 * 3_600_000)
+  const d0 = Date.UTC(f.getUTCFullYear(), f.getUTCMonth(), f.getUTCDate(), H0 + 3)
   const d1 = d0 + SPAN_MS
   const pct = (ms: number) => ((ms - d0) / SPAN_MS) * 100
 
@@ -207,7 +207,7 @@ export function LinhaDoDia({
                     aria-hidden="true"
                   >
                     <span className="absolute -top-px left-1 rounded-[3px] px-[5px] text-[0.72rem] font-bold text-white" style={{ background: URGENT }}>
-                      {new Date(agora).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                      {new Date(agora).toLocaleTimeString("pt-BR", { timeZone: "America/Fortaleza", hour: "2-digit", minute: "2-digit" })}
                     </span>
                   </div>
                 )}

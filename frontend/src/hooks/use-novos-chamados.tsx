@@ -51,10 +51,12 @@ export function useNovosChamados(secret: string, onSessionError: () => void) {
     const anteriores = previousIds.current
     previousIds.current = currentIds
     const novos = tasks.filter((t) => !anteriores.has(t.id))
-    if (novos.length) {
-      playNotificationSound()
-      setFila((prev) => [...prev, ...novos])
-    }
+    if (novos.length) playNotificationSound()
+    // tira da fila quem já saiu de "aberto" (ex.: o outro operador aceitou enquanto o alerta esperava)
+    setFila((prev) => {
+      const aindaAbertos = prev.filter((t) => currentIds.has(t.id))
+      return novos.length === 0 && aindaAbertos.length === prev.length ? prev : [...aindaAbertos, ...novos]
+    })
   }, [query.data])
 
   // Reage na hora quando admin-sw.js avisa (push chegou com a aba aberta) — refetch

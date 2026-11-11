@@ -77,7 +77,7 @@ export function GestaoView() {
     if (isSessionError(tasksQuery.error)) logout()
   }, [tasksQuery.error, logout])
 
-  const tasksServidor = tasksQuery.data?.tasks ?? []
+  const tasksServidor = useMemo(() => tasksQuery.data?.tasks ?? [], [tasksQuery.data])
   // Sobreposição LOCAL das ações "Aceitar" ainda dentro da janela do Desfazer. Não escreve no cache:
   // assim uma atualização automática (a cada 60 s) não desfaz o efeito na tela, e desfazer só remove a
   // sobreposição — sem restaurar um snapshot velho por cima de dados novos (achados do revisor, 19/10).

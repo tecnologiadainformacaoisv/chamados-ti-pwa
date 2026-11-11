@@ -59,15 +59,13 @@ export function slaProgressInfo(task: Task): { pct: number; color: string } | nu
 }
 
 // "até 11:22", "até amanhã 08:50" ou "até 22/10 08:50": o prazo como a pessoa fala, não como o banco guarda.
+export const FUSO = "America/Fortaleza"
+const diaFortaleza = (ms: number) => new Date(ms).toLocaleDateString("pt-BR", { timeZone: FUSO })
 export function ateQuando(due: number): string {
-  const d = new Date(due)
-  const hoje = new Date()
-  const amanha = new Date(hoje)
-  amanha.setDate(hoje.getDate() + 1)
-  const hora = d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
-  if (d.toDateString() === hoje.toDateString()) return `até ${hora}`
-  if (d.toDateString() === amanha.toDateString()) return `até amanhã ${hora}`
-  const dia = d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })
+  const hora = new Date(due).toLocaleTimeString("pt-BR", { timeZone: FUSO, hour: "2-digit", minute: "2-digit" })
+  if (diaFortaleza(due) === diaFortaleza(Date.now())) return `até ${hora}`
+  if (diaFortaleza(due) === diaFortaleza(Date.now() + 86_400_000)) return `até amanhã ${hora}`
+  const dia = new Date(due).toLocaleDateString("pt-BR", { timeZone: FUSO, day: "2-digit", month: "2-digit" })
   return `até ${dia} ${hora}`
 }
 

@@ -108,6 +108,7 @@ export async function postTaskUpdate(secret: string, taskId: string, body: Updat
     method: "POST",
     headers: { "X-Admin-Secret": secret, "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    keepalive: true, // sobrevive ao fechamento da aba (o Desfazer envia no pagehide)
   })
   if (res.status === 403) {
     throw new AdminApiError("Segredo de admin inválido ou expirado. Entre de novo.", 403)

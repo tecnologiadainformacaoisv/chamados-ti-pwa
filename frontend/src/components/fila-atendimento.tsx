@@ -2,17 +2,18 @@ import { useState } from "react"
 import { SETORES, SETOR_FIELD_ID, TIPOS, TIPO_FIELD_ID, SOLUCAO_FIELD_ID, OPERADORES, PRIORITY_MAP, optionName } from "@/lib/constants"
 import { getCF, isAtrasado, venceLogo, fmtDate, fmtMs, type Task } from "@/lib/api"
 import { ateQuando } from "@/lib/ticket-helpers"
+import { useAgora } from "@/hooks/use-agora"
 import { COR_PRIO, FONTE, INK, LINE, MUTED, NAVY, NORMAL, URGENT } from "@/lib/mvp-visual"
 
 // Fila de atendimento (pedido do usuário, 2026-10-19: "gostaria deste tipo de lista", do protótipo):
 // uma linha por chamado, faixa colorida da prioridade, título, quem/setor/tipo, atendente, prazo em
 // linguagem de gente e UM botão com a próxima ação (Aceitar / Encerrar / Retomar). Clicar na linha abre o
 // resumo; "Gerenciar" abre o modal completo. A ordem vem pronta de `compararUrgencia` (gestao-view).
-const ENCERRADOS_VISIVEIS = 50
+const LIMITE_LINHAS = 200 // teto de linhas na tela (a busca/filtros ajudam a achar o resto)
 // botão da fila: mão ao passar o mouse, cor que muda, leve "afundar" ao apertar e anel de foco do teclado
 const BTN =
   "min-h-9 cursor-pointer rounded-[5px] border px-3.5 py-1.5 font-bold transition-colors duration-100 active:translate-y-px active:brightness-95 focus-visible:outline focus-visible:outline-[3px] focus-visible:outline-offset-2 focus-visible:outline-[#0A3D62]"
-const HORA = { hour: "2-digit", minute: "2-digit" } as const
+const HORA = { timeZone: "America/Fortaleza", hour: "2-digit", minute: "2-digit" } as const
 
 function atendenteDe(t: Task): string {
   const a = t.assignees?.[0]
@@ -50,9 +51,11 @@ export function FilaAtendimento({
 }) {
   const [mostrarEncerrados, setMostrarEncerrados] = useState(false)
   const [aberto, setAberto] = useState<string | null>(null)
+  useAgora(30_000) // refaz os textos de prazo ("atrasado 5min", "vence em 2 min") sem esperar o próximo poll
 
   const visiveis = tasks.filter((t) => mostrarEncerrados || (t.status?.status || "").toLowerCase() !== "encerrado")
-  const lista = visiveis.slice(0, ENCERRADOS_VISIVEIS * 4)
+  const lista = visiveis.slice(0, LIMITE_LINHAS)
+  const cortadas = visiveis.length - lista.length
 
   return (
     <section style={{ fontFamily: FONTE, color: INK }} aria-label="Fila de atendimento">
@@ -110,7 +113,12 @@ export function FilaAtendimento({
               >
                 <span className="self-stretch" style={{ background: cor }} aria-hidden="true" />
                 <div className="min-w-0">
-                  <p className="m-0 truncate font-bold" title={t.name}>{t.name || "(sem título)"}</p>
+                  <p className="m-0 truncate font-bold" title={t.name}>
+                    {/* botão de verdade: abre o resumo pelo teclado/leitor de tela (a linha toda continua clicável com o mouse) */}
+                    <button type="button" aria-expanded={expandido} className="max-w-full cursor-pointer truncate text-left font-bold focus-visible:outline focus-visible:outline-[3px] focus-visible:outline-offset-2 focus-visible:outline-[#0A3D62]">
+                      {t.name || "(sem título)"}
+                    </button>
+                  </p>
                   <p className="m-0 flex flex-wrap gap-x-3.5 text-[0.86rem]" style={{ color: MUTED }}>
                     <span>{t.solicitante || "—"}</span>
                     {setor && <span>{setor}</span>}
@@ -149,7 +157,9 @@ export function FilaAtendimento({
                       </p>
                     )}
                     <p className="m-0 text-[0.88rem]" style={{ color: MUTED }}>
-                      Aberto às {new Date(Number(t.date_created)).toLocaleTimeString("pt-BR", HORA)} em {new Date(Number(t.date_created)).toLocaleDateString("pt-BR")} para {atendenteDe(t)}
+                      {Number.isFinite(Number(t.date_created)) && Number(t.date_created) > 0
+                        ? `Aberto às ${new Date(Number(t.date_created)).toLocaleTimeString("pt-BR", HORA)} em ${new Date(Number(t.date_created)).toLocaleDateString("pt-BR", { timeZone: "America/Fortaleza" })} para ${atendenteDe(t)}`
+                        : `Atendente: ${atendenteDe(t)}`}
                     </p>
                     <div>
                       <button
@@ -167,6 +177,11 @@ export function FilaAtendimento({
             )
           })}
         </ol>
+      )}
+      {cortadas > 0 && (
+        <p className="mt-2 text-[0.88rem]" style={{ color: MUTED }} role="status">
+          Mostrando {lista.length} de {visiveis.length} chamados. Use a busca ou os filtros para achar os demais.
+        </p>
       )}
     </section>
   )

@@ -28,7 +28,7 @@ test.describe("Gestão — linha do dia", () => {
     await expect(linha.locator('[data-barra-id="b1"]')).toHaveAttribute("data-atrasado", "nao")
     await expect(linha.locator('[data-barra-id="z1"]')).toHaveCount(0)
     // o "agora" só aparece dentro do expediente (08h às 18h); fora dele a régua avisa
-    const h = new Date().getHours()
+    const h = (new Date().getUTCHours() - 3 + 24) % 24 // hora em Fortaleza
     if (h >= 8 && h < 18) await expect(linha.getByTestId("agora")).toHaveCount(1)
     else {
       await expect(linha.getByTestId("agora")).toHaveCount(0)
