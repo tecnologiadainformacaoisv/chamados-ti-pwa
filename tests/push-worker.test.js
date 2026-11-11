@@ -2431,6 +2431,35 @@ async function test(name, fn) {
     assert.strictEqual(inexistente.status, 404);
   });
 
+  // 7b) excluir solicitante (2026-11-11)
+  await test('excluir solicitante: exige admin, trava se tem chamados, apaga tudo com apagarChamados', async () => {
+    await d1CreateSolicitante(hEnv, 'Descartavel', null);
+    const c = await d1CreateChamado(hEnv, { name: 'Teste', status: 'aberto', priority: 3, tipo: 0, setor: 0, solicitante: 'Descartavel', due_date: Date.now() + 1000 });
+    const outro = await d1CreateChamado(hEnv, { name: 'De outra pessoa', status: 'aberto', priority: 3, tipo: 0, setor: 0, solicitante: 'Pessoa Alvo', due_date: Date.now() + 1000 });
+    await hEnv.SUBSCRIPTIONS.put('auth_Descartavel', '{"algo":"x"}');
+    await hEnv.SUBSCRIPTIONS.put('usub_Descartavel', '{"endpoint":"https://x.test/"}');
+    assert.strictEqual((await doPost('/admin/solicitantes/Descartavel/excluir', {}, {})).status, 403);
+    const trava = await doPost('/admin/solicitantes/Descartavel/excluir', ADM, {});
+    assert.strictEqual(trava.status, 409);
+    assert.strictEqual((await trava.json()).chamados, 1);
+    assert.ok(await d1GetChamado(hEnv, c.id), 'sem apagarChamados nada some');
+    const ok = await doPost('/admin/solicitantes/Descartavel/excluir', ADM, { apagarChamados: true });
+    assert.strictEqual(ok.status, 200);
+    assert.strictEqual((await ok.json()).chamadosApagados, 1);
+    assert.ok(!(await d1GetChamado(hEnv, c.id)));
+    assert.ok(await d1GetChamado(hEnv, outro.id), 'chamado de outra pessoa continua');
+    assert.ok(!(await hEnv.CHAMADOS_DB.prepare('SELECT name FROM solicitantes WHERE name = ?').bind('Descartavel').first()));
+    assert.ok(!(await hEnv.SUBSCRIPTIONS.get('auth_Descartavel')));
+    assert.ok(!(await hEnv.SUBSCRIPTIONS.get('usub_Descartavel')));
+    assert.strictEqual((await doPost('/admin/solicitantes/Descartavel/excluir', ADM, {})).status, 404);
+  });
+  await test('excluir solicitante sem chamados apaga direto, sem precisar de apagarChamados', async () => {
+    await d1CreateSolicitante(hEnv, 'Sem Chamados', null);
+    const r = await doPost('/admin/solicitantes/Sem%20Chamados/excluir', ADM, {});
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual((await r.json()).chamadosApagados, 0);
+  });
+
   // 8) número sequencial legível do chamado (2026-11-11)
   console.log('--- número do chamado ---');
   await test('chamados novos recebem numero 1, 2, 3… e ele aparece em /api/my-tasks', async () => {

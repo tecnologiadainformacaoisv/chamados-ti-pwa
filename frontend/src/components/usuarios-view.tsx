@@ -1,12 +1,14 @@
 import { useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { UserPlus, Pencil, Check, X, KeyRound } from "lucide-react"
+import { UserPlus, Pencil, Check, X, KeyRound, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 import {
   createSolicitante,
+  excluirSolicitante,
+  AdminApiError,
   fetchAdminSolicitantes,
   fetchAdminUsers,
   isSessionError,
@@ -86,6 +88,37 @@ export function UsuariosView() {
     onError: (err) => {
       if (isSessionError(err)) { logout(); return }
       setEmailError(err instanceof Error ? err.message : "Não foi possível salvar o e-mail.")
+    },
+  })
+
+  // Excluir (2026-11-11): 1ª tentativa sem apagar chamados. Se a pessoa tem chamados o servidor
+  // responde 409 com a contagem; aí a tela pergunta de novo, dizendo quantos serão apagados.
+  const excluirMutation = useMutation({
+    mutationFn: async (name: string) => {
+      try {
+        await excluirSolicitante(secret, name)
+        return 0
+      } catch (err) {
+        if (err instanceof AdminApiError && err.status === 409 && err.chamados) {
+          const ok = confirm(`${name} tem ${err.chamados} chamado(s). Excluir apaga a conta E esses chamados, com os anexos e o histórico, e NÃO dá para desfazer.
+
+Apagar tudo mesmo?`)
+          if (!ok) return -1
+          await excluirSolicitante(secret, name, true)
+          return err.chamados
+        }
+        throw err
+      }
+    },
+    onSuccess: (apagados, name) => {
+      if (apagados >= 0) setResetFeedback(`${name} foi excluído${apagados > 0 ? ` junto com ${apagados} chamado(s)` : ""}.`)
+      queryClient.invalidateQueries({ queryKey: ["admin-solicitantes"] })
+      queryClient.invalidateQueries({ queryKey: ["admin-users"] })
+      queryClient.invalidateQueries({ queryKey: ["admin-tasks"] })
+    },
+    onError: (err) => {
+      if (isSessionError(err)) { logout(); return }
+      setFormError(err instanceof Error ? err.message : "Não foi possível excluir.")
     },
   })
 
@@ -303,6 +336,20 @@ export function UsuariosView() {
                           onClick={() => toggleMutation.mutate({ name: s.name, ativo: s.ativo !== 1 })}
                         >
                           {s.ativo === 1 ? "Desativar" : "Reativar"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive hover:text-destructive"
+                          disabled={excluirMutation.isPending}
+                          onClick={() => {
+                            if (confirm(`Excluir ${s.name} de vez? Isso não dá para desfazer. Para só impedir o acesso, use "Desativar".`)) {
+                              excluirMutation.mutate(s.name)
+                            }
+                          }}
+                          aria-label={`Excluir ${s.name}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" /> Excluir
                         </Button>
                       </div>
                     </td>

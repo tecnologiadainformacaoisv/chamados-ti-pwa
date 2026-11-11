@@ -122,6 +122,47 @@ test.describe("Usuários (gestão de solicitantes)", () => {
     await expect(page.getByText("Ana Sem Acesso")).toHaveCount(0)
   })
 
+  test("excluir: confirma, e se a pessoa tem chamados pergunta de novo e reenvia com apagarChamados", async ({ page }) => {
+    await mockAdminRoutes(page)
+    await page.route("**/admin/solicitantes", (route) => {
+      if (route.request().method() === "OPTIONS") return route.fallback()
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ solicitantes: [{ name: "Conta Teste", email: null, ativo: 1, created_at: Date.now() }] }) })
+    })
+    const corpos: unknown[] = []
+    await page.route(/\/admin\/solicitantes\/[^/]+\/excluir/, (route) => {
+      if (route.request().method() === "OPTIONS") return route.fallback()
+      const body = route.request().postDataJSON() ?? {}
+      corpos.push(body)
+      if (!body.apagarChamados) return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "tem 3 chamado(s)", chamados: 3 }) })
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, chamadosApagados: 3 }) })
+    })
+    const dialogs: string[] = []
+    page.on("dialog", (d) => { dialogs.push(d.message()); void d.accept() })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Usuários")
+    await page.getByRole("button", { name: "Excluir Conta Teste" }).click()
+    await expect.poll(() => corpos.length).toBe(2)
+    expect(corpos).toEqual([{}, { apagarChamados: true }])
+    expect(dialogs[1]).toContain("3 chamado(s)")
+    await expect(page.getByText(/foi excluído junto com 3 chamado/)).toBeVisible()
+  })
+
+  test("excluir: cancelar a confirmação não chama o servidor", async ({ page }) => {
+    await mockAdminRoutes(page)
+    await page.route("**/admin/solicitantes", (route) => {
+      if (route.request().method() === "OPTIONS") return route.fallback()
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ solicitantes: [{ name: "Conta Teste", email: null, ativo: 1, created_at: Date.now() }] }) })
+    })
+    let chamou = false
+    await page.route(/\/admin\/solicitantes\/[^/]+\/excluir/, (route) => { chamou = true; return route.fulfill({ status: 200, body: "{}" }) })
+    page.on("dialog", (d) => { void d.dismiss() })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Usuários")
+    await page.getByRole("button", { name: "Excluir Conta Teste" }).click()
+    await page.waitForTimeout(300)
+    expect(chamou).toBe(false)
+  })
+
   test("editar e-mail: clica, digita, salva, chama a rota certa", async ({ page }) => {
     await mockAdminRoutes(page)
     await page.route("**/admin/solicitantes", (route) => {

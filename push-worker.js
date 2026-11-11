@@ -227,6 +227,8 @@ async function routeRequest(request, env) {
       if (pathname === '/admin/solicitantes/emails/bulk') return handleAdminBulkSetSolicitanteEmails(request, env);
       const solAtivoMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/ativo$/);
       if (solAtivoMatch) return handleAdminSetSolicitanteAtivo(request, env, solAtivoMatch[1]);
+      const solExcluirMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/excluir$/);
+      if (solExcluirMatch) return handleAdminExcluirSolicitante(request, env, solExcluirMatch[1]);
       const solRenomearMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/renomear$/);
       if (solRenomearMatch) return handleAdminRenomearSolicitante(request, env, solRenomearMatch[1]);
       const solEmailMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/email$/);
@@ -2187,6 +2189,40 @@ async function handleAdminSetSolicitanteAtivo(request, env, name) {
   // Desativar derruba as sessões abertas da pessoa (antes ela seguia logada por até 90 dias).
   if (!body.ativo) await revokeSessions(env, decodeURIComponent(name));
   return jsonRes({ ok: true });
+}
+
+// POST /admin/solicitantes/:nome/excluir (2026-11-11, pedido do usuário) — apaga o solicitante
+// de vez. DESTRUTIVA e irreversível. Até aqui só existia "desativar" (preserva o histórico: os
+// chamados guardam o NOME, sem FOREIGN KEY, e ficariam sem dono). Por isso a exclusão tem uma
+// trava: se a pessoa tem chamados, responde 409 com a contagem e só segue com
+// `{ apagarChamados: true }` (o frontend pergunta de novo, mostrando o número). Apaga: a linha
+// em `solicitantes`, os chamados dela (d1DeleteChamado: assignees, anexos D1+R2, eventos), a
+// senha (`auth_`), a inscrição de push (`usub_`) e revoga as sessões abertas.
+const MAX_CHAMADOS_EXCLUIR_SOLICITANTE = 40; // orçamento de subrequests por invocação
+async function handleAdminExcluirSolicitante(request, env, name) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  let body = {};
+  try { body = await request.json(); } catch { /* corpo opcional */ }
+  const nome = decodeURIComponent(name);
+
+  const existe = await env.CHAMADOS_DB.prepare('SELECT name FROM solicitantes WHERE name = ?').bind(nome).first();
+  if (!existe) return jsonRes({ error: 'solicitante não encontrado' }, 404);
+
+  const { results } = await env.CHAMADOS_DB.prepare('SELECT id FROM chamados WHERE solicitante = ?').bind(nome).all();
+  const chamados = results || [];
+  if (chamados.length > 0 && body.apagarChamados !== true) {
+    return jsonRes({ error: `${nome} tem ${chamados.length} chamado(s)`, chamados: chamados.length }, 409);
+  }
+  if (chamados.length > MAX_CHAMADOS_EXCLUIR_SOLICITANTE) {
+    return jsonRes({ error: `são ${chamados.length} chamados, mais que o limite de ${MAX_CHAMADOS_EXCLUIR_SOLICITANTE} por exclusão` }, 400);
+  }
+
+  for (const c of chamados) await d1DeleteChamado(env, c.id);
+  await env.CHAMADOS_DB.prepare('DELETE FROM solicitantes WHERE name = ?').bind(nome).run();
+  await env.SUBSCRIPTIONS.delete(`auth_${nome}`);
+  await env.SUBSCRIPTIONS.delete(`usub_${nome}`);
+  await revokeSessions(env, nome);
+  return jsonRes({ ok: true, chamadosApagados: chamados.length });
 }
 
 // POST /admin/solicitantes/:nome/renomear (2026-11-11) — body { novoNome, email? }.

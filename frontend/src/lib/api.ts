@@ -43,9 +43,11 @@ export type Filtros = {
 
 export class AdminApiError extends Error {
   status?: number
-  constructor(message: string, status?: number) {
+  chamados?: number
+  constructor(message: string, status?: number, chamados?: number) {
     super(message)
     this.status = status
+    this.chamados = chamados
   }
 }
 
@@ -61,8 +63,8 @@ export async function adminRequest<T>(secret: string, path: string): Promise<T> 
     throw new AdminApiError("Segredo de admin inválido ou expirado. Entre de novo.", 403)
   }
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}) as { error?: string })
-    throw new AdminApiError(data.error || `Erro HTTP ${res.status}`, res.status)
+    const data = await res.json().catch(() => ({}) as { error?: string; chamados?: number })
+    throw new AdminApiError(data.error || `Erro HTTP ${res.status}`, res.status, data.chamados)
   }
   return res.json()
 }
@@ -289,8 +291,8 @@ async function adminMutate(secret: string, path: string, body: unknown): Promise
     throw new AdminApiError("Segredo de admin inválido ou expirado. Entre de novo.", 403)
   }
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}) as { error?: string })
-    throw new AdminApiError(data.error || `Erro HTTP ${res.status}`, res.status)
+    const data = await res.json().catch(() => ({}) as { error?: string; chamados?: number })
+    throw new AdminApiError(data.error || `Erro HTTP ${res.status}`, res.status, data.chamados)
   }
 }
 
@@ -304,6 +306,12 @@ export async function setSolicitanteEmail(secret: string, name: string, email: s
 
 export async function setSolicitanteAtivo(secret: string, name: string, ativo: boolean): Promise<void> {
   await adminMutate(secret, `/solicitantes/${encodeURIComponent(name)}/ativo`, { ativo })
+}
+
+// Excluir solicitante (2026-11-11). Sem `apagarChamados`, se a pessoa tem chamados o servidor
+// responde 409 com a contagem (AdminApiError.chamados) — a tela pergunta de novo e reenvia.
+export async function excluirSolicitante(secret: string, name: string, apagarChamados = false): Promise<void> {
+  await adminMutate(secret, `/solicitantes/${encodeURIComponent(name)}/excluir`, apagarChamados ? { apagarChamados: true } : {})
 }
 
 // Alerta de chamado novo pro admin (2026-08-13) — sem login por pessoa no admin (só
