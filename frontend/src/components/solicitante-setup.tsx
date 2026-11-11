@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent, type RefObject } from "react"
+import { useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react"
 import { Eye, EyeOff } from "lucide-react"
 import { useSessionAuth } from "@/hooks/use-session-auth"
 import { Button } from "@/components/ui/button"
@@ -12,6 +12,97 @@ import iconIsv from "@/assets/icon-isv.svg"
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const MSG_EMAIL = "Digite seu e-mail completo, por exemplo nome@institutosaovicente.com.br."
 const MSG_SENHA = "A senha precisa ter pelo menos 8 caracteres."
+
+type CartaoEx = { n: string; sit: "aberto" | "atend" | "espera" | "ok"; t: string; sub: string }
+const SIT = {
+  aberto: { rot: "Aberto", chip: "bg-[#E3ECFA] text-[#1A3A6B]", passos: 1, barra: "bg-[#2A5298]" },
+  atend: { rot: "Em atendimento", chip: "bg-[#EEE8FB] text-[#5B3FB0]", passos: 2, barra: "bg-[#5B3FB0]" },
+  espera: { rot: "Em espera", chip: "bg-[#FEF3C7] text-[#92400E]", passos: 2, barra: "bg-[#D97706]" },
+  ok: { rot: "Atendido", chip: "bg-[#DCFCE7] text-[#166534]", passos: 3, barra: "bg-[#16A34A]" },
+} as const
+const CARDS_A: CartaoEx[] = [
+  { n: "0142", sit: "atend", t: "Impressora do financeiro não imprime", sub: "Everson está atendendo" },
+  { n: "0143", sit: "aberto", t: "Computador da recepção não liga", sub: "Aguardando a TI aceitar" },
+  { n: "0138", sit: "ok", t: "Acesso ao e-mail liberado", sub: "Atendido por Henrique" },
+  { n: "0144", sit: "espera", t: "Troca de toner da sala 3", sub: "Em espera, prazo pausado" },
+]
+const CARDS_B: CartaoEx[] = [
+  { n: "0145", sit: "atend", t: "Wi-Fi caindo na sala de reuniões", sub: "Henrique está atendendo" },
+  { n: "0139", sit: "ok", t: "Senha do sistema redefinida", sub: "Atendido por Everson" },
+  { n: "0146", sit: "aberto", t: "Instalar o Excel no notebook novo", sub: "Aguardando a TI aceitar" },
+  { n: "0140", sit: "ok", t: "Ramal sem som corrigido", sub: "Atendido por Henrique" },
+]
+
+function CartaoExemplo({ c }: { c: CartaoEx }) {
+  const s = SIT[c.sit]
+  return (
+    <div className="mb-4 rounded-2xl bg-white p-4 text-[#12223F] shadow-[0_18px_40px_rgba(0,0,0,.28)]">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-bold text-[#1A3A6B]">#{c.n}</span>
+        <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${s.chip}`}>{s.rot}</span>
+      </div>
+      <p className="mt-1.5 text-sm font-semibold leading-snug">{c.t}</p>
+      <p className="mt-0.5 text-xs text-slate-600">{c.sub}</p>
+      <div className="mt-3 flex gap-1">
+        {[1, 2, 3].map((i) => (
+          <span key={i} className={`h-1.5 flex-1 rounded-full ${i <= s.passos ? s.barra : "bg-slate-200"}`} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Moldura da tela de entrada (redesenho 2026-11-11): no computador, duas colunas — à esquerda a
+// marca e um exemplo de chamado (o que a pessoa vai ter depois de entrar), à direita o formulário
+// alinhado à esquerda, sem cartão flutuante. No celular a coluna da marca vira uma faixa curta no topo.
+function LoginShell({ children }: { children: ReactNode }) {
+  return (
+    <div className="grid min-h-svh grid-rows-[auto_1fr] bg-[#F4F7FB] lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:grid-rows-1">
+      <aside className="bg-sidebar-gradient relative flex flex-col gap-10 overflow-hidden px-6 py-5 text-white lg:justify-between lg:px-14 lg:py-12">
+        <div className="flex items-center gap-3">
+          <img src={iconIsv} alt="" className="h-11 w-11 rounded-xl" />
+          <div className="leading-tight">
+            <p className="text-base font-bold">Chamados de TI</p>
+            <p className="text-sm text-white/70">Instituto São Vicente</p>
+          </div>
+        </div>
+
+        <div className="hidden lg:block">
+          <p className="max-w-md text-[2.4rem] font-bold leading-[1.1] tracking-tight">
+            Peça ajuda da TI e acompanhe cada passo.
+          </p>
+          <p className="mt-4 max-w-sm text-base leading-relaxed text-white/75">
+            Todo chamado tem número, prazo e aviso no seu celular quando o status muda.
+          </p>
+
+        </div>
+
+        {/* Palco dinâmico (o -mx-14 compensa o lg:px-14 do aside): duas colunas de chamados de exemplo, uma sobe e outra desce, em loop.
+            Só transform (leve), pausa com prefers-reduced-motion e some no celular. */}
+        <div
+          aria-hidden="true"
+          className="relative -mx-14 hidden min-h-0 flex-1 overflow-hidden lg:block [mask-image:linear-gradient(to_bottom,transparent,#000_16%,#000_84%,transparent)]"
+        >
+          <div className="login-glow pointer-events-none absolute -right-10 top-1/4 h-72 w-72 rounded-full bg-[#5B8DEF]/40 blur-3xl" />
+          <div className="absolute inset-0 grid -rotate-6 scale-110 grid-cols-2 gap-4">
+            <div className="login-sobe">
+              {[...CARDS_A, ...CARDS_A].map((c, i) => <CartaoExemplo key={i} c={c} />)}
+            </div>
+            <div className="login-desce">
+              {[...CARDS_B, ...CARDS_B].map((c, i) => <CartaoExemplo key={i} c={c} />)}
+            </div>
+          </div>
+        </div>
+
+        <p className="hidden text-sm text-white/70 lg:block">Suporte técnico do ISV</p>
+      </aside>
+
+      <main className="flex items-start justify-center px-6 py-8 lg:items-center lg:px-12 lg:py-12">
+        <div className="w-full max-w-sm">{children}</div>
+      </main>
+    </div>
+  )
+}
 
 // Campo de senha com botão "mostrar" (2026-10-16, revisão de UX pra implantação): no
 // primeiro acesso a senha digitada vira a senha definitiva, e um erro de digitação às
@@ -30,7 +121,7 @@ function PasswordInput({ id, autoComplete, placeholder, value, onChange, inputRe
         type={visivel ? "text" : "password"}
         autoComplete={autoComplete}
         placeholder={placeholder}
-        className="pr-11"
+        className="h-11 pr-11"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
@@ -74,16 +165,13 @@ export function SolicitanteSetup() {
 
   if (bootError) {
     return (
-      <div className="relative flex min-h-svh items-center justify-center p-4">
-        <div className="bg-brand-gradient fixed inset-0 z-0" />
-        <div className="shadow-brand-card relative z-10 w-full max-w-sm rounded-[20px] bg-card p-8 text-center">
-          <p className="mb-1 text-sm font-medium text-destructive">Não foi possível conectar ao sistema.</p>
-          <p className="mb-4 text-sm text-muted-foreground">
-            Verifique sua internet e tente de novo. Se continuar, fale com a TI.
-          </p>
-          <Button onClick={retryBoot}>Tentar de novo</Button>
-        </div>
-      </div>
+      <LoginShell>
+        <p role="alert" className="mb-1 text-base font-semibold text-destructive">Não foi possível conectar ao sistema.</p>
+        <p className="mb-5 text-sm text-muted-foreground">
+          Verifique sua internet e tente de novo. Se continuar, fale com a TI.
+        </p>
+        <Button onClick={retryBoot} className="h-11 w-full">Tentar de novo</Button>
+      </LoginShell>
     )
   }
 
@@ -136,120 +224,109 @@ export function SolicitanteSetup() {
   const linkEsqueci = `https://wa.me/${WA_NUMBER_PADRAO}?text=${encodeURIComponent("Olá! Esqueci minha senha do sistema de chamados de TI. Pode resetar pra mim?")}`
 
   return (
-    <div className="relative flex min-h-svh items-center justify-center p-4">
-      <div className="bg-brand-gradient fixed inset-0 z-0" />
-      <div className="shadow-brand-card relative z-10 w-full max-w-sm rounded-[20px] bg-card p-8">
-        <div className="mb-6 flex flex-col items-center gap-2 text-center">
-          {/* ícone quadrado (não o logotipo largo) — mesmo glyph do app icon/vanilla
-              setup-screen; logo-isv.svg é um lockup horizontal (~3.3:1) e fica
-              espremido/ilegível dentro de uma caixa quadrada (achado 2026-08-14) */}
-          <img src={iconIsv} alt="" className="h-14 w-14 rounded-xl" />
-          <h1 className="text-lg font-semibold text-foreground">Chamados de TI</h1>
-          <p className="text-sm text-muted-foreground">ISV – Suporte Técnico</p>
-        </div>
+    <LoginShell>
+      {modoExterno ? (
+        <SetupExterno
+          onVoltar={() => {
+            setError(null)
+            setModoExterno(false)
+          }}
+        />
+      ) : (
+        <>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Entrar</h1>
+          <p className="mb-6 mt-1 text-sm text-muted-foreground">Use o e-mail institucional e a sua senha.</p>
 
-        {modoExterno ? (
-          <SetupExterno
-            onVoltar={() => {
-              setError(null)
-              setModoExterno(false)
-            }}
-          />
-        ) : (
-          <>
-            <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="setup-email">Seu e-mail institucional *</Label>
-                <Input
-                  id="setup-email"
-                  ref={emailRef}
-                  type="email"
-                  autoComplete="username"
-                  placeholder="voce@institutosaovicente.com.br"
-                  value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value)
-                    // Trocou o e-mail: a etapa de "primeiro acesso" valia pro e-mail anterior.
-                    if (primeiroAcesso) { setPrimeiroAcesso(false); setConfirmacao("") }
-                  }}
-                />
-              </div>
+          <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="setup-email">E-mail institucional</Label>
+              <Input
+                id="setup-email"
+                ref={emailRef}
+                type="email"
+                autoComplete="username"
+                placeholder="voce@institutosaovicente.com.br"
+                className="h-11"
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value)
+                  // Trocou o e-mail: a etapa de "primeiro acesso" valia pro e-mail anterior.
+                  if (primeiroAcesso) { setPrimeiroAcesso(false); setConfirmacao("") }
+                }}
+              />
+            </div>
 
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="setup-password">{primeiroAcesso ? "Crie sua senha *" : "Senha *"}</Label>
-                <PasswordInput
-                  id="setup-password"
-                  inputRef={passwordRef}
-                  describedBy="setup-password-hint"
-                  autoComplete="current-password"
-                  placeholder="Sua senha de acesso"
-                  value={password}
-                  onChange={setPassword}
-                />
-                <p id="setup-password-hint" className="rounded-md bg-muted px-2.5 py-2 text-xs text-foreground">
-                  <strong>Primeiro acesso?</strong> A senha que você digitar agora será a sua senha. Vamos pedir para
-                  você repeti-la (mínimo 8 caracteres).
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="setup-password">{primeiroAcesso ? "Crie sua senha" : "Senha"}</Label>
+              <PasswordInput
+                id="setup-password"
+                inputRef={passwordRef}
+                describedBy="setup-password-hint"
+                autoComplete="current-password"
+                placeholder="Sua senha de acesso"
+                value={password}
+                onChange={setPassword}
+              />
+              {!primeiroAcesso && (
+                <p id="setup-password-hint" className="text-xs leading-relaxed text-muted-foreground">
+                  <strong className="font-semibold text-foreground">Primeiro acesso?</strong> Digite a senha que você
+                  quer usar (mínimo 8 caracteres). Vamos pedir para repeti-la.
                 </p>
+              )}
+            </div>
+
+            {primeiroAcesso && (
+              <div className="flex flex-col gap-1.5 rounded-xl border border-primary/20 bg-primary/5 p-3.5" role="group" aria-label="Confirmação da senha">
+                <p id="setup-password-hint" className="m-0 mb-1.5 text-sm font-medium leading-snug text-foreground" role="status">
+                  Este é o seu primeiro acesso. Crie sua senha e repita no campo abaixo. Se o e-mail estiver errado,
+                  corrija-o acima.
+                </p>
+                <Label htmlFor="setup-password-confirm">Repita a senha</Label>
+                <PasswordInput
+                  id="setup-password-confirm"
+                  inputRef={confirmacaoRef}
+                  autoComplete="new-password"
+                  placeholder="Digite a mesma senha de novo"
+                  value={confirmacao}
+                  onChange={setConfirmacao}
+                />
               </div>
+            )}
 
-              {primeiroAcesso && (
-                <div className="flex flex-col gap-2" role="group" aria-label="Confirmação da senha">
-                  <p className="m-0 rounded-md bg-primary/10 px-2.5 py-2 text-sm font-medium text-foreground" role="status">
-                    Este é o seu primeiro acesso. Crie sua senha e repita no campo abaixo. Se o e-mail estiver errado,
-                    corrija-o acima.
-                  </p>
-                  <Label htmlFor="setup-password-confirm">Repita a senha *</Label>
-                  <PasswordInput
-                    id="setup-password-confirm"
-                    inputRef={confirmacaoRef}
-                    autoComplete="new-password"
-                    placeholder="Digite a mesma senha de novo"
-                    value={confirmacao}
-                    onChange={setConfirmacao}
-                  />
-                </div>
-              )}
+            {error && (
+              <Alert variant="destructive">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
 
-              {error && (
-                <Alert variant="destructive">
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
+            <Button type="submit" disabled={submitting} className="h-11 w-full text-base">
+              {submitting ? "Entrando…" : primeiroAcesso ? "Criar senha e entrar" : "Entrar"}
+            </Button>
 
-              <Button type="submit" disabled={submitting}>
-                {submitting ? "Entrando…" : primeiroAcesso ? "Criar senha e entrar" : "Entrar"}
-              </Button>
+            {/* Sem recuperação automática por e-mail: quem esqueceu a senha pede o reset à TI
+                (tela Usuários do painel), então o caminho precisa estar à vista. */}
+            <p className="m-0 text-center text-sm text-muted-foreground">
+              Esqueceu a senha?{" "}
+              <a href={linkEsqueci} target="_blank" rel="noreferrer" className="font-semibold text-primary underline underline-offset-2">
+                Peça à TI pelo WhatsApp
+              </a>
+            </p>
+          </form>
 
-              {/* Sem recuperação automática por e-mail: quem esqueceu a senha pede o reset à TI
-                  (tela Usuários do painel), então o caminho precisa estar à vista. */}
-              <p className="m-0 text-center text-sm text-muted-foreground">
-                Esqueceu a senha?{" "}
-                <a href={linkEsqueci} target="_blank" rel="noreferrer" className="font-medium text-primary underline underline-offset-2">
-                  Peça à TI pelo WhatsApp
-                </a>
-              </p>
-            </form>
-
-            {/* variant="secondary", não "outline" — --background e --card são o MESMO
-                branco puro neste tema (ver index.css), então "outline" (bg-background)
-                não tinha NENHUM preenchimento visível por cima do card, só uma borda
-                fraca — o que fazia o botão sumir mesmo depois do fix de quebra de linha.
-                "secondary" usa --secondary (cinza-azulado real, distinto do card) —
-                preenchimento visível de verdade, não só borda. h-auto/whitespace-normal
-                — o texto é longo demais pra caber numa linha só (Button base é
-                whitespace-nowrap, pensado pra rótulo curto). */}
+          <div className="mt-8 border-t border-border pt-5">
+            <p className="mb-2 text-sm text-muted-foreground">Visitante, parceiro ou fornecedor?</p>
             <Button
               type="button"
-              variant="secondary"
+              variant="outline"
               onClick={() => setModoExterno(true)}
-              className="mt-4 h-auto w-full whitespace-normal py-2.5 text-center leading-snug"
+              className="h-auto w-full whitespace-normal bg-white py-2.5 text-center leading-snug"
             >
               Não tenho e-mail institucional (visitante, parceiro ou fornecedor)
             </Button>
-          </>
-        )}
-      </div>
-    </div>
+          </div>
+        </>
+      )}
+    </LoginShell>
   )
 }
 
@@ -298,10 +375,13 @@ function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
 
   return (
     <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
-      <p className="text-xs text-muted-foreground">
-        Cadastro pra quem não tem e-mail institucional — a TI vai ver seu nome, e-mail e
-        telefone junto de cada chamado que você abrir.
-      </p>
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight text-foreground">Cadastro de visitante</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Cadastro pra quem não tem e-mail institucional — a TI vai ver seu nome, e-mail e
+          telefone junto de cada chamado que você abrir.
+        </p>
+      </div>
 
       <div className="flex flex-col gap-2">
         <Label htmlFor="setup-ext-name">Nome completo *</Label>
@@ -309,6 +389,7 @@ function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
           id="setup-ext-name"
           autoComplete="name"
           placeholder="Seu nome e sobrenome"
+          className="h-11"
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
@@ -321,6 +402,7 @@ function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
           type="email"
           autoComplete="username"
           placeholder="voce@email.com"
+          className="h-11"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
@@ -333,6 +415,7 @@ function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
           type="tel"
           autoComplete="tel"
           placeholder="(85) 90000-0000"
+          className="h-11"
           value={telefone}
           onChange={(e) => setTelefone(e.target.value)}
         />
@@ -356,11 +439,11 @@ function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
         </Alert>
       )}
 
-      <Button type="submit" disabled={submitting}>
+      <Button type="submit" disabled={submitting} className="h-11 w-full text-base">
         {submitting ? "Cadastrando…" : "Cadastrar e entrar"}
       </Button>
 
-      <Button type="button" variant="secondary" onClick={onVoltar} className="h-auto w-full whitespace-normal py-2.5 text-center leading-snug">
+      <Button type="button" variant="outline" onClick={onVoltar} className="h-auto w-full whitespace-normal bg-white py-2.5 text-center leading-snug">
         Tenho e-mail institucional — voltar pra entrada normal
       </Button>
     </form>
