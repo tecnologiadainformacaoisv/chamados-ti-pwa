@@ -13,7 +13,7 @@ type SessionAuthValue = {
   nomes: string[]
   bootError: string | null
   retryBoot: () => void
-  login: (email: string, password: string, confirmacao?: string) => Promise<void>
+  login: (email: string, password: string, confirmacao?: string, nome?: string) => Promise<void>
   // Autocadastro externo (2026-09-17) — quem não está na lista pré-aprovada pela TI
   // digita o próprio nome/e-mail em vez de escolher/entrar com um já cadastrado.
   loginExterno: (name: string, email: string, password: string, telefone?: string) => Promise<void>
@@ -73,8 +73,8 @@ export function SessionAuthProvider({ children }: { children: ReactNode }) {
     boot()
   }, [boot])
 
-  const login = useCallback(async (email: string, password: string, confirmacao?: string) => {
-    const result = await loginOrRegister(email, password, confirmacao)
+  const login = useCallback(async (email: string, password: string, confirmacao?: string, nome?: string) => {
+    const result = await loginOrRegister(email, password, confirmacao, nome)
     localStorage.setItem(TOKEN_KEY, result.token)
     localStorage.setItem(NAME_KEY, result.name)
     setSessionToken(result.token)

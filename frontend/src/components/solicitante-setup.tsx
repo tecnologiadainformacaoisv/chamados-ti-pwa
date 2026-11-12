@@ -156,9 +156,13 @@ export function SolicitanteSetup() {
   // pede pra repetir a senha antes de cadastrar (um erro de digitação aqui seria definitivo).
   const [primeiroAcesso, setPrimeiroAcesso] = useState(false)
   const [confirmacao, setConfirmacao] = useState("")
+  // Nome completo, pedido só no primeiro acesso: vários e-mails são de cargo (recepcionista@...),
+  // então o nome que a TI tinha pode não ser de quem está entrando.
+  const [nome, setNome] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Foco vai pro campo com problema quando a validação falha (leitor de tela e teclado).
+  const nomeRef = useRef<HTMLInputElement>(null)
   const emailRef = useRef<HTMLInputElement>(null)
   const passwordRef = useRef<HTMLInputElement>(null)
   const confirmacaoRef = useRef<HTMLInputElement>(null)
@@ -191,6 +195,11 @@ export function SolicitanteSetup() {
       return
     }
     if (primeiroAcesso) {
+      if (nome.trim().split(/\s+/).filter(Boolean).length < 2) {
+        setError("Digite seu nome completo (nome e sobrenome).")
+        nomeRef.current?.focus()
+        return
+      }
       if (password.length < 8) {
         setError(MSG_SENHA)
         passwordRef.current?.focus()
@@ -205,14 +214,14 @@ export function SolicitanteSetup() {
     setSubmitting(true)
     setError(null)
     try {
-      await login(email.trim(), password, primeiroAcesso ? confirmacao : undefined)
+      await login(email.trim(), password, primeiroAcesso ? confirmacao : undefined, primeiroAcesso ? nome.trim() : undefined)
     } catch (err) {
       if (err instanceof PrimeiroAcessoError) {
-        // Ainda sem senha: abre o campo "Repita a senha" e espera a pessoa confirmar.
+        // Ainda sem senha: abre os campos "Nome completo" e "Repita a senha" e espera a pessoa confirmar.
         setPrimeiroAcesso(true)
         setConfirmacao("")
         setError(null)
-        setTimeout(() => confirmacaoRef.current?.focus(), 0)
+        setTimeout(() => nomeRef.current?.focus(), 0)
       } else {
         setError(err instanceof Error ? err.message : "Não foi possível entrar. Verifique sua conexão.")
       }
@@ -251,7 +260,7 @@ export function SolicitanteSetup() {
                 onChange={(e) => {
                   setEmail(e.target.value)
                   // Trocou o e-mail: a etapa de "primeiro acesso" valia pro e-mail anterior.
-                  if (primeiroAcesso) { setPrimeiroAcesso(false); setConfirmacao("") }
+                  if (primeiroAcesso) { setPrimeiroAcesso(false); setConfirmacao(""); setNome("") }
                 }}
               />
             </div>
@@ -278,9 +287,19 @@ export function SolicitanteSetup() {
             {primeiroAcesso && (
               <div className="flex flex-col gap-1.5 rounded-xl border border-primary/20 bg-primary/5 p-3.5" role="group" aria-label="Confirmação da senha">
                 <p id="setup-password-hint" className="m-0 mb-1.5 text-sm font-medium leading-snug text-foreground" role="status">
-                  Este é o seu primeiro acesso. Crie sua senha e repita no campo abaixo. Se o e-mail estiver errado,
-                  corrija-o acima.
+                  Este é o seu primeiro acesso. Digite seu nome completo, crie sua senha e repita no campo abaixo.
+                  Se o e-mail estiver errado, corrija-o acima.
                 </p>
+                <Label htmlFor="setup-nome">Nome completo</Label>
+                <Input
+                  id="setup-nome"
+                  ref={nomeRef}
+                  autoComplete="name"
+                  placeholder="Nome e sobrenome"
+                  className="mb-1.5 h-11"
+                  value={nome}
+                  onChange={(e) => setNome(e.target.value)}
+                />
                 <Label htmlFor="setup-password-confirm">Repita a senha</Label>
                 <PasswordInput
                   id="setup-password-confirm"

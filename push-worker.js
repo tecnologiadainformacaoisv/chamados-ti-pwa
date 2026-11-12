@@ -614,6 +614,10 @@ function pareceEmailInstitucional(email) {
   return isEmailDoDominio(email) || domain.includes('institutosaovicente');
 }
 
+function normalizeNomePessoa(v) {
+  return typeof v === 'string' ? v.trim().replace(/\s+/g, ' ') : '';
+}
+
 async function handleRegister(request, env) {
   if (!hasValidSecret(request, env)) return unauthorized();
   let body;
@@ -644,10 +648,43 @@ async function handleRegister(request, env) {
     await env.SUBSCRIPTIONS.put(regFailKey, String(regFails + 1), { expirationTtl: REGISTER_FAIL_WINDOW_SECONDS });
     return jsonRes({ error: 'E-mail não encontrado na lista de solicitantes. Fale com a TI.' }, 403);
   }
-  const name = solicitante.name;
+  let name = solicitante.name;
 
   if (await env.SUBSCRIPTIONS.get(`auth_${name}`)) {
     return jsonRes({ error: 'Já existe uma senha cadastrada pra esse e-mail. Se esqueceu, peça pro TI resetar.' }, 409);
+  }
+
+  // Nome completo no primeiro acesso (2026-11-12): vários e-mails da lista são de CARGO
+  // (assistente.administrativo10@, recepcionista@), então o nome que a TI tinha pode estar
+  // desatualizado. O que a pessoa digita vira o nome da conta e substitui o da lista; os
+  // chamados antigos e a inscrição de push acompanham a troca (mesma cascata do renomear
+  // do admin). Checado depois da busca do e-mail pra não mudar a resposta de e-mail
+  // desconhecido (403 igual a antes).
+  const nomeDigitado = normalizeNomePessoa(body.nome);
+  if (!nomeDigitado || nomeDigitado.split(' ').length < 2) {
+    return jsonRes({ error: 'Digite seu nome completo (nome e sobrenome)' }, 400);
+  }
+  if (nomeDigitado.length > 100) return jsonRes({ error: 'Nome muito longo' }, 400);
+  if (nomeDigitado !== name) {
+    const ocupado = await env.CHAMADOS_DB.prepare('SELECT name FROM solicitantes WHERE name = ?').bind(nomeDigitado).first();
+    if (ocupado) {
+      return jsonRes({ error: 'Já existe alguém cadastrado com esse nome. Inclua mais um sobrenome ou fale com a TI.' }, 409);
+    }
+    try {
+      await env.CHAMADOS_DB.batch([
+        env.CHAMADOS_DB.prepare('UPDATE solicitantes SET name = ? WHERE name = ?').bind(nomeDigitado, name),
+        env.CHAMADOS_DB.prepare('UPDATE chamados SET solicitante = ? WHERE solicitante = ?').bind(nomeDigitado, name),
+      ]);
+    } catch (err) {
+      return jsonRes({ error: /unique/i.test(err.message) ? 'Já existe alguém cadastrado com esse nome. Inclua mais um sobrenome ou fale com a TI.' : err.message }, 409);
+    }
+    const sub = await env.SUBSCRIPTIONS.get(`usub_${name}`);
+    if (sub) {
+      await env.SUBSCRIPTIONS.put(`usub_${nomeDigitado}`, sub);
+      await env.SUBSCRIPTIONS.delete(`usub_${name}`);
+    }
+    await revokeSessions(env, name);
+    name = nomeDigitado;
   }
 
   await setAuthRecord(name, password, env);

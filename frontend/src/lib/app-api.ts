@@ -42,12 +42,14 @@ export class PrimeiroAcessoError extends Error {
 export async function loginOrRegister(
   email: string,
   password: string,
-  confirmacao?: string
+  confirmacao?: string,
+  nome?: string
 ): Promise<{ token: string; name: string }> {
   // Já estamos na etapa de confirmação: não tenta logar de novo, só confere e cadastra.
+  // O nome completo digitado no primeiro acesso vira o nome da conta (o servidor troca o da lista).
   if (confirmacao !== undefined) {
     if (confirmacao !== password) throw new AuthError("As duas senhas não são iguais. Digite de novo.")
-    return await authRequest("/register", { email, password })
+    return await authRequest("/register", { email, password, nome })
   }
   try {
     return await authRequest("/login", { email, password })

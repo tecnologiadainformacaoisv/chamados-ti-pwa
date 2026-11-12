@@ -107,8 +107,11 @@ test.describe("Login/cadastro do solicitante", () => {
     await mockSolicitanteRoutes(page)
     await page.route("**/auth/login", (route) => route.fulfill({ status: 404, contentType: "application/json", body: "{}" }))
     let senhaCadastrada = ""
+    let nomeEnviado = ""
     await page.route("**/auth/register", (route) => {
-      senhaCadastrada = (route.request().postDataJSON() as { password?: string }).password ?? ""
+      const corpo = route.request().postDataJSON() as { password?: string; nome?: string }
+      senhaCadastrada = corpo.password ?? ""
+      nomeEnviado = corpo.nome ?? ""
       return route.fallback()
     })
     await page.goto("/")
@@ -122,6 +125,14 @@ test.describe("Login/cadastro do solicitante", () => {
     await expect(page.getByText("Este é o seu primeiro acesso")).toBeVisible()
     expect(senhaCadastrada).toBe("")
 
+    // sem nome completo: barra antes de cadastrar
+    await page.locator("#setup-password-confirm").fill("senha12345")
+    await page.locator("#setup-nome").fill("Clara")
+    await page.getByRole("button", { name: "Criar senha e entrar" }).click()
+    await expect(page.getByText("Digite seu nome completo (nome e sobrenome).")).toBeVisible()
+    expect(senhaCadastrada).toBe("")
+    await page.locator("#setup-nome").fill("Clara Souza")
+
     // senhas diferentes: erro em português, não cadastra
     await page.locator("#setup-password-confirm").fill("senha12346")
     await page.getByRole("button", { name: "Criar senha e entrar" }).click()
@@ -133,6 +144,7 @@ test.describe("Login/cadastro do solicitante", () => {
     await page.getByRole("button", { name: "Criar senha e entrar" }).click()
     await expect(page.getByRole("tab", { name: "Novo Chamado" })).toBeVisible()
     expect(senhaCadastrada).toBe("senha12345")
+    expect(nomeEnviado).toBe("Clara Souza")
     expect(await page.evaluate(() => localStorage.getItem("session_token"))).toBe("fake-session-token")
   })
 
@@ -157,6 +169,7 @@ test.describe("Login/cadastro do solicitante", () => {
     await page.locator("#setup-email").fill("fulano@institutosaovicente.com.br")
     await page.locator("#setup-password").fill("curta")
     await page.getByRole("button", { name: "Entrar" }).click()
+    await page.locator("#setup-nome").fill("Clara Souza")
     await page.locator("#setup-password-confirm").fill("curta")
     await page.getByRole("button", { name: "Criar senha e entrar" }).click()
     await expect(page.getByText("A senha precisa ter pelo menos 8 caracteres.")).toBeVisible()

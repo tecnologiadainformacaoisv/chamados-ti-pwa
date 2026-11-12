@@ -236,24 +236,74 @@ async function test(name, fn) {
   console.log('--- registro e login ---');
   let token;
   await test('registra senha nova com sucesso e já devolve token', async () => {
-    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), password: 'senha123' }) }), env);
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), nome: 'Michael Vasconcelos', password: 'senha123' }) }), env);
     if (res.status !== 200) throw new Error(`status ${res.status}: ${await res.text()}`);
     const data = await res.json();
     if (!data.token) throw new Error('sem token na resposta');
     token = data.token;
   });
   await test('registrar de novo o mesmo nome falha com 409', async () => {
-    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), password: 'outrasenha' }) }), env);
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), nome: 'Michael Vasconcelos', password: 'outrasenha' }) }), env);
     assert.strictEqual(res.status, 409);
   });
   await test('senha curta demais é rejeitada', async () => {
-    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Nova Pessoa'), password: '12' }) }), env);
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Nova Pessoa'), nome: 'Nova Pessoa', password: '12' }) }), env);
     assert.strictEqual(res.status, 400);
   });
   await test('registrar com nome que não está na lista de solicitantes dá 403 (Fase M1, 2026-08-13)', async () => {
-    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Alguém Que Não Existe'), password: 'senhaboa123' }) }), env);
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Alguém Que Não Existe'), nome: 'Alguém Que Não Existe', password: 'senhaboa123' }) }), env);
     assert.strictEqual(res.status, 403);
   });
+  // Nome completo no primeiro acesso (2026-11-12): vários e-mails da lista são de cargo, então o
+  // nome digitado pela pessoa substitui o da lista (e leva os chamados junto).
+  await test('primeiro acesso sem nome dá 400 e não cria senha', async () => {
+    await d1CreateSolicitante(env, 'Cargo Sem Nome', 'cargo.sem.nome@institutosaovicente.com.br');
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: 'cargo.sem.nome@institutosaovicente.com.br', password: 'senhaboa123' }) }), env);
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(await env.SUBSCRIPTIONS.get('auth_Cargo Sem Nome'), null);
+  });
+  await test('primeiro acesso com nome de uma palavra só dá 400', async () => {
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: 'cargo.sem.nome@institutosaovicente.com.br', nome: 'Clara', password: 'senhaboa123' }) }), env);
+    assert.strictEqual(res.status, 400);
+  });
+  await test('nome digitado substitui o da lista: conta, chamados e login passam a usar o nome novo', async () => {
+    await d1CreateSolicitante(env, 'Recepcionista', 'recepcionista.teste@institutosaovicente.com.br');
+    await seedChamadoComId(env, 'task-recepcao-1', {
+      name: 'Chamado da recepção', status: 'aberto', priority: 3, tipo: 2, setor: 0,
+      solicitante: 'Recepcionista', assignee_id: 200498355, assignee_ids: [200498355],
+      due_date: Date.now() + 3600000,
+    });
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: 'recepcionista.teste@institutosaovicente.com.br', nome: '  Clara   Souza ', password: 'senhaboa123' }) }), env);
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.strictEqual(data.name, 'Clara Souza');
+    const antigo = await env.CHAMADOS_DB.prepare('SELECT name FROM solicitantes WHERE name = ?').bind('Recepcionista').first();
+    assert.strictEqual(antigo, null);
+    const novo = await env.CHAMADOS_DB.prepare('SELECT email FROM solicitantes WHERE name = ?').bind('Clara Souza').first();
+    assert.strictEqual(novo.email, 'recepcionista.teste@institutosaovicente.com.br');
+    const ch = await d1GetChamado(env, 'task-recepcao-1');
+    assert.strictEqual(ch.solicitante, 'Clara Souza');
+    // Logada com o nome novo, ela vê o chamado que já era da conta.
+    const minhas = await worker.fetch(req('GET', '/api/my-tasks', { headers: { ...SECRET_HEADERS, 'X-Session-Token': data.token } }), env);
+    assert.strictEqual(minhas.status, 200);
+    assert.ok((await minhas.text()).includes('Chamado da recepção'));
+    // E o login seguinte pelo e-mail funciona normalmente.
+    const login = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ email: 'recepcionista.teste@institutosaovicente.com.br', password: 'senhaboa123' }) }), env);
+    assert.strictEqual(login.status, 200);
+    assert.strictEqual((await login.json()).name, 'Clara Souza');
+  });
+  await test('nome digitado igual ao de outra pessoa dá 409 e não muda nada', async () => {
+    await d1CreateSolicitante(env, 'Cargo Dois', 'cargo.dois@institutosaovicente.com.br');
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: 'cargo.dois@institutosaovicente.com.br', nome: 'Ariele Santo', password: 'senhaboa123' }) }), env);
+    assert.strictEqual(res.status, 409);
+    const ainda = await env.CHAMADOS_DB.prepare('SELECT name FROM solicitantes WHERE email = ?').bind('cargo.dois@institutosaovicente.com.br').first();
+    assert.strictEqual(ainda.name, 'Cargo Dois');
+    assert.strictEqual(await env.SUBSCRIPTIONS.get('auth_Cargo Dois'), null);
+  });
+  // Limpa as contas criadas só por estes testes: os testes seguintes contam usuários/solicitantes do mesmo env.
+  await env.CHAMADOS_DB.prepare("DELETE FROM solicitantes WHERE name IN ('Cargo Sem Nome','Cargo Dois','Clara Souza')").run();
+  await env.CHAMADOS_DB.prepare("DELETE FROM chamados WHERE id = 'task-recepcao-1'").run();
+  await env.SUBSCRIPTIONS.delete('auth_Clara Souza');
   await test('login com senha certa funciona', async () => {
     const res = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), password: 'senha123' }) }), env);
     assert.strictEqual(res.status, 200);
@@ -267,7 +317,7 @@ async function test(name, fn) {
     assert.strictEqual(res.status, 404);
   });
   await test('após 5 tentativas erradas, a 6ª fica bloqueada por lockout (429)', async () => {
-    await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Ariele Santo'), password: 'senhadaariele' }) }), env);
+    await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Ariele Santo'), nome: 'Ariele Santo', password: 'senhadaariele' }) }), env);
     for (let i = 0; i < 5; i++) {
       const r = await worker.fetch(req('POST', '/auth/login', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Ariele Santo'), password: 'errada' }) }), env);
       assert.strictEqual(r.status, 401, `tentativa ${i + 1} deveria dar 401`);
@@ -373,7 +423,7 @@ async function test(name, fn) {
     // Usa uma sessão do Bruno (recém-registrado aqui), não a do Michael — ele acabou de criar
     // um chamado no teste anterior e cairia no throttle de 10s (429), que não é o que este
     // teste quer verificar. A Ariele não serve: ficou bloqueada pelo lockout do teste anterior.
-    const brunoRegister = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Bruno Guilherme'), password: 'senhadobruno' }) }), env);
+    const brunoRegister = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Bruno Guilherme'), nome: 'Bruno Guilherme', password: 'senhadobruno' }) }), env);
     brunoToken = (await brunoRegister.json()).token;
     const tipoNotebooks = 0; // Urgente (1h) em CATEGORIA_PRIORIDADE
     const before = Date.now();
@@ -564,7 +614,7 @@ async function test(name, fn) {
   await test('sem nenhum admin inscrito, criar chamado não falha (só não manda push nenhum)', async () => {
     const solitaryEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1(), VAPID_PRIVATE_JWK: vapidPrivateJwkAdmin, VAPID_PUBLIC_KEY: 'fake-vapid-public-key' };
     await d1CreateSolicitante(solitaryEnv, 'Michael Vasconcelos', emailFor('Michael Vasconcelos'));
-    const reg = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), password: 'senha123' }) }), solitaryEnv);
+    const reg = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), nome: 'Michael Vasconcelos', password: 'senha123' }) }), solitaryEnv);
     const soloToken = (await reg.json()).token;
     adminPushCalls.length = 0;
     const res = await worker.fetch(req('POST', '/api/tasks', {
@@ -800,7 +850,7 @@ async function test(name, fn) {
     await worker.fetch(req('POST', `/admin/solicitantes/${encodeURIComponent('Carlos Eduardo')}/ativo`, {
       headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ ativo: false }),
     }), env);
-    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Carlos Eduardo'), password: 'senhaboa123' }) }), env);
+    const res = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Carlos Eduardo'), nome: 'Carlos Eduardo', password: 'senhaboa123' }) }), env);
     assert.strictEqual(res.status, 403);
   });
   // Fase M5 (2026-08-13): POST /admin/migrate-solicitantes removida (já rodou em
@@ -827,7 +877,7 @@ async function test(name, fn) {
     assert.strictEqual(login.status, 404, 'login com a senha antiga deveria falhar — foi resetada');
 
     // E consegue cadastrar uma senha nova, normalmente.
-    const registro = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), password: 'senhaNovaDepoisDoReset' }) }), env);
+    const registro = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor('Michael Vasconcelos'), nome: 'Michael Vasconcelos', password: 'senhaNovaDepoisDoReset' }) }), env);
     assert.strictEqual(registro.status, 200);
     // O reset derruba as sessões antigas (2026-11-11): o token de antes não vale mais...
     const velho = await worker.fetch(req('GET', '/api/my-tasks', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token } }), env);
@@ -900,7 +950,7 @@ async function test(name, fn) {
     assert.strictEqual(res.status, 200);
 
     // E o login já funciona com o e-mail recém-cadastrado.
-    const reg = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: novoEmail, password: 'senhaboa123' }) }), env);
+    const reg = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: novoEmail, nome: 'Pessoa Sem Email Ainda', password: 'senhaboa123' }) }), env);
     assert.strictEqual(reg.status, 200);
   });
   await test('POST /admin/solicitantes/:nome/email pra nome inexistente dá 404', async () => {
@@ -2230,7 +2280,7 @@ async function test(name, fn) {
   const doPost = (path, headers, body) => worker.fetch(req('POST', path, { headers, body: typeof body === 'string' ? body : JSON.stringify(body) }), hEnv);
   async function cadastra(nome, ip = '10.0.0.1') {
     await d1CreateSolicitante(hEnv, nome, emailFor(nome));
-    const r = await doPost('/auth/register', { ...SECRET_HEADERS, 'CF-Connecting-IP': ip }, { email: emailFor(nome), password: 'senhaboa123' });
+    const r = await doPost('/auth/register', { ...SECRET_HEADERS, 'CF-Connecting-IP': ip }, { email: emailFor(nome), nome, password: 'senhaboa123' });
     return (await r.json()).token;
   }
   const comSessao = (t, extra = {}) => ({ ...SECRET_HEADERS, 'X-Session-Token': t, ...extra });
@@ -2279,7 +2329,7 @@ async function test(name, fn) {
     await doPost(`/admin/users/${encodeURIComponent('Pessoa Resetada')}/reset-senha`, ADM, {});
     const morta = await worker.fetch(req('GET', '/api/my-tasks', { headers: comSessao(t) }), hEnv);
     assert.strictEqual(morta.status, 401);
-    const reg = await doPost('/auth/register', SECRET_HEADERS, { email: emailFor('Pessoa Resetada'), password: 'senhaNova123' });
+    const reg = await doPost('/auth/register', SECRET_HEADERS, { email: emailFor('Pessoa Resetada'), nome: 'Pessoa Resetada', password: 'senhaNova123' });
     const novo = (await reg.json()).token;
     const viva = await worker.fetch(req('GET', '/api/my-tasks', { headers: comSessao(novo) }), hEnv);
     assert.strictEqual(viva.status, 200);
@@ -2304,7 +2354,7 @@ async function test(name, fn) {
     for (let i = 0; i < 12; i++) {
       const nome = `Colega Escritorio ${'abcdefghijkl'[i]}`;
       await d1CreateSolicitante(hEnv, nome, emailFor(nome));
-      const r = await doPost('/auth/register', { ...SECRET_HEADERS, 'CF-Connecting-IP': '198.18.0.1' }, { email: emailFor(nome), password: 'senhaboa123' });
+      const r = await doPost('/auth/register', { ...SECRET_HEADERS, 'CF-Connecting-IP': '198.18.0.1' }, { email: emailFor(nome), nome, password: 'senhaboa123' });
       assert.strictEqual(r.status, 200, nome);
     }
   });
