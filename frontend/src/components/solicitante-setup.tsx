@@ -384,7 +384,7 @@ function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
       </div>
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="setup-ext-name">Nome completo *</Label>
+        <Label htmlFor="setup-ext-name">Nome completo</Label>
         <Input
           id="setup-ext-name"
           autoComplete="name"
@@ -396,7 +396,7 @@ function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
       </div>
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="setup-ext-email">Seu e-mail *</Label>
+        <Label htmlFor="setup-ext-email">Seu e-mail</Label>
         <Input
           id="setup-ext-email"
           type="email"
@@ -422,7 +422,7 @@ function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
       </div>
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="setup-ext-password">Senha *</Label>
+        <Label htmlFor="setup-ext-password">Senha</Label>
         <PasswordInput
           id="setup-ext-password"
           autoComplete="new-password"
