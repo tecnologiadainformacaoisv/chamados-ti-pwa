@@ -2481,6 +2481,29 @@ async function test(name, fn) {
     assert.strictEqual(inexistente.status, 404);
   });
 
+  // 7a) transferir chamados entre solicitantes (2026-11-13)
+  await test('transferir-chamados: exige admin, valida contas e move só os chamados da origem', async () => {
+    await d1CreateSolicitante(hEnv, 'Conta Origem', null);
+    await d1CreateSolicitante(hEnv, 'Conta Destino', null);
+    const a = await d1CreateChamado(hEnv, { name: 'A', status: 'aberto', priority: 3, tipo: 0, setor: 0, solicitante: 'Conta Origem', due_date: Date.now() + 1000 });
+    const b = await d1CreateChamado(hEnv, { name: 'B', status: 'aberto', priority: 3, tipo: 0, setor: 0, solicitante: 'Conta Origem', due_date: Date.now() + 1000 });
+    const outro = await d1CreateChamado(hEnv, { name: 'C', status: 'aberto', priority: 3, tipo: 0, setor: 0, solicitante: 'Conta Destino', due_date: Date.now() + 1000 });
+    const rota = `/admin/solicitantes/${encodeURIComponent('Conta Origem')}/transferir-chamados`;
+    assert.strictEqual((await doPost(rota, {}, { para: 'Conta Destino' })).status, 403);
+    assert.strictEqual((await doPost(rota, ADM, {})).status, 400);
+    assert.strictEqual((await doPost(rota, ADM, { para: 'Conta Origem' })).status, 400);
+    assert.strictEqual((await doPost(rota, ADM, { para: 'Fantasma' })).status, 404);
+    const r = await doPost(rota, ADM, { para: 'Conta Destino' });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual((await r.json()).transferidos, 2);
+    assert.strictEqual((await d1GetChamado(hEnv, a.id)).solicitante, 'Conta Destino');
+    assert.strictEqual((await d1GetChamado(hEnv, b.id)).solicitante, 'Conta Destino');
+    assert.strictEqual((await d1GetChamado(hEnv, outro.id)).solicitante, 'Conta Destino');
+    assert.strictEqual((await doPost(`/admin/solicitantes/Fantasma/transferir-chamados`, ADM, { para: 'Conta Destino' })).status, 404);
+    await hEnv.CHAMADOS_DB.prepare("DELETE FROM chamados WHERE solicitante = 'Conta Destino'").run();
+    await hEnv.CHAMADOS_DB.prepare("DELETE FROM solicitantes WHERE name IN ('Conta Origem','Conta Destino')").run();
+  });
+
   // 7b) excluir solicitante (2026-11-11)
   await test('excluir solicitante: exige admin, trava se tem chamados, apaga tudo com apagarChamados', async () => {
     await d1CreateSolicitante(hEnv, 'Descartavel', null);

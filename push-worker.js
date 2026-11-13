@@ -231,6 +231,8 @@ async function routeRequest(request, env) {
       if (solExcluirMatch) return handleAdminExcluirSolicitante(request, env, solExcluirMatch[1]);
       const solRenomearMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/renomear$/);
       if (solRenomearMatch) return handleAdminRenomearSolicitante(request, env, solRenomearMatch[1]);
+      const solTransfMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/transferir-chamados$/);
+      if (solTransfMatch) return handleAdminTransferirChamados(request, env, solTransfMatch[1]);
       const solEmailMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/email$/);
       if (solEmailMatch) return handleAdminSetSolicitanteEmail(request, env, solEmailMatch[1]);
       const resetSenhaMatch = pathname.match(/^\/admin\/users\/([^/]+)\/reset-senha$/);
@@ -2306,6 +2308,25 @@ async function handleAdminRenomearSolicitante(request, env, name) {
   }
   await revokeSessions(env, antigo);
   return jsonRes({ ok: true, nome: novo });
+}
+
+// POST /admin/solicitantes/:nome/transferir-chamados (2026-11-13) — body { para }. Passa TODOS os
+// chamados de um solicitante para outro já existente (ex.: conta de testes -> conta Admin). Só mexe em
+// chamados.solicitante; as duas contas continuam existindo. Reversível (basta transferir de volta).
+async function handleAdminTransferirChamados(request, env, name) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  const de = decodeURIComponent(name);
+  const para = typeof body.para === 'string' ? body.para.trim() : '';
+  if (!para) return jsonRes({ error: '"para" é obrigatório' }, 400);
+  if (de === para) return jsonRes({ error: 'origem e destino são iguais' }, 400);
+  const origem = await env.CHAMADOS_DB.prepare('SELECT name FROM solicitantes WHERE name = ?').bind(de).first();
+  if (!origem) return jsonRes({ error: 'solicitante de origem não encontrado' }, 404);
+  const destino = await env.CHAMADOS_DB.prepare('SELECT name FROM solicitantes WHERE name = ?').bind(para).first();
+  if (!destino) return jsonRes({ error: 'solicitante de destino não encontrado' }, 404);
+  const r = await env.CHAMADOS_DB.prepare('UPDATE chamados SET solicitante = ? WHERE solicitante = ?').bind(para, de).run();
+  return jsonRes({ ok: true, transferidos: r?.meta?.changes ?? 0 });
 }
 
 // Fase M5 (2026-08-13): POST /admin/migrate-solicitantes removida — já rodou em
