@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { OPERADORES, PRIORITY_MAP, SETORES, SETOR_FIELD_ID, SOLUCAO_FIELD_ID, STATUS_MAP, STATUS_ORDER, TIPOS, TIPO_FIELD_ID, optionName } from "@/lib/constants"
-import { getCF, fetchEventos, fetchAnexosAdmin, openAnexoAdmin, postEvento, deleteTask, isSessionError, fmtDate, fmtDateFull, type ChamadoEvento, type Task, type UpdatePayload } from "@/lib/api"
+import { getCF, fetchAdminSolicitantes, fetchEventos, fetchAnexosAdmin, openAnexoAdmin, postEvento, deleteTask, isSessionError, fmtDate, fmtDateFull, type ChamadoEvento, type Task, type UpdatePayload } from "@/lib/api"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 import { numeroChamado } from "@/lib/ticket-helpers"
 
@@ -61,6 +61,18 @@ export function TaskModal({
     queryFn: () => fetchEventos(secret, task!.id),
     enabled: !!task,
   })
+  // Contato do solicitante (e-mail institucional; telefone só existe pra visitantes). Reusa a
+  // mesma chave de cache da tela Usuários, então não custa uma chamada a mais se ela já foi aberta.
+  const solicitantesQuery = useQuery({
+    queryKey: ["admin-solicitantes"],
+    queryFn: () => fetchAdminSolicitantes(secret),
+    enabled: !!task,
+    staleTime: 5 * 60_000,
+  })
+  const contato = task ? solicitantesQuery.data?.solicitantes.find((s) => s.name === task.solicitante) : undefined
+  const assuntoContato = task ? `Chamado ${numeroChamado(task) || ""} - ${task.name}`.replace(/\s+/g, " ").trim() : ""
+  const telDigitos = (contato?.telefone ?? "").replace(/\D/g, "")
+  const telWa = telDigitos.length >= 10 && telDigitos.length <= 11 ? `55${telDigitos}` : telDigitos.length >= 12 ? telDigitos : ""
   const anexosQuery = useQuery({
     queryKey: ["chamado-anexos", task?.id],
     queryFn: () => fetchAnexosAdmin(secret, task!.id),
@@ -204,6 +216,29 @@ export function TaskModal({
               </span>
             )}
           </p>
+          {(contato?.email || telWa) && (
+            <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+              <span className="text-muted-foreground">Falar com {task.solicitante}:</span>
+              {contato?.email && (
+                <a
+                  className="font-medium text-primary underline-offset-2 hover:underline"
+                  href={`mailto:${contato.email}?subject=${encodeURIComponent(assuntoContato)}&body=${encodeURIComponent(`Olá, ${task.solicitante}! Sobre o seu chamado "${task.name}": `)}`}
+                >
+                  E-mail
+                </a>
+              )}
+              {telWa && (
+                <a
+                  className="font-medium text-primary underline-offset-2 hover:underline"
+                  href={`https://wa.me/${telWa}?text=${encodeURIComponent(`Olá, ${task.solicitante}! Sobre o seu chamado ${numeroChamado(task) || ""} "${task.name}": `)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  WhatsApp
+                </a>
+              )}
+            </p>
+          )}
         </DialogHeader>
 
         <div className="min-w-0 flex-1 overflow-y-auto pr-1">

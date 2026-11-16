@@ -80,6 +80,36 @@ test.describe("Modal 'Gerenciar' — edição", () => {
 // Exclusão de verdade (2026-08-17, pedido do usuário: "fiz uns testes e gostaria de
 // excluí-los a partir do admin") — DESTRUTIVA e IRREVERSÍVEL, com confirm() nativo
 // antes de chamar o servidor (ver task-modal.tsx).
+test.describe("Modal 'Gerenciar' — falar com o solicitante", () => {
+  test("mostra e-mail e WhatsApp (só com telefone) com o chamado no texto", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga" })] })
+    await page.route("**/admin/solicitantes", (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ solicitantes: [{ name: "Fulano de Tal", email: "fulano@institutosaovicente.com.br", telefone: "(85) 99999-8888", ativo: 1, created_at: Date.now(), origem: "externo" }] }) })
+    })
+    await gotoAdminLoggedIn(page)
+    await abrirModal(page)
+    const dialog = page.getByRole("dialog")
+    const email = dialog.getByRole("link", { name: "E-mail" })
+    await expect(email).toHaveAttribute("href", new RegExp("^mailto:fulano@institutosaovicente[.]com[.]br[?]subject="))
+    const wa = dialog.getByRole("link", { name: "WhatsApp" })
+    await expect(wa).toHaveAttribute("href", new RegExp("^https://wa[.]me/5585999998888[?]text="))
+  })
+
+  test("interno sem telefone: só o link de e-mail", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga" })] })
+    await page.route("**/admin/solicitantes", (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ solicitantes: [{ name: "Fulano de Tal", email: "fulano@institutosaovicente.com.br", ativo: 1, created_at: Date.now() }] }) })
+    })
+    await gotoAdminLoggedIn(page)
+    await abrirModal(page)
+    const dialog = page.getByRole("dialog")
+    await expect(dialog.getByRole("link", { name: "E-mail" })).toBeVisible()
+    await expect(dialog.getByRole("link", { name: "WhatsApp" })).toHaveCount(0)
+  })
+})
+
 test.describe("Modal 'Gerenciar' — exclusão", () => {
   test("confirmar excluir chama POST /admin/tasks/:id/delete e fecha o modal", async ({ page }) => {
     await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga" })] })
