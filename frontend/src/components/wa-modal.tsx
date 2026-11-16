@@ -2,7 +2,7 @@ import { Check } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { numeroChamado, waNumberForTask } from "@/lib/ticket-helpers"
+import { numeroChamado, saudacaoWa, waNumberForTask } from "@/lib/ticket-helpers"
 import type { Task } from "@/lib/api"
 
 // Porta openWaModal()/closeWaModal() de app.js — aparece assim que o chamado é aberto,
@@ -17,7 +17,7 @@ import type { Task } from "@/lib/api"
 export function WaModal({ task, slaLabel, anexoWarning, onClose }: { task: Task | null; slaLabel: string; anexoWarning?: string; onClose: () => void }) {
   if (!task) return null
   const num = numeroChamado(task)
-  const msg = `Olá! Acabei de abrir um chamado de TI${num ? ` ${num}` : ""}:\n*${task.name}*\nGostaria de acompanhar meu atendimento.`
+  const msg = `${saudacaoWa(task)} acabei de abrir um chamado de TI${num ? ` ${num}` : ""}:\n*${task.name}*\nGostaria de acompanhar meu atendimento.`
   const link = `https://wa.me/${waNumberForTask(task)}?text=${encodeURIComponent(msg)}`
 
   return (

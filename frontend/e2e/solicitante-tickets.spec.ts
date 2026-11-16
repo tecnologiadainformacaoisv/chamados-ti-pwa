@@ -26,6 +26,16 @@ test.describe("Meus Chamados / Histórico", () => {
     await expect(page.locator('[data-task-id="t-encerrado"]')).toBeVisible()
   })
 
+  test("mensagem do WhatsApp começa com o nome de quem escreve", async ({ page }) => {
+    await mockSolicitanteRoutes(page, { tasks: [makeTask({ id: "t-wa", name: "Liberar OMIE", solicitante: "João Mário", status: { status: "em atendimento" } })] })
+    await gotoSolicitanteLoggedIn(page)
+    await page.getByRole("tab", { name: /Meus Chamados/ }).click()
+    const href = await page.locator('[data-task-id="t-wa"]').getByRole("link", { name: /Falar no WhatsApp/ }).getAttribute("href")
+    const texto = decodeURIComponent(new URL(href!).searchParams.get("text") ?? "")
+    expect(texto).toContain("Olá! João Mário aqui, gostaria de informações sobre meu chamado de TI")
+    expect(texto).toContain("Status: Em Atendimento")
+  })
+
   test("contador nas abas reflete a quantidade certa", async ({ page }) => {
     const tasks = [
       makeTask({ id: "a1", status: { status: "aberto" } }),

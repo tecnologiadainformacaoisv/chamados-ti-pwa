@@ -70,6 +70,20 @@ export function TaskModal({
     staleTime: 5 * 60_000,
   })
   const contato = task ? solicitantesQuery.data?.solicitantes.find((s) => s.name === task.solicitante) : undefined
+  // Resposta padrão da TI ao solicitante (2026-11-16): usada no e-mail, no WhatsApp e no botão
+  // "Copiar resposta" (colaboradores internos não têm telefone cadastrado, então copiar e colar
+  // no WhatsApp/Teams é o caminho deles).
+  const respostaPadrao = task ? `Olá, ${(task.solicitante ?? "").trim() || "tudo bem"}! Em instantes irei te atender sobre o seu chamado ${numeroChamado(task) || ""} "${task.name}".`.replace(/ {2,}/g, " ") : ""
+  const [respostaCopiada, setRespostaCopiada] = useState(false)
+  async function copiarResposta() {
+    try {
+      await navigator.clipboard.writeText(respostaPadrao)
+      setRespostaCopiada(true)
+      setTimeout(() => setRespostaCopiada(false), 2500)
+    } catch {
+      setRespostaCopiada(false)
+    }
+  }
   const assuntoContato = task ? `Chamado ${numeroChamado(task) || ""} - ${task.name}`.replace(/\s+/g, " ").trim() : ""
   const telDigitos = (contato?.telefone ?? "").replace(/\D/g, "")
   const telWa = telDigitos.length >= 10 && telDigitos.length <= 11 ? `55${telDigitos}` : telDigitos.length >= 12 ? telDigitos : ""
@@ -224,13 +238,13 @@ export function TaskModal({
               </span>
             )}
           </p>
-          {(contato?.email || telWa) && (
+          {task.solicitante && (
             <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
               <span className="text-muted-foreground">Falar com {task.solicitante}:</span>
               {contato?.email && (
                 <a
                   className="font-medium text-primary underline-offset-2 hover:underline"
-                  href={`mailto:${contato.email}?subject=${encodeURIComponent(assuntoContato)}&body=${encodeURIComponent(`Olá, ${task.solicitante}! Sobre o seu chamado "${task.name}": `)}`}
+                  href={`mailto:${contato.email}?subject=${encodeURIComponent(assuntoContato)}&body=${encodeURIComponent(respostaPadrao)}`}
                 >
                   E-mail
                 </a>
@@ -238,13 +252,20 @@ export function TaskModal({
               {telWa && (
                 <a
                   className="font-medium text-primary underline-offset-2 hover:underline"
-                  href={`https://wa.me/${telWa}?text=${encodeURIComponent(`Olá, ${task.solicitante}! Sobre o seu chamado ${numeroChamado(task) || ""} "${task.name}": `)}`}
+                  href={`https://wa.me/${telWa}?text=${encodeURIComponent(respostaPadrao)}`}
                   target="_blank"
                   rel="noopener noreferrer"
                 >
                   WhatsApp
                 </a>
               )}
+              <button
+                type="button"
+                onClick={copiarResposta}
+                className="cursor-pointer font-medium text-primary underline-offset-2 hover:underline"
+              >
+                {respostaCopiada ? "Copiado!" : "Copiar resposta"}
+              </button>
             </p>
           )}
         </DialogHeader>

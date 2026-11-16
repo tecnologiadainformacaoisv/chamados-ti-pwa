@@ -112,6 +112,25 @@ test.describe("Modal 'Gerenciar' — falar com o solicitante", () => {
     await expect(wa).toHaveAttribute("href", new RegExp("^https://wa[.]me/5585999998888[?]text="))
   })
 
+  test("resposta padrão \"em instantes irei te atender\": vai no WhatsApp e dá pra copiar", async ({ page }) => {
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"])
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga" })] })
+    await page.route("**/admin/solicitantes", (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ solicitantes: [{ name: "Fulano de Tal", email: "fulano@institutosaovicente.com.br", telefone: "85999998888", ativo: 1, created_at: Date.now(), origem: "externo" }] }) })
+    })
+    await gotoAdminLoggedIn(page)
+    await abrirModal(page)
+    const dialog = page.getByRole("dialog")
+    const href = await dialog.getByRole("link", { name: "WhatsApp" }).getAttribute("href")
+    const texto = decodeURIComponent(new URL(href!).searchParams.get("text") ?? "")
+    expect(texto).toContain("Olá, Fulano de Tal! Em instantes irei te atender sobre o seu chamado")
+    await dialog.getByRole("button", { name: "Copiar resposta" }).click()
+    await expect(dialog.getByRole("button", { name: "Copiado!" })).toBeVisible()
+    const copiado = await page.evaluate(() => navigator.clipboard.readText())
+    expect(copiado).toContain("Em instantes irei te atender")
+  })
+
   test("interno sem telefone: só o link de e-mail", async ({ page }) => {
     await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga" })] })
     await page.route("**/admin/solicitantes", (route) => {
@@ -285,7 +304,7 @@ test.describe("Modal 'Gerenciar' — contexto e autor da nota", () => {
     await gotoAdminLoggedIn(page)
     await page.getByText("Impressora sem tinta").first().click()
     const dlg = page.getByRole("dialog")
-    await expect(dlg.getByText("Joana Alves")).toBeVisible()
+    await expect(dlg.getByText("Joana Alves", { exact: true })).toBeVisible()
     await expect(dlg.getByText("Administrativo")).toBeVisible()
     await expect(dlg.getByText("Notebooks")).toBeVisible()
     await expect(dlg.getByText("Alta", { exact: true })).toBeVisible()

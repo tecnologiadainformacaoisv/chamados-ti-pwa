@@ -91,9 +91,16 @@ export function waNumberForTask(task: Task): string {
   return (assigneeId && OPERADOR_WHATSAPP[assigneeId]) || WA_NUMBER_PADRAO
 }
 
+// Abertura das mensagens de WhatsApp: leva o NOME de quem escreve, porque quem recebe vê só o
+// número (a TI não tem o telefone dos colegas nos contatos). Sem nome, cai no "Olá!" simples.
+export function saudacaoWa(task: Task): string {
+  const nome = (task.solicitante ?? "").replace(/\s+/g, " ").trim()
+  return nome ? `Olá! ${nome} aqui,` : "Olá!"
+}
+
 export function waLinkForTask(task: Task): string {
   const status = STATUS_MAP[(task.status?.status as StatusKey) ?? "aberto"]?.label ?? "Aberto"
   const num = numeroChamado(task)
-  const msg = `Olá! Gostaria de informações sobre meu chamado de TI${num ? ` ${num}` : ""}:\n*${task.name}*\nStatus: ${status}`
+  const msg = `${saudacaoWa(task)} gostaria de informações sobre meu chamado de TI${num ? ` ${num}` : ""}:\n*${task.name}*\nStatus: ${status}`
   return `https://wa.me/${waNumberForTask(task)}?text=${encodeURIComponent(msg)}`
 }
