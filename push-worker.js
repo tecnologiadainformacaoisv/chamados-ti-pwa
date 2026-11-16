@@ -1515,7 +1515,7 @@ async function notifyAdminsNovoChamado(env, row) {
 // Texto livre do usuário no corpo da notificação: troca caracteres de controle/quebras por
 // espaço e corta o tamanho (evita aviso gigante ou enganoso).
 function limpaTextoAviso(s, max) {
-  return String(s ?? '').replace(/[ -]+/g, ' ').replace(/s+/g, ' ').trim().slice(0, max);
+  return String(s ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
 // Dispara o aviso SEM atrasar a resposta do cadastro: com `ctx.waitUntil` o Worker termina
