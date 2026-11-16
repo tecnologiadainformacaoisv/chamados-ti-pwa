@@ -1144,6 +1144,13 @@ async function applyAdminTaskUpdate(env, taskId, body) {
   const chamado = await d1GetChamado(env, taskId);
   if (!chamado) return { error: 'chamado não encontrado', statusCode: 404 };
 
+  // Regra (2026-11-16, pedido do usuário): escrever uma solução encerra o chamado. Vale quando
+  // quem chamou NÃO escolheu um status explícito (um status mandado junto é respeitado) e o
+  // chamado ainda não está encerrado — assim qualquer cliente da API segue a mesma regra do painel.
+  if (body.status === undefined && typeof body.solucao === 'string' && body.solucao.trim() && chamado.status !== 'encerrado') {
+    body = { ...body, status: 'encerrado' };
+  }
+
   // Regra de negócio (2026-08-24, pedido do usuário): a solução precisa estar
   // descrita toda vez que um chamado é encerrado — não dá pra fechar "em branco".
   // `solucaoFinal` é o que a solução VAI SER depois desta atualização: usa o que

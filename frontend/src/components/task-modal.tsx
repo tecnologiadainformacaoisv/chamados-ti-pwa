@@ -182,6 +182,14 @@ export function TaskModal({
   // bloqueia o botão Salvar antes de gastar um round-trip com o servidor.
   const precisaSolucaoParaEncerrar = status === "encerrado" && !solucao.trim()
 
+  // Regra (2026-11-16, pedido do usuário): ao escrever uma solução o chamado passa a Encerrado
+  // automaticamente. Só dispara na 1ª vez que o campo deixa de estar vazio, pra não brigar
+  // com quem escolher outro status depois de escrever.
+  function escreverSolucao(valor: string) {
+    if (!solucao.trim() && valor.trim() && status !== "encerrado") setStatus("encerrado")
+    setSolucao(valor)
+  }
+
   function handleSave() {
     const body: UpdatePayload = { status, solucao }
     if (operadorTouched) {
@@ -301,7 +309,10 @@ export function TaskModal({
 
           <div className="flex flex-col gap-1.5">
             <Label>Solução{status === "encerrado" && " *"}</Label>
-            <Textarea rows={4} placeholder="Descreva a solução aplicada..." value={solucao} onChange={(e) => setSolucao(e.target.value)} />
+            <Textarea rows={4} placeholder="Descreva a solução aplicada..." value={solucao} onChange={(e) => escreverSolucao(e.target.value)} />
+            {status === "encerrado" && !!solucao.trim() && (
+              <p className="text-xs text-muted-foreground">Ao salvar, o chamado será encerrado.</p>
+            )}
             {precisaSolucaoParaEncerrar && (
               <p className="text-xs text-amber-600">⚠ Obrigatório pra encerrar o chamado.</p>
             )}

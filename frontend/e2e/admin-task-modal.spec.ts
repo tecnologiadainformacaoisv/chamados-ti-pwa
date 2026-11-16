@@ -21,13 +21,29 @@ test.describe("Modal 'Gerenciar' — edição", () => {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "t1" }) })
     })
 
+    await page.getByPlaceholder("Descreva a solução aplicada...").fill("Fonte trocada.")
     await page.getByRole("dialog").locator('[data-slot="select-trigger"]').first().click()
     await page.getByRole("option", { name: "Pendente" }).click()
-    await page.getByPlaceholder("Descreva a solução aplicada...").fill("Fonte trocada.")
     await page.getByRole("button", { name: "Salvar" }).click()
 
     await expect.poll(() => posted).toEqual({ status: "pendente", solucao: "Fonte trocada." })
     await expect(page.getByRole("dialog")).not.toBeVisible()
+  })
+
+  test("escrever a solução muda o status para Encerrado automaticamente", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga" })] })
+    await gotoAdminLoggedIn(page)
+    await abrirModal(page)
+    let posted: Record<string, unknown> | null = null
+    await page.route(/\/admin\/tasks\/t1$/, (route) => {
+      if (route.request().method() !== "POST") return route.fallback()
+      posted = route.request().postDataJSON()
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "t1" }) })
+    })
+    await page.getByPlaceholder("Descreva a solução aplicada...").fill("Fonte trocada.")
+    await expect(page.getByText("Ao salvar, o chamado será encerrado.")).toBeVisible()
+    await page.getByRole("button", { name: "Salvar" }).click()
+    await expect.poll(() => posted).toEqual({ status: "encerrado", solucao: "Fonte trocada." })
   })
 
   test("não toca no operador não manda assigneeId (evita apagar 2º operador)", async ({ page }) => {

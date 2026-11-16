@@ -1719,6 +1719,22 @@ async function test(name, fn) {
     }), env);
     assert.strictEqual(res.status, 200);
   });
+  await test('escrever so a solucao (sem status) encerra o chamado; status explicito e respeitado; solucao em branco nao encerra', async () => {
+    const id1 = await criarChamadoTeste();
+    let res = await worker.fetch(req('POST', '/admin/tasks/' + id1, { headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ solucao: 'Trocado o cabo.' }) }), env);
+    assert.strictEqual(res.status, 200, await res.clone().text());
+    assert.strictEqual((await d1GetChamado(env, id1)).status, 'encerrado');
+
+    const id2 = await criarChamadoTeste();
+    res = await worker.fetch(req('POST', '/admin/tasks/' + id2, { headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'pendente', solucao: 'Aguardando peca.' }) }), env);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual((await d1GetChamado(env, id2)).status, 'pendente', 'status explicito deve ser respeitado');
+
+    const id3 = await criarChamadoTeste();
+    res = await worker.fetch(req('POST', '/admin/tasks/' + id3, { headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ solucao: '   ' }) }), env);
+    assert.strictEqual(res.status, 200);
+    assert.notStrictEqual((await d1GetChamado(env, id3)).status, 'encerrado', 'solucao em branco nao deve encerrar');
+  });
   await test('ação em lote também recusa encerrar sem solução (mesma regra, sem caso especial)', async () => {
     const idComSolucao = await criarChamadoTeste({ status: 'em atendimento', solucao: 'Já resolvido.' });
     const idSemSolucao = await criarChamadoTeste({ status: 'em atendimento' });
