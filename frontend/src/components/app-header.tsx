@@ -1,9 +1,10 @@
-import { RefreshCw, LogOut, Bell } from "lucide-react"
+import { RefreshCw, LogOut, Bell, Sun, Moon, MonitorCog } from "lucide-react"
 import { useQueryClient } from "@tanstack/react-query"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
+import { useTema, type Tema } from "@/hooks/use-tema"
 import logoIsv from "@/assets/logo-isv.svg"
 
 // Espelha o .app-header de admin.html — mesma marca (logo ISV, "Painel de
@@ -17,6 +18,11 @@ import logoIsv from "@/assets/logo-isv.svg"
 export function AppHeader({ countAberto, onVerAbertos }: { countAberto?: number; onVerAbertos?: () => void }) {
   const { logout } = useAdminAuth()
   const queryClient = useQueryClient()
+  const { tema, setTema } = useTema()
+  // Um clique troca: claro → escuro → sistema. O ícone mostra o tema ATUAL; o rótulo diz o que vem a seguir.
+  const proximo: Record<Tema, Tema> = { claro: "escuro", escuro: "sistema", sistema: "claro" }
+  const nomeTema: Record<Tema, string> = { claro: "claro", escuro: "escuro", sistema: "automático (segue o computador)" }
+  const IconeTema = tema === "claro" ? Sun : tema === "escuro" ? Moon : MonitorCog
 
   return (
     // sticky (2026-09-15, pedido do usuário: "a parte de cima fixa, só os chamados
@@ -57,6 +63,16 @@ export function AppHeader({ countAberto, onVerAbertos }: { countAberto?: number;
             </Badge>
           </button>
         )}
+        <Button
+          size="icon"
+          variant="ghost"
+          title={`Tema ${nomeTema[tema]} — clique para mudar para ${nomeTema[proximo[tema]]}`}
+          aria-label={`Tema atual: ${nomeTema[tema]}. Trocar para ${nomeTema[proximo[tema]]}`}
+          className="text-primary-foreground hover:bg-white/10 hover:text-primary-foreground"
+          onClick={() => setTema(proximo[tema])}
+        >
+          <IconeTema />
+        </Button>
         <Button
           size="icon"
           variant="ghost"

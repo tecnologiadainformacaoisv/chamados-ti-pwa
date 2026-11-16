@@ -12,6 +12,14 @@
          colisão com o scope do outro SW (ver comentário em admin-sw.js). -->
     <link rel="manifest" href="/admin-manifest.webmanifest" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Tema (claro/escuro/sistema): aplica a classe `dark` antes do React montar, sem piscar. -->
+    <script>
+      try {
+        var t = localStorage.getItem("admin_tema");
+        var escuro = t === "escuro" || (t === "sistema" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        if (escuro) { document.documentElement.classList.add("dark"); document.documentElement.style.colorScheme = "dark"; }
+      } catch (e) {}
+    </script>
     <title>Painel de Admin – Chamados TI ISV</title>
     <!-- fonte Atkinson hospedada em /fonts (@font-face em src/index.css); pré-carrega o recorte latino -->
     <link rel="preload" href="/fonts/atkinson-next-latin.woff2" as="font" type="font/woff2" crossorigin />

@@ -68,12 +68,12 @@ export function FilaAtendimento({
       </div>
 
       {lista.length === 0 ? (
-        <div className="rounded-md border bg-white px-4 py-8 text-center" style={{ borderColor: LINE, color: MUTED }}>
+        <div className="rounded-md border bg-[var(--mvp-surface,#fff)] px-4 py-8 text-center" style={{ borderColor: LINE, color: MUTED }}>
           <b className="mb-1 block text-[1.05rem]" style={{ color: INK }}>Fila vazia.</b>
           Quando alguém abrir um chamado, ele aparece aqui.
         </div>
       ) : (
-        <ol className="m-0 list-none overflow-hidden rounded-md border bg-white p-0" style={{ borderColor: LINE }}>
+        <ol className="m-0 list-none overflow-hidden rounded-md border bg-[var(--mvp-surface,#fff)] p-0" style={{ borderColor: LINE }}>
           {lista.map((t) => {
             const st = (t.status?.status || "").toLowerCase()
             const prio = String(t.priority?.priority ?? "").toLowerCase()
@@ -103,10 +103,10 @@ export function FilaAtendimento({
                   onFoco(t.id)
                   setAberto((a) => (a === t.id ? null : t.id))
                 }}
-                className="grid cursor-pointer grid-cols-[7px_minmax(0,1fr)] hover:bg-[#F6FAFD] items-center gap-x-3 gap-y-1 border-b py-2.5 pr-3 last:border-b-0 md:grid-cols-[7px_minmax(0,1fr)_auto]"
+                className="grid cursor-pointer grid-cols-[7px_minmax(0,1fr)] hover:bg-[var(--mvp-hover,#F6FAFD)] items-center gap-x-3 gap-y-1 border-b py-2.5 pr-3 last:border-b-0 md:grid-cols-[7px_minmax(0,1fr)_auto]"
                 style={{
                   borderColor: LINE,
-                  background: foco ? "#F6FAFD" : "#fff",
+                  background: foco ? "var(--mvp-hover, #F6FAFD)" : "var(--mvp-surface, #fff)",
                   outline: foco ? `3px solid ${NAVY}` : undefined,
                   outlineOffset: foco ? -3 : undefined,
                 }}
@@ -128,7 +128,7 @@ export function FilaAtendimento({
                   </p>
                 </div>
                 <div className="col-start-2 flex flex-wrap items-center justify-end gap-3 md:col-start-3">
-                  <span className="rounded-full border px-2.5 py-0.5 text-[0.88rem] font-bold" style={{ borderColor: LINE, background: "#F4F7F9" }} title="Atendente">
+                  <span className="rounded-full border px-2.5 py-0.5 text-[0.88rem] font-bold" style={{ borderColor: LINE, background: "var(--mvp-chip, #F4F7F9)" }} title="Atendente">
                     {atendenteDe(t)}
                   </span>
                   <span className="text-[0.9rem] whitespace-nowrap" style={{ color: w.cor, fontWeight: w.peso }}>{w.texto}</span>
@@ -140,7 +140,7 @@ export function FilaAtendimento({
                         e.stopPropagation()
                         acao.fn(t)
                       }}
-                      className={`${BTN} ${acao.cheio ? "bg-[#0A3D62] text-white hover:bg-[#0F5282]" : "bg-white text-[#0A3D62] hover:bg-[#E8F0F6]"}`}
+                      className={`${BTN} ${acao.cheio ? "bg-[var(--mvp-navy-solid,#0A3D62)] text-white hover:bg-[var(--mvp-navy-solid-hover,#0F5282)]" : "bg-[var(--mvp-surface,#fff)] text-[var(--mvp-navy,#0A3D62)] hover:bg-[var(--mvp-hover2,#E8F0F6)]"}`}
                       style={{ borderColor: NAVY }}
                     >
                       {acao.rotulo}
@@ -166,7 +166,7 @@ export function FilaAtendimento({
                       <button
                         type="button"
                         onClick={() => onGerenciar(t)}
-                        className={`${BTN} bg-white text-[#0A3D62] hover:bg-[#E8F0F6]`}
+                        className={`${BTN} bg-[var(--mvp-surface,#fff)] text-[var(--mvp-navy,#0A3D62)] hover:bg-[var(--mvp-hover2,#E8F0F6)]`}
                         style={{ borderColor: NAVY }}
                       >
                         Gerenciar

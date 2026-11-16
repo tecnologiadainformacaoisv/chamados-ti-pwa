@@ -60,6 +60,12 @@
 }
 
 .dark {
+  /* Cores fixas da fila/linha do dia (lib/mvp-visual.ts) no tema escuro */
+  --mvp-ink: #E5ECF1; --mvp-muted: #9FB0BB; --mvp-line: #2C3A45; --mvp-navy: #6DB3E8;
+  --mvp-navy-solid: #2B6CA3; --mvp-navy-solid-hover: #3A80BB;
+  --mvp-surface: #121A23; --mvp-hover: #1A2633; --mvp-hover2: #203243;
+  --mvp-chip: #1E2B38; --mvp-aguardando: #1B3550; --mvp-late-ink: #FFB4B4; --mvp-stripe-b: #5A2326;
+
   --background: oklch(0.14 0.02 260);
   --foreground: oklch(0.95 0 0);
 

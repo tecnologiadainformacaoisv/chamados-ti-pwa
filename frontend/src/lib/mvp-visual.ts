@@ -3,9 +3,9 @@
 export const URGENT = "#C62828"
 export const HIGH = "#D9650B"
 export const NORMAL = "#1F6FB2"
-export const NAVY = "#0A3D62"
-export const INK = "#17303F"
-export const MUTED = "#51636F"
-export const LINE = "#D5DCE1"
+export const NAVY = "var(--mvp-navy, #0A3D62)"
+export const INK = "var(--mvp-ink, #17303F)"
+export const MUTED = "var(--mvp-muted, #51636F)"
+export const LINE = "var(--mvp-line, #D5DCE1)"
 export const COR_PRIO: Record<string, string> = { urgent: URGENT, high: HIGH, normal: NORMAL }
 export const FONTE = '"Atkinson Hyperlegible Next", "Segoe UI", system-ui, sans-serif'

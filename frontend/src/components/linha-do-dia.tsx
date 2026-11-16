@@ -96,7 +96,7 @@ export function LinhaDoDia({
   const horas = Array.from({ length: H1 - H0 + 1 }, (_, i) => H0 + i)
 
   return (
-    <section className="rounded-md border bg-white p-4" style={{ fontFamily: FONTE, color: INK, borderColor: LINE }} aria-label="Linha do dia">
+    <section className="rounded-md border bg-[var(--mvp-surface,#fff)] p-4" style={{ fontFamily: FONTE, color: INK, borderColor: LINE }} aria-label="Linha do dia">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3.5 gap-y-1.5">
         <button
           type="button"
@@ -113,9 +113,9 @@ export function LinhaDoDia({
         </button>
         {aberta && (
           <div className="flex flex-wrap gap-4 text-[0.85rem]" style={{ color: MUTED }} aria-label="Legenda">
-            <span><i className="mr-1.5 inline-block h-[11px] w-6 rounded-[3px] border-2 align-[-1px]" style={{ borderColor: NORMAL, background: "#e3eef8" }} />aguardando a TI</span>
+            <span><i className="mr-1.5 inline-block h-[11px] w-6 rounded-[3px] border-2 align-[-1px]" style={{ borderColor: NORMAL, background: "var(--mvp-aguardando, #e3eef8)" }} />aguardando a TI</span>
             <span><i className="mr-1.5 inline-block h-[11px] w-6 rounded-[3px] border-2 align-[-1px]" style={{ borderColor: NORMAL, background: NORMAL }} />em atendimento</span>
-            <span><i className="mr-1.5 inline-block h-[11px] w-6 rounded-[3px] border-2 align-[-1px]" style={{ borderColor: URGENT, background: "repeating-linear-gradient(135deg,#fff 0 4px,#f2b8b8 4px 8px)" }} />passou do prazo</span>
+            <span><i className="mr-1.5 inline-block h-[11px] w-6 rounded-[3px] border-2 align-[-1px]" style={{ borderColor: URGENT, background: "repeating-linear-gradient(135deg,var(--mvp-surface,#fff) 0 4px,var(--mvp-stripe-b,#f2b8b8) 4px 8px)" }} />passou do prazo</span>
           </div>
         )}
       </div>
@@ -128,7 +128,7 @@ export function LinhaDoDia({
             <div className="relative mt-3.5 overflow-x-auto">
               <div className="relative min-w-[780px]">
                 <div className="grid grid-cols-[96px_1fr]">
-                  <div className="sticky left-0 z-[3] bg-white" />
+                  <div className="sticky left-0 z-[3] bg-[var(--mvp-surface,#fff)]" />
                   <div className="relative h-[22px] text-[0.78rem]" style={{ color: MUTED }} aria-hidden="true">
                     {horas.map((h, i) => (
                       <span key={h} className="absolute top-0" style={{ left: `${(i / (H1 - H0)) * 100}%`, transform: i === 0 ? "none" : i === horas.length - 1 ? "translateX(-100%)" : "translateX(-50%)" }}>
@@ -142,7 +142,7 @@ export function LinhaDoDia({
                   const { barras, linhas } = barrasDaFaixa(lane.id)
                   return (
                     <div key={lane.id || "sem"} className="grid grid-cols-[96px_1fr] border-t" style={{ borderColor: LINE }}>
-                      <div className="sticky left-0 z-[3] bg-white pt-2.5 pr-2 text-[0.95rem] font-bold">
+                      <div className="sticky left-0 z-[3] bg-[var(--mvp-surface,#fff)] pt-2.5 pr-2 text-[0.95rem] font-bold">
                         {lane.nome}
                         <small className="block text-[0.8rem] font-normal" style={{ color: MUTED }}>{barras.length} em aberto</small>
                       </div>
@@ -176,13 +176,13 @@ export function LinhaDoDia({
                                 width: `${Math.min(b.width, 100 - b.left)}%`,
                                 top: 8 + b.row * 32,
                                 borderColor: b.atrasado ? URGENT : cor,
-                                color: b.atrasado ? "#7a1212" : emAtendimento ? "#fff" : INK,
+                                color: b.atrasado ? "var(--mvp-late-ink, #7a1212)" : emAtendimento ? "#fff" : INK,
                                 fontWeight: b.atrasado ? 700 : 400,
                                 background: b.atrasado
-                                  ? "repeating-linear-gradient(135deg,#fff 0 6px,#f6c9c9 6px 12px)"
+                                  ? "repeating-linear-gradient(135deg,var(--mvp-surface,#fff) 0 6px,var(--mvp-stripe-b,#f6c9c9) 6px 12px)"
                                   : emAtendimento
                                     ? cor
-                                    : `color-mix(in srgb, ${cor} 14%, #fff)`,
+                                    : `color-mix(in srgb, ${cor} 14%, var(--mvp-surface, #fff))`,
                                 clipPath: b.cutDir ? "polygon(0 0,calc(100% - 10px) 0,100% 50%,calc(100% - 10px) 100%,0 100%)" : undefined,
                                 paddingRight: b.cutDir ? 16 : undefined,
                                 borderRightWidth: b.cutDir ? 0 : undefined,
