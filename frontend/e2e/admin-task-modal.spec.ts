@@ -46,6 +46,15 @@ test.describe("Modal 'Gerenciar' — edição", () => {
     await expect.poll(() => posted).toEqual({ status: "encerrado", solucao: "Fonte trocada." })
   })
 
+  test("em chamado Pendente, escrever a solução NÃO muda o status para Encerrado", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga", status: { status: "pendente" } })] })
+    await gotoAdminLoggedIn(page)
+    await abrirModal(page)
+    await page.getByPlaceholder("Descreva a solução aplicada...").fill("aguardando peça")
+    await expect(page.getByText("Ao salvar, o chamado será encerrado.")).toHaveCount(0)
+    await expect(page.getByRole("dialog").locator('[data-slot="select-trigger"]').first()).toContainText("Pendente")
+  })
+
   test("não toca no operador não manda assigneeId (evita apagar 2º operador)", async ({ page }) => {
     await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga", assignees: [{ id: 170628721 }, { id: 200498355 }] })] })
     await gotoAdminLoggedIn(page)

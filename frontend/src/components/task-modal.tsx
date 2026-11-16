@@ -73,7 +73,7 @@ export function TaskModal({
   // Resposta padrão da TI ao solicitante (2026-11-16): usada no e-mail, no WhatsApp e no botão
   // "Copiar resposta" (colaboradores internos não têm telefone cadastrado, então copiar e colar
   // no WhatsApp/Teams é o caminho deles).
-  const respostaPadrao = task ? `Olá, ${(task.solicitante ?? "").trim() || "tudo bem"}! Em instantes irei te atender sobre o seu chamado ${numeroChamado(task) || ""} "${task.name}".`.replace(/ {2,}/g, " ") : ""
+  const respostaPadrao = task ? `${(task.solicitante ?? "").trim() ? `Olá, ${(task.solicitante ?? "").trim()}!` : "Olá!"} Em instantes irei te atender sobre o seu chamado ${numeroChamado(task) || ""} "${task.name}".`.replace(/ {2,}/g, " ") : ""
   const [respostaCopiada, setRespostaCopiada] = useState(false)
   async function copiarResposta() {
     try {
@@ -86,7 +86,9 @@ export function TaskModal({
   }
   const assuntoContato = task ? `Chamado ${numeroChamado(task) || ""} - ${task.name}`.replace(/\s+/g, " ").trim() : ""
   const telDigitos = (contato?.telefone ?? "").replace(/\D/g, "")
-  const telWa = telDigitos.length >= 10 && telDigitos.length <= 11 ? `55${telDigitos}` : telDigitos.length >= 12 ? telDigitos : ""
+  const telWa = telDigitos.length >= 10 && telDigitos.length <= 11 ? `55${telDigitos}` : telDigitos.length >= 12 && telDigitos.length <= 15 ? telDigitos : ""
+  // E-mail só vira link se não tiver caracteres que injetam parâmetros no mailto (?, &, %, vírgula, ponto e vírgula).
+  const emailSeguro = contato?.email && /^[^\s@?&%,;]+@[^\s@?&%,;]+$/.test(contato.email) ? contato.email : ""
   const anexosQuery = useQuery({
     queryKey: ["chamado-anexos", task?.id],
     queryFn: () => fetchAnexosAdmin(secret, task!.id),
@@ -200,7 +202,8 @@ export function TaskModal({
   // automaticamente. Só dispara na 1ª vez que o campo deixa de estar vazio, pra não brigar
   // com quem escolher outro status depois de escrever.
   function escreverSolucao(valor: string) {
-    if (!solucao.trim() && valor.trim() && status !== "encerrado") setStatus("encerrado")
+    // Pendente fica de fora: lá a TI costuma anotar "aguardando peça" e encerrar apagaria a pausa do SLA.
+    if (!solucao.trim() && valor.trim() && status !== "encerrado" && status !== "pendente") setStatus("encerrado")
     setSolucao(valor)
   }
 
@@ -241,10 +244,10 @@ export function TaskModal({
           {task.solicitante && (
             <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
               <span className="text-muted-foreground">Falar com {task.solicitante}:</span>
-              {contato?.email && (
+              {emailSeguro && (
                 <a
                   className="font-medium text-primary underline-offset-2 hover:underline"
-                  href={`mailto:${contato.email}?subject=${encodeURIComponent(assuntoContato)}&body=${encodeURIComponent(respostaPadrao)}`}
+                  href={`mailto:${emailSeguro}?subject=${encodeURIComponent(assuntoContato)}&body=${encodeURIComponent(respostaPadrao)}`}
                 >
                   E-mail
                 </a>

@@ -1146,8 +1146,8 @@ async function applyAdminTaskUpdate(env, taskId, body) {
 
   // Regra (2026-11-16, pedido do usuário): escrever uma solução encerra o chamado. Vale quando
   // quem chamou NÃO escolheu um status explícito (um status mandado junto é respeitado) e o
-  // chamado ainda não está encerrado — assim qualquer cliente da API segue a mesma regra do painel.
-  if (body.status === undefined && typeof body.solucao === 'string' && body.solucao.trim() && chamado.status !== 'encerrado') {
+  // chamado não está encerrado nem pendente (pendente = SLA pausado; ali a solução é só anotação) — assim qualquer cliente da API segue a mesma regra do painel.
+  if (body.status === undefined && typeof body.solucao === 'string' && body.solucao.trim() && chamado.status !== 'encerrado' && chamado.status !== 'pendente') {
     body = { ...body, status: 'encerrado' };
   }
 

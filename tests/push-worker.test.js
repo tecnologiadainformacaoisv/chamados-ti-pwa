@@ -1730,6 +1730,13 @@ async function test(name, fn) {
     assert.strictEqual(res.status, 200);
     assert.strictEqual((await d1GetChamado(env, id2)).status, 'pendente', 'status explicito deve ser respeitado');
 
+    // pendente (SLA pausado): escrever a solucao so anota, nao encerra
+    const idP = await criarChamadoTeste();
+    await worker.fetch(req('POST', '/admin/tasks/' + idP, { headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ status: 'pendente' }) }), env);
+    res = await worker.fetch(req('POST', '/admin/tasks/' + idP, { headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ solucao: 'aguardando peca' }) }), env);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual((await d1GetChamado(env, idP)).status, 'pendente', 'solucao em chamado pendente nao deve encerrar');
+
     const id3 = await criarChamadoTeste();
     res = await worker.fetch(req('POST', '/admin/tasks/' + id3, { headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ solucao: '   ' }) }), env);
     assert.strictEqual(res.status, 200);
