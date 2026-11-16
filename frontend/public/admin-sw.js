@@ -52,7 +52,7 @@ self.addEventListener("push", (e) => {
     body: payload.body,
     icon: "./icon.svg",
     badge: "./icon.svg",
-    tag: `admin-${payload.data?.task_id ?? "novo-chamado"}`,
+    tag: payload.data?.type === "nova_conta" ? `admin-conta-${String(payload.data?.email ?? payload.data?.name ?? "nova").slice(0, 100)}` : `admin-${payload.data?.task_id ?? "novo-chamado"}`,
     renotify: true,
     data: payload.data ?? {},
   }
@@ -67,7 +67,7 @@ self.addEventListener("push", (e) => {
           // manda NOVO_CHAMADO pra quem não sabe o que fazer com isso (inofensivo, mas
           // sem sentido).
           if ("url" in client && client.url.startsWith(adminUrl)) {
-            client.postMessage({ type: "NOVO_CHAMADO", data: payload.data ?? {} })
+            client.postMessage({ type: payload.data?.type === "nova_conta" ? "NOVA_CONTA" : "NOVO_CHAMADO", data: payload.data ?? {} })
           }
         }
       }),

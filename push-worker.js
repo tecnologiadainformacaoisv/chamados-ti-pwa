@@ -167,12 +167,12 @@ function withCors(response, request) {
 }
 
 export default {
-  async fetch(request, env) {
-    return withCors(await routeRequest(request, env), request);
+  async fetch(request, env, ctx) {
+    return withCors(await routeRequest(request, env, ctx), request);
   },
 };
 
-async function routeRequest(request, env) {
+async function routeRequest(request, env, ctx) {
   {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS });
@@ -181,8 +181,8 @@ async function routeRequest(request, env) {
     const { pathname } = new URL(request.url);
 
     if (request.method === 'POST') {
-      if (pathname === '/auth/register') return handleRegister(request, env);
-      if (pathname === '/auth/register-externo') return handleRegisterExterno(request, env);
+      if (pathname === '/auth/register') return handleRegister(request, env, ctx);
+      if (pathname === '/auth/register-externo') return handleRegisterExterno(request, env, ctx);
       if (pathname === '/auth/login')    return handleLogin(request, env);
       if (pathname === '/auth/logout')   return handleLogout(request, env);
       if (pathname === '/subscribe')     return handleSubscribe(request, env);
@@ -620,7 +620,7 @@ function normalizeNomePessoa(v) {
   return typeof v === 'string' ? v.trim().replace(/\s+/g, ' ') : '';
 }
 
-async function handleRegister(request, env) {
+async function handleRegister(request, env, ctx) {
   if (!hasValidSecret(request, env)) return unauthorized();
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
@@ -691,6 +691,7 @@ async function handleRegister(request, env) {
 
   await setAuthRecord(name, password, env);
   const token = await createSession(name, env);
+  await avisarNovaConta(env, ctx, name, email, 'interno');
   return jsonRes({ token, name });
 }
 
@@ -721,7 +722,7 @@ const EMAIL_FORMATO_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 //     filtrar/sinalizar visualmente quem entrou por esse caminho (ver usuarios-view.tsx).
 // Body: { name, email, password, telefone? }
 // =====================================================================
-async function handleRegisterExterno(request, env) {
+async function handleRegisterExterno(request, env, ctx) {
   if (!hasValidSecret(request, env)) return unauthorized();
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
@@ -789,6 +790,7 @@ async function handleRegisterExterno(request, env) {
 
   await setAuthRecord(name, password, env);
   const token = await createSession(name, env);
+  await avisarNovaConta(env, ctx, name, email, 'externo');
   return jsonRes({ token, name });
 }
 
@@ -1468,7 +1470,7 @@ async function sendWebPush(sub, payloadStr, env) {
 // (chamada isolada num try/catch próprio em handleCreateTask). Subscription morta é
 // apagada na hora, em vez de ficar tentando pra sempre a cada chamado novo.
 // =====================================================================
-async function notifyAdminsNovoChamado(env, row) {
+async function notifyAdmins(env, payloadObj, tag = "notifyAdmins") {
   const ids = [];
   let cursor;
   do {
@@ -1479,11 +1481,7 @@ async function notifyAdminsNovoChamado(env, row) {
 
   if (!ids.length) return;
 
-  const payload = JSON.stringify({
-    title: 'Chamados de TI – ISV',
-    body:  `Novo chamado: "${row.name}" — aberto por ${row.solicitante || 'alguém'}`,
-    data:  { task_id: row.id, status: 'aberto', type: 'novo_chamado' },
-  });
+  const payload = JSON.stringify(payloadObj);
 
   await Promise.allSettled(ids.map(async (key) => {
     const subJson = await env.SUBSCRIPTIONS.get(key);
@@ -1492,14 +1490,51 @@ async function notifyAdminsNovoChamado(env, row) {
       await sendWebPush(JSON.parse(subJson), payload, env);
     } catch (err) {
       // Endpoint não existe mais (navegador desinstalado/subscription revogada) —
-      // limpa em vez de continuar tentando pra sempre a cada chamado novo.
+      // limpa em vez de continuar tentando pra sempre a cada aviso.
       if (/^Push endpoint (404|410):/.test(err.message)) {
         await env.SUBSCRIPTIONS.delete(key);
       } else {
-        console.error(`notifyAdminsNovoChamado: falha ao enviar push (${key}): ${err.message}`);
+        console.error(`${tag}: falha ao enviar push (${key}): ${err.message}`);
       }
     }
   }));
+}
+
+async function notifyAdminsNovoChamado(env, row) {
+  await notifyAdmins(env, {
+    title: 'Chamados de TI – ISV',
+    body:  `Novo chamado: "${row.name}" — aberto por ${row.solicitante || 'alguém'}`,
+    data:  { task_id: row.id, status: 'aberto', type: 'novo_chamado' },
+  }, 'notifyAdminsNovoChamado');
+}
+
+// Alerta de conta nova (2026-11-16, pedido do usuário: "preciso saber quando alguém criar
+// uma conta"): avisa a TI quando alguém define a senha pela 1ª vez (primeiro acesso de
+// quem a TI cadastrou) ou se cadastra como visitante. Best-effort: nunca derruba o
+// cadastro (chamadores usam try/catch). Não leva senha nem dado sensível, só nome e e-mail.
+// Texto livre do usuário no corpo da notificação: troca caracteres de controle/quebras por
+// espaço e corta o tamanho (evita aviso gigante ou enganoso).
+function limpaTextoAviso(s, max) {
+  return String(s ?? '').replace(/[ -]+/g, ' ').replace(/s+/g, ' ').trim().slice(0, max);
+}
+
+// Dispara o aviso SEM atrasar a resposta do cadastro: com `ctx.waitUntil` o Worker termina
+// o envio depois de responder; sem ctx (testes) aguarda normalmente. Nunca lança.
+function avisarNovaConta(env, ctx, name, email, origem) {
+  const p = notifyAdminsNovaConta(env, name, email, origem).catch((e) => console.error('nova conta: aviso falhou: ' + e.message));
+  if (ctx && typeof ctx.waitUntil === 'function') { ctx.waitUntil(p); return undefined; }
+  return p;
+}
+
+async function notifyAdminsNovaConta(env, name, email, origem) {
+  name = limpaTextoAviso(name, 60);
+  email = limpaTextoAviso(email, 100);
+  const quem = origem === 'externo' ? 'Visitante' : 'Primeiro acesso';
+  await notifyAdmins(env, {
+    title: 'Chamados de TI – ISV',
+    body:  `${quem}: ${name}${email ? ' (' + email + ')' : ''} criou a conta.`,
+    data:  { type: 'nova_conta', name, email: email || null, origem },
+  }, 'notifyAdminsNovaConta');
 }
 
 // =====================================================================

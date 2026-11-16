@@ -1067,6 +1067,35 @@ async function test(name, fn) {
     assert.strictEqual(um.email, 'pessoa.bulk.um@institutosaovicente.com.br');
   });
 
+  console.log('--- alerta de conta nova pra TI (2026-11-16) ---');
+  await test('primeiro acesso dispara push pro admin inscrito, sem senha no payload, e cadastro nao falha com assinante morto', async () => {
+    await d1CreateSolicitante(env, 'Conta Alerta', 'conta.alerta@institutosaovicente.com.br');
+    await worker.fetch(req('POST', '/admin/subscribe', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ id: 'device-conta-nova', subscription: { endpoint: 'https://fake-push-endpoint.test/conta-nova', keys: FAKE_PUSH_KEYS } }),
+    }), env);
+    await worker.fetch(req('POST', '/admin/subscribe', {
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET },
+      body: JSON.stringify({ id: 'device-conta-morto', subscription: { endpoint: 'https://fake-push-endpoint.test/conta-morto', keys: FAKE_PUSH_KEYS } }),
+    }), env);
+    failingPushEndpoints.set('https://fake-push-endpoint.test/conta-morto', 410);
+    adminPushCalls.length = 0;
+    try {
+      const res = await worker.fetch(req('POST', '/auth/register', {
+        headers: SECRET_HEADERS,
+        body: JSON.stringify({ email: 'conta.alerta@institutosaovicente.com.br', nome: 'Conta Alerta Silva', password: 'senhaboa123' }),
+      }), env);
+      assert.strictEqual(res.status, 200, 'o cadastro deveria funcionar mesmo com o aviso falhando para um assinante');
+      const call = adminPushCalls.find(c => c.url === 'https://fake-push-endpoint.test/conta-nova');
+      assert.ok(call, 'deveria avisar o dispositivo admin inscrito');
+      assert.strictEqual(await env.SUBSCRIPTIONS.get('adminsub_device-conta-morto'), null, 'assinante morto deveria ser limpo');
+    } finally {
+      failingPushEndpoints.delete('https://fake-push-endpoint.test/conta-morto');
+      await env.SUBSCRIPTIONS.delete('adminsub_device-conta-nova');
+      await env.SUBSCRIPTIONS.delete('adminsub_device-conta-morto');
+    }
+  });
+
   console.log('--- POST /auth/register-externo (2026-09-17, "chamados usados de forma externa... recebemos um chamado com identificacao outros e nem sabemos de onde veio") ---');
   await test('sem X-App-Secret dá 403', async () => {
     const res = await worker.fetch(req('POST', '/auth/register-externo', {
