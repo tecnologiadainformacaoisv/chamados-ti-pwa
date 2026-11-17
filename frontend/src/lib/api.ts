@@ -269,7 +269,8 @@ export type AdminUser = { name: string; createdAt: number | null; lastLoginAt: n
 
 // Presença (2026-11-17): último sinal de vida de cada aba de solicitante. `agora` é a hora
 // do servidor (o painel não depende do relógio do computador da TI).
-export type AdminPresenca = { name: string; last_seen: number; visivel: number }
+// `saiu: 1` = a pessoa fechou todas as abas (last_seen é quando fechou).
+export type AdminPresenca = { name: string; last_seen: number; visivel: number; saiu?: number }
 
 export async function fetchAdminPresenca(secret: string): Promise<{ agora: number; janelaMs: number; presenca: AdminPresenca[] }> {
   return adminRequest(secret, "/presenca")

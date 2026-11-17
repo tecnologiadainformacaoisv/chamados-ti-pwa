@@ -63,6 +63,7 @@ export function UsuariosView() {
     queryFn: () => fetchAdminPresenca(secret),
     refetchInterval: 20_000,
   })
+  const presencaOk = presencaQuery.data !== undefined
 
   function onQueryError(err: unknown) {
     if (isSessionError(err)) logout()
@@ -178,10 +179,10 @@ Apagar tudo mesmo?`)
   const sinais = new Map((presencaQuery.data?.presenca ?? []).map((p) => [p.name, p]))
   const estadoPresenca = (name: string): "ativo" | "segundo-plano" | "offline" => {
     const p = sinais.get(name)
-    if (!p || agoraServidor - p.last_seen > janela) return "offline"
+    if (!p || p.saiu === 1 || agoraServidor - p.last_seen > janela) return "offline"
     return p.visivel === 1 ? "ativo" : "segundo-plano"
   }
-  const totalOnline = todos.filter((s) => estadoPresenca(s.name) !== "offline").length
+  const totalOnline = todos.filter((s) => s.ativo === 1 && estadoPresenca(s.name) !== "offline").length
   const comSenha = new Set((usersQuery.data?.users ?? []).map((u) => u.name))
   const totalAcessaram = todos.filter((s) => comSenha.has(s.name)).length
   const porAcesso = soAcessaram ? solicitantes.filter((s) => comSenha.has(s.name)) : solicitantes
@@ -255,7 +256,7 @@ Apagar tudo mesmo?`)
         Mostrar só quem já acessou ({totalAcessaram})
       </label>
       <label className="flex w-fit items-center gap-2 text-xs text-muted-foreground">
-        <input type="checkbox" checked={soOnline} onChange={(e) => setSoOnline(e.target.checked)} className="h-3.5 w-3.5" />
+        <input type="checkbox" disabled={!presencaOk} checked={soOnline} onChange={(e) => setSoOnline(e.target.checked)} className="h-3.5 w-3.5" />
         Mostrar só online ({totalOnline})
       </label>
       {totalExternos > 0 && (
@@ -291,7 +292,7 @@ Apagar tudo mesmo?`)
                       {s.name}
                     </td>
                     <td className="px-3 py-2">
-                      <PresencaBadge estado={estadoPresenca(s.name)} visto={sinais.get(s.name)?.last_seen} agora={agoraServidor} />
+                      <PresencaBadge indisponivel={!presencaOk} estado={estadoPresenca(s.name)} visto={sinais.get(s.name)?.last_seen} agora={agoraServidor} />
                     </td>
                     <td className="px-3 py-2">
                       <span
@@ -411,7 +412,8 @@ Apagar tudo mesmo?`)
 
 // Bolinha + texto: verde = aba em uso agora; âmbar = aba aberta em segundo plano (ou
 // minimizada); cinza = sem sinal. O texto existe pra não depender só da cor.
-function PresencaBadge({ estado, visto, agora }: { estado: "ativo" | "segundo-plano" | "offline"; visto?: number; agora: number }) {
+function PresencaBadge({ estado, visto, agora, indisponivel }: { estado: "ativo" | "segundo-plano" | "offline"; visto?: number; agora: number; indisponivel?: boolean }) {
+  if (indisponivel) return <span className="text-xs text-muted-foreground" title="Presença indisponível no momento">—</span>
   if (estado === "offline") {
     const min = visto && agora ? Math.max(1, Math.round((agora - visto) / 60_000)) : null
     const quando = min === null ? "sem registro" : min < 60 ? `visto há ${min} min` : min < 1440 ? `visto há ${Math.round(min / 60)} h` : `visto há ${Math.round(min / 1440)} d`

@@ -197,15 +197,17 @@ export async function fetchSolicitanteNomes(): Promise<string[]> {
 
 // Heartbeat de presença (ver hooks/use-presenca.ts). `keepalive` deixa o envio de
 // "saindo" terminar mesmo com a página fechando. Nunca lança: presença não pode quebrar o app.
-export async function sendPresence(sessionToken: string, estado: { visivel?: boolean; saindo?: boolean }): Promise<void> {
+export async function sendPresence(sessionToken: string, estado: { tabId: string; ts: number; visivel?: boolean; saindo?: boolean }): Promise<number | null> {
   try {
-    await fetch(`${API_BASE}/presence`, {
+    const res = await fetch(`${API_BASE}/presence`, {
       method: "POST",
       keepalive: true,
       headers: { "X-App-Secret": APP_SHARED_SECRET, "X-Session-Token": sessionToken, "Content-Type": "application/json" },
       body: JSON.stringify(estado),
     })
+    return res.status
   } catch {
     // sem rede: o próximo sinal corrige
+    return null
   }
 }

@@ -719,6 +719,11 @@ async function test(name, fn) {
 
   console.log('--- presença (online no painel de admin) ---');
   const ADM_PRES = { 'X-Admin-Secret': env.ADMIN_SECRET };
+  const pres = (body, tk = token) => worker.fetch(req('POST', '/api/presence', { headers: { ...SECRET_HEADERS, 'X-Session-Token': tk }, body: JSON.stringify(body) }), env);
+  const lerPres = async (nome = 'Michael Vasconcelos') => {
+    const data = await worker.fetch(req('GET', '/admin/presenca', { headers: ADM_PRES }), env).then(r => r.json());
+    return { data, p: data.presenca.find(x => x.name === nome) };
+  };
   await test('POST /api/presence sem sessão dá 401', async () => {
     const res = await worker.fetch(req('POST', '/api/presence', { headers: SECRET_HEADERS, body: '{}' }), env);
     assert.strictEqual(res.status, 401);
@@ -728,34 +733,65 @@ async function test(name, fn) {
     assert.strictEqual(res.status, 403);
   });
   await test('sinal de vida grava a presença da pessoa da sessão (aba visível)', async () => {
-    const res = await worker.fetch(req('POST', '/api/presence', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: JSON.stringify({ visivel: true }) }), env);
-    assert.strictEqual(res.status, 200);
-    const data = await worker.fetch(req('GET', '/admin/presenca', { headers: ADM_PRES }), env).then(r => r.json());
+    assert.strictEqual((await pres({ tabId: 'A', visivel: true })).status, 200);
+    const { data, p } = await lerPres();
     assert.ok(data.agora > 0 && data.janelaMs > 0);
-    const p = data.presenca.find(x => x.name === 'Michael Vasconcelos');
     assert.ok(p, 'Michael deveria aparecer');
     assert.strictEqual(p.visivel, 1);
+    assert.strictEqual(p.saiu, 0);
     assert.ok(Math.abs(data.agora - p.last_seen) < 5000);
   });
   await test('aba em segundo plano grava visivel = 0', async () => {
-    await worker.fetch(req('POST', '/api/presence', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: JSON.stringify({ visivel: false }) }), env);
-    const data = await worker.fetch(req('GET', '/admin/presenca', { headers: ADM_PRES }), env).then(r => r.json());
-    assert.strictEqual(data.presenca.find(x => x.name === 'Michael Vasconcelos').visivel, 0);
+    await pres({ tabId: 'A', visivel: false });
+    assert.strictEqual((await lerPres()).p.visivel, 0);
   });
-  await test('"saindo" tira a pessoa da lista na hora', async () => {
-    await worker.fetch(req('POST', '/api/presence', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: JSON.stringify({ saindo: true }) }), env);
-    const data = await worker.fetch(req('GET', '/admin/presenca', { headers: ADM_PRES }), env).then(r => r.json());
-    assert.ok(!data.presenca.find(x => x.name === 'Michael Vasconcelos'));
+  await test('duas abas: uma visível e outra em segundo plano => pessoa em uso; fechar uma não derruba a outra', async () => {
+    await pres({ tabId: 'A', visivel: true });
+    await pres({ tabId: 'B', visivel: false });
+    let { p } = await lerPres();
+    assert.strictEqual(p.visivel, 1, 'aba A em uso deve valer');
+    await pres({ tabId: 'B', saindo: true });
+    ({ p } = await lerPres());
+    assert.strictEqual(p.saiu, 0, 'aba A continua aberta');
+    assert.strictEqual(p.visivel, 1);
   });
-  await test('sem a tabela presenca (produção antes do 1º sinal) a gravação cria a tabela sozinha', async () => {
-    await env.CHAMADOS_DB.prepare('DROP TABLE presenca').run();
+  await test('"saindo" da última aba marca saiu = 1 mas guarda o horário (visto há X)', async () => {
+    await pres({ tabId: 'A', saindo: true });
+    const { p } = await lerPres();
+    assert.strictEqual(p.saiu, 1);
+    assert.ok(p.last_seen > 0, 'horário real preservado');
+  });
+  await test('sinal atrasado (ts mais velho) não sobrescreve um mais novo', async () => {
+    const agora = Date.now();
+    await pres({ tabId: 'C', visivel: true, ts: agora });
+    await pres({ tabId: 'C', saindo: true, ts: agora - 5000 });
+    const { p } = await lerPres();
+    assert.strictEqual(p.saiu, 0, '"saindo" atrasado deve ser ignorado');
+    await pres({ tabId: 'C', saindo: true, ts: agora + 1000 });
+  });
+  await test('pings em menos de 10 s são descartados (limite de frequência), mas mudança de visibilidade passa', async () => {
+    await pres({ tabId: 'D', visivel: true });
+    const antes = await env.CHAMADOS_DB.prepare("SELECT last_seen FROM presenca_abas WHERE tab_id = 'D'").first();
+    await new Promise(r => setTimeout(r, 20));
+    await pres({ tabId: 'D', visivel: true });
+    const meio = await env.CHAMADOS_DB.prepare("SELECT last_seen FROM presenca_abas WHERE tab_id = 'D'").first();
+    assert.strictEqual(meio.last_seen, antes.last_seen, 'segundo ping rápido não grava');
+    await pres({ tabId: 'D', visivel: false });
+    const depois = await env.CHAMADOS_DB.prepare("SELECT visivel FROM presenca_abas WHERE tab_id = 'D'").first();
+    assert.strictEqual(depois.visivel, 0);
+  });
+  await test('corpo grande demais dá 413', async () => {
+    const res = await worker.fetch(req('POST', '/api/presence', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token, 'Content-Length': '9999' }, body: '{}' }), env);
+    assert.strictEqual(res.status, 413);
+  });
+  await test('sem a tabela presenca_abas (produção antes do 1º sinal) a gravação cria a tabela sozinha', async () => {
+    await env.CHAMADOS_DB.prepare('DROP TABLE presenca_abas').run();
     const vazio = await worker.fetch(req('GET', '/admin/presenca', { headers: ADM_PRES }), env);
     assert.strictEqual(vazio.status, 200);
     assert.deepStrictEqual((await vazio.json()).presenca, []);
-    const res = await worker.fetch(req('POST', '/api/presence', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: '{}' }), env);
+    const res = await pres({ tabId: 'A' });
     assert.strictEqual((await res.json()).ok, true);
-    const data = await worker.fetch(req('GET', '/admin/presenca', { headers: ADM_PRES }), env).then(r => r.json());
-    assert.ok(data.presenca.find(x => x.name === 'Michael Vasconcelos'));
+    assert.ok((await lerPres()).p);
   });
 
   console.log('--- /admin/users (visão geral de quem já criou senha) ---');

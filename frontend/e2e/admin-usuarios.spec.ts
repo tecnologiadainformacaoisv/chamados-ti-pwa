@@ -58,6 +58,35 @@ test.describe("Usuários (gestão de solicitantes)", () => {
     await expect(page.getByText("Davi Nunca Entrou")).toHaveCount(0)
   })
 
+  test("presença: quem fechou todas as abas fica offline com 'visto há'; se a presença falhar mostra traço e desabilita o filtro", async ({ page }) => {
+    await mockAdminRoutes(page)
+    const agora = Date.now()
+    await page.route("**/admin/solicitantes", (route) => route.request().method() !== "GET" ? route.fallback() : route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({ solicitantes: [{ name: "Edu Saiu", ativo: 1, created_at: agora }] }),
+    }))
+    await page.route("**/admin/presenca", (route) => route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({ agora, janelaMs: 180000, presenca: [{ name: "Edu Saiu", last_seen: agora - 5 * 60000, visivel: 0, saiu: 1 }] }),
+    }))
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Usuários")
+    await expect(page.locator("tr", { hasText: "Edu Saiu" }).getByText("Offline · visto há 5 min")).toBeVisible()
+  })
+
+  test("presença indisponível (erro do servidor) mostra traço e desabilita o filtro 'só online'", async ({ page }) => {
+    await mockAdminRoutes(page)
+    await page.route("**/admin/solicitantes", (route) => route.request().method() !== "GET" ? route.fallback() : route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({ solicitantes: [{ name: "Fabi Sem Dados", ativo: 1, created_at: Date.now() }] }),
+    }))
+    await page.route("**/admin/presenca", (route) => route.fulfill({ status: 500, contentType: "application/json", body: "{}" }))
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Usuários")
+    await expect(page.locator("tr", { hasText: "Fabi Sem Dados" }).getByText("—", { exact: true })).toBeVisible()
+    await expect(page.getByLabel(/Mostrar só online/)).toBeDisabled()
+  })
+
   test("adicionar solicitante novo chama POST com o nome certo", async ({ page }) => {
     await mockAdminRoutes(page)
     let posted: Record<string, unknown> | null = null

@@ -2166,17 +2166,21 @@ async function handleListSolicitantes(request, env) {
 
 // =====================================================================
 // PRESENÇA ("online" no painel de admin, 2026-11-17). Mecanismo clássico de heartbeat:
-// a aba do solicitante manda POST /api/presence a cada 60 s (e ao mostrar/esconder a aba,
+// cada ABA do solicitante manda POST /api/presence a cada 60 s (e ao mostrar/esconder a aba,
 // via Page Visibility API, e ao fechar, via pagehide + fetch keepalive). O servidor guarda
-// só o último sinal por pessoa; quem decide "online" é o painel: sinal há menos de
-// PRESENCA_ONLINE_MS. Fica em D1 (não em KV) porque o KV grátis só aceita 1000 escritas/dia.
-// A tabela se cria sozinha na primeira escrita (sem rota de migração pra esquecer).
+// uma linha por ABA (name + tab_id) — assim fechar uma aba não derruba quem tem outra
+// aberta — e o painel junta por pessoa. Sinal tem `ts` do cliente: escrita mais velha que a
+// já gravada é ignorada (evita "saindo" atrasado vencer um ping novo). Pings repetidos em
+// menos de 10 s são descartados no próprio SQL (limite de frequência, sem custo de KV).
+// Fica em D1 (não em KV) porque o KV grátis só aceita 1000 escritas/dia. A tabela se cria
+// sozinha na primeira escrita (sem rota de migração pra esquecer).
 // =====================================================================
 const PRESENCA_ONLINE_MS = 180_000;
+const PRESENCA_MIN_INTERVALO_MS = 10_000;
 
 async function ensurePresencaTable(env) {
   await env.CHAMADOS_DB.prepare(
-    'CREATE TABLE IF NOT EXISTS presenca (name TEXT PRIMARY KEY, last_seen INTEGER NOT NULL, visivel INTEGER NOT NULL DEFAULT 1)'
+    'CREATE TABLE IF NOT EXISTS presenca_abas (name TEXT NOT NULL, tab_id TEXT NOT NULL, last_seen INTEGER NOT NULL, ts INTEGER NOT NULL DEFAULT 0, visivel INTEGER NOT NULL DEFAULT 1, saiu INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (name, tab_id))'
   ).run();
 }
 
@@ -2184,12 +2188,22 @@ async function handlePresence(request, env) {
   if (!hasValidSecret(request, env)) return unauthorized();
   const session = await requireSession(request, env);
   if (!session) return sessionInvalid();
+  const len = Number(request.headers.get('Content-Length') || 0);
+  if (len > 500) return jsonRes({ error: 'corpo grande demais' }, 413);
   let body = {};
   try { body = await request.json(); } catch { /* corpo vazio vale como "visível" */ }
   const saindo = body?.saindo === true;
   const visivel = body?.visivel === false ? 0 : 1;
-  const sql = 'INSERT INTO presenca (name, last_seen, visivel) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET last_seen = excluded.last_seen, visivel = excluded.visivel';
-  const grava = () => env.CHAMADOS_DB.prepare(sql).bind(session.name, saindo ? 0 : Date.now(), visivel).run();
+  const tabId = typeof body?.tabId === 'string' && body.tabId.length > 0 ? body.tabId.slice(0, 64) : 'unica';
+  const agora = Date.now();
+  // ts do cliente só serve pra ordenar; limitado pra um relógio errado não travar a aba.
+  const ts = Number.isFinite(body?.ts) ? Math.min(Math.max(body.ts, agora - 86_400_000), agora + 60_000) : agora;
+  const sql = `INSERT INTO presenca_abas (name, tab_id, last_seen, ts, visivel, saiu) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+    ON CONFLICT(name, tab_id) DO UPDATE SET last_seen = excluded.last_seen, ts = excluded.ts, visivel = excluded.visivel, saiu = excluded.saiu
+    WHERE excluded.ts >= presenca_abas.ts
+      AND (excluded.saiu = 1 OR presenca_abas.saiu = 1 OR presenca_abas.visivel != excluded.visivel
+           OR presenca_abas.last_seen <= excluded.last_seen - ?7)`;
+  const grava = () => env.CHAMADOS_DB.prepare(sql).bind(session.name, tabId, agora, ts, visivel, saindo ? 1 : 0, PRESENCA_MIN_INTERVALO_MS).run();
   try {
     try {
       await grava();
@@ -2198,6 +2212,8 @@ async function handlePresence(request, env) {
       await ensurePresencaTable(env);
       await grava();
     }
+    // faxina oportunista: abas sem sinal há mais de um dia
+    if (saindo) await env.CHAMADOS_DB.prepare('DELETE FROM presenca_abas WHERE last_seen < ?').bind(agora - 86_400_000).run();
   } catch {
     // presença nunca derruba o app: falha vira "ok: false", sem erro HTTP
     return jsonRes({ ok: false });
@@ -2205,16 +2221,35 @@ async function handlePresence(request, env) {
   return jsonRes({ ok: true });
 }
 
-// GET /admin/presenca — quem mandou sinal. `agora` vem do servidor pra o painel não
-// depender do relógio do computador da TI.
+// GET /admin/presenca — um item por pessoa, juntando as abas dela. `agora` vem do servidor
+// pra o painel não depender do relógio do computador da TI.
+//  - alguma aba aberta (saiu = 0): last_seen = sinal mais recente delas; visivel = 1 se alguma
+//    aba aberta e recente está em uso;
+//  - só abas fechadas: saiu = 1 e last_seen = quando a última fechou ("visto há X").
 async function handleAdminPresenca(request, env) {
   if (!(await isAdmin(request, env))) return unauthorized();
   let rows = [];
   try {
-    const { results } = await env.CHAMADOS_DB.prepare('SELECT name, last_seen, visivel FROM presenca WHERE last_seen > 0').all();
+    const { results } = await env.CHAMADOS_DB.prepare('SELECT name, last_seen, visivel, saiu FROM presenca_abas').all();
     rows = results || [];
   } catch { /* tabela ainda não existe: ninguém mandou sinal */ }
-  return jsonRes({ agora: Date.now(), janelaMs: PRESENCA_ONLINE_MS, presenca: rows });
+  const agora = Date.now();
+  const porNome = new Map();
+  for (const r of rows) {
+    const p = porNome.get(r.name) || { name: r.name, abertas: 0, last_open: 0, last_closed: 0, em_uso: 0 };
+    if (r.saiu === 1) {
+      p.last_closed = Math.max(p.last_closed, r.last_seen);
+    } else {
+      p.abertas += 1;
+      p.last_open = Math.max(p.last_open, r.last_seen);
+      if (r.visivel === 1 && agora - r.last_seen <= PRESENCA_ONLINE_MS) p.em_uso = 1;
+    }
+    porNome.set(r.name, p);
+  }
+  const presenca = [...porNome.values()].map(p => p.abertas > 0
+    ? { name: p.name, last_seen: p.last_open, visivel: p.em_uso, saiu: 0 }
+    : { name: p.name, last_seen: p.last_closed, visivel: 0, saiu: 1 });
+  return jsonRes({ agora, janelaMs: PRESENCA_ONLINE_MS, presenca });
 }
 
 // =====================================================================

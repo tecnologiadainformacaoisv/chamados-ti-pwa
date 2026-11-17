@@ -155,10 +155,14 @@ CREATE TABLE IF NOT EXISTS chamado_eventos (
 );
 CREATE INDEX IF NOT EXISTS idx_chamado_eventos_chamado ON chamado_eventos (chamado_id, created_at);
 
--- Presença (2026-11-17): último sinal de vida (heartbeat) da aba de cada solicitante.
+-- Presença (2026-11-17): último sinal de vida (heartbeat) de cada ABA de cada solicitante.
 -- O Worker também cria esta tabela sozinho na primeira escrita (ver handlePresence).
-CREATE TABLE IF NOT EXISTS presenca (
-  name      TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS presenca_abas (
+  name      TEXT NOT NULL,
+  tab_id    TEXT NOT NULL,
   last_seen INTEGER NOT NULL,
-  visivel   INTEGER NOT NULL DEFAULT 1
+  ts        INTEGER NOT NULL DEFAULT 0,
+  visivel   INTEGER NOT NULL DEFAULT 1,
+  saiu      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (name, tab_id)
 );
