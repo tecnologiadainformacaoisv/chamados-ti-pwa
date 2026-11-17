@@ -28,9 +28,9 @@ export function AppHeader({ countAberto, onVerAbertos }: { countAberto?: number;
     // sticky (2026-09-15, pedido do usuário: "a parte de cima fixa, só os chamados
     // descem") — h-16 fixo é o que permite o bloco de filtros/toggle (ver
     // gestao-view.tsx) saber exatamente onde grudar por baixo (top-16).
-    <header className="bg-brand-gradient sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between px-4 text-primary-foreground shadow-[0_2px_12px_rgba(0,0,0,0.2)]">
+    <header className="bg-brand-gradient sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between px-4 text-white shadow-[0_2px_12px_rgba(0,0,0,0.2)]">
       <div className="flex items-center gap-3">
-        <SidebarTrigger className="text-primary-foreground hover:bg-white/10 hover:text-primary-foreground" />
+        <SidebarTrigger className="text-white hover:bg-white/10 hover:text-white" />
         {/* w-auto (não w-10): logo-isv.svg é um lockup largo (~3.3:1, ícone + texto
             "INSTITUTO SÃO VICENTE"), forçar largura quadrada esmaga o texto até
             ficar ilegível. brightness-0 invert (não só invert) — só invert()
@@ -44,7 +44,7 @@ export function AppHeader({ countAberto, onVerAbertos }: { countAberto?: number;
           centralizado se sobrepunha à logo em 390px (achado 2026-10-14, screenshot). */}
       <div className="hidden flex-col items-center leading-tight sm:flex">
         <span className="text-sm font-semibold">Painel de Admin</span>
-        <span className="text-xs text-primary-foreground/70">Chamados de TI</span>
+        <span className="text-xs text-white/70">Chamados de TI</span>
       </div>
       <div className="flex items-center gap-1">
         {!!countAberto && (
@@ -58,7 +58,7 @@ export function AppHeader({ countAberto, onVerAbertos }: { countAberto?: number;
             title={`${countAberto} ${countAberto === 1 ? "chamado aberto aguardando" : "chamados abertos aguardando"} atendimento`}
           >
             <Bell className="h-5 w-5" />
-            <Badge variant="destructive" className="absolute -top-1 -right-1 h-4 min-w-4 justify-center bg-destructive px-1 text-[0.65rem] text-white">
+            <Badge variant="destructive" className="absolute -top-1 -right-1 h-4 min-w-4 justify-center bg-red-600 px-1 text-[0.65rem] text-white">
               {countAberto > 99 ? "99+" : countAberto}
             </Badge>
           </button>
@@ -68,7 +68,7 @@ export function AppHeader({ countAberto, onVerAbertos }: { countAberto?: number;
           variant="ghost"
           title={`Tema ${nomeTema[tema]} — clique para mudar para ${nomeTema[proximo[tema]]}`}
           aria-label={`Tema atual: ${nomeTema[tema]}. Trocar para ${nomeTema[proximo[tema]]}`}
-          className="text-primary-foreground hover:bg-white/10 hover:text-primary-foreground"
+          className="text-white hover:bg-white/10 hover:text-white"
           onClick={() => setTema(proximo[tema])}
         >
           <IconeTema />
@@ -77,7 +77,7 @@ export function AppHeader({ countAberto, onVerAbertos }: { countAberto?: number;
           size="icon"
           variant="ghost"
           title="Atualizar"
-          className="text-primary-foreground hover:bg-white/10 hover:text-primary-foreground"
+          className="text-white hover:bg-white/10 hover:text-white"
           onClick={() => queryClient.invalidateQueries()}
         >
           <RefreshCw />
@@ -86,7 +86,7 @@ export function AppHeader({ countAberto, onVerAbertos }: { countAberto?: number;
           size="icon"
           variant="ghost"
           title="Sair"
-          className="text-primary-foreground hover:bg-white/10 hover:text-primary-foreground"
+          className="text-white hover:bg-white/10 hover:text-white"
           onClick={() => {
             if (confirm("Sair do painel?")) logout()
           }}

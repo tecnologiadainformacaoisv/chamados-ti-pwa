@@ -25,6 +25,16 @@ test.describe("Seletor de tema do painel", () => {
     expect(await page.evaluate(() => localStorage.getItem("admin_tema"))).toBe("claro")
   })
 
+  test("no escuro o título e os ícones do cabeçalho continuam brancos (regressão 2026-11-17)", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("admin_tema", "escuro"))
+    await mockAdminRoutes(page, { tasks: [makeTask({ id: "t1", name: "Notebook não liga" })] })
+    await gotoAdminLoggedIn(page)
+    await expect(page.locator("html")).toHaveClass(/dark/)
+    const titulo = page.locator("header").getByText("Painel de Admin")
+    if (await titulo.isVisible()) await expect(titulo).toHaveCSS("color", "rgb(255, 255, 255)")
+    await expect(page.getByRole("button", { name: /Tema atual/ })).toHaveCSS("color", "rgb(255, 255, 255)")
+  })
+
   test("modo automático segue o tema do computador", async ({ page }) => {
     await page.emulateMedia({ colorScheme: "dark" })
     await page.addInitScript(() => localStorage.setItem("admin_tema", "sistema"))
