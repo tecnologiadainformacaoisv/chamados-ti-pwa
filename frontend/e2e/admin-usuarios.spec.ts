@@ -20,6 +20,44 @@ test.describe("Usuários (gestão de solicitantes)", () => {
     await expect(page.locator("tr", { hasText: "Ciclana Inativa" }).getByRole("button", { name: "Reativar" })).toBeVisible()
   })
 
+  test("presença: mostra online, aba inativa e offline, e o filtro 'só online' esconde o offline", async ({ page }) => {
+    await mockAdminRoutes(page)
+    const agora = Date.now()
+    await page.route("**/admin/solicitantes", (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ solicitantes: [
+          { name: "Ana Online", ativo: 1, created_at: agora },
+          { name: "Beto Segundo Plano", ativo: 1, created_at: agora },
+          { name: "Carla Offline", ativo: 1, created_at: agora },
+          { name: "Davi Nunca Entrou", ativo: 1, created_at: agora },
+        ] }),
+      })
+    })
+    await page.route("**/admin/presenca", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ agora, janelaMs: 180000, presenca: [
+        { name: "Ana Online", last_seen: agora - 20000, visivel: 1 },
+        { name: "Beto Segundo Plano", last_seen: agora - 90000, visivel: 0 },
+        { name: "Carla Offline", last_seen: agora - 20 * 60000, visivel: 1 },
+      ] }),
+    }))
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Usuários")
+    await expect(page.locator("tr", { hasText: "Ana Online" }).getByText("Online", { exact: true })).toBeVisible()
+    await expect(page.locator("tr", { hasText: "Beto Segundo Plano" }).getByText("Aba aberta (inativa)")).toBeVisible()
+    await expect(page.locator("tr", { hasText: "Carla Offline" }).getByText("Offline · visto há 20 min")).toBeVisible()
+    await expect(page.locator("tr", { hasText: "Davi Nunca Entrou" }).getByText("Offline · sem registro")).toBeVisible()
+    await page.getByLabel(/Mostrar só online/).check()
+    await expect(page.getByText("Ana Online")).toBeVisible()
+    await expect(page.getByText("Beto Segundo Plano")).toBeVisible()
+    await expect(page.getByText("Carla Offline")).toHaveCount(0)
+    await expect(page.getByText("Davi Nunca Entrou")).toHaveCount(0)
+  })
+
   test("adicionar solicitante novo chama POST com o nome certo", async ({ page }) => {
     await mockAdminRoutes(page)
     let posted: Record<string, unknown> | null = null

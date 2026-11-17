@@ -267,6 +267,14 @@ export async function fetchAdminSolicitantes(secret: string): Promise<{ solicita
 // hash/salt de senha, só metadados (ver handleAdminListUsers em push-worker.js).
 export type AdminUser = { name: string; createdAt: number | null; lastLoginAt: number | null }
 
+// Presença (2026-11-17): último sinal de vida de cada aba de solicitante. `agora` é a hora
+// do servidor (o painel não depende do relógio do computador da TI).
+export type AdminPresenca = { name: string; last_seen: number; visivel: number }
+
+export async function fetchAdminPresenca(secret: string): Promise<{ agora: number; janelaMs: number; presenca: AdminPresenca[] }> {
+  return adminRequest(secret, "/presenca")
+}
+
 export async function fetchAdminUsers(secret: string): Promise<{ total: number; users: AdminUser[] }> {
   return adminRequest(secret, "/users")
 }

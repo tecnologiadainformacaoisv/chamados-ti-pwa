@@ -49,6 +49,7 @@ export async function mockSolicitanteRoutes(
   const solicitantes = opts.solicitantes ?? SOLICITANTES
 
   await on(page, "**/api/solicitantes", "GET", (route) => fulfillJson(route, { names: solicitantes }))
+  await on(page, "**/api/presence", "POST", (route) => fulfillJson(route, { ok: true }))
   await on(page, "**/auth/login", "POST", (route) => fulfillJson(route, { token: "fake-session-token", name: "Fulano de Tal" }))
   await on(page, "**/auth/register", "POST", (route) => fulfillJson(route, { token: "fake-session-token", name: "Fulano de Tal" }))
   // Autocadastro externo (2026-09-17) — devolve o nome que a pessoa digitou (diferente
@@ -143,6 +144,7 @@ export async function mockAdminRoutes(
   await on(page, "**/admin/solicitantes", "GET", (route) => fulfillJson(route, { solicitantes: SOLICITANTES.map((name) => ({ name, ativo: 1, created_at: Date.now() })) }))
   await on(page, "**/admin/solicitantes", "POST", (route) => fulfillJson(route, { ok: true }))
   await on(page, /\/admin\/solicitantes\/[^/]+\/ativo/, "POST", (route) => fulfillJson(route, { ok: true }))
+  await on(page, "**/admin/presenca", "GET", (route) => fulfillJson(route, { agora: Date.now(), janelaMs: 180000, presenca: [{ name: "Henrique", last_seen: Date.now() - 30000, visivel: 1 }] }))
   await on(page, "**/admin/subscribe", "POST", (route) => fulfillJson(route, { ok: true }))
   await on(page, "**/admin/subscribe/test", "POST", (route) => fulfillJson(route, { ok: true }))
   await on(page, "**/api/solicitantes", "GET", (route) => fulfillJson(route, { names: SOLICITANTES }))

@@ -186,6 +186,7 @@ async function routeRequest(request, env, ctx) {
       if (pathname === '/auth/login')    return handleLogin(request, env);
       if (pathname === '/auth/logout')   return handleLogout(request, env);
       if (pathname === '/subscribe')     return handleSubscribe(request, env);
+      if (pathname === '/api/presence')  return handlePresence(request, env);
       // Fase M4 (2026-08-13): rota /webhook removida — ver comentário perto de onde
       // handleWebhook/runStatusAutomation viviam (antes de "WEB PUSH" no arquivo).
       if (pathname === '/api/tasks')     return handleCreateTask(request, env);
@@ -253,6 +254,7 @@ async function routeRequest(request, env, ctx) {
       if (pathname === '/admin/tasks')       return handleAdminListTasks(request, env);
       if (pathname === '/admin/metrics')     return handleAdminMetrics(request, env);
       if (pathname === '/admin/solicitantes') return handleAdminListSolicitantes(request, env);
+      if (pathname === '/admin/presenca')    return handleAdminPresenca(request, env);
       const eventosGetMatch = pathname.match(/^\/admin\/tasks\/([^/]+)\/eventos$/);
       if (eventosGetMatch) return handleAdminListEventos(request, env, eventosGetMatch[1]);
       const anexoMatch = pathname.match(/^\/api\/anexos\/([^/]+)$/);
@@ -2160,6 +2162,59 @@ async function handleListSolicitantes(request, env) {
   if (!hasValidSecret(request, env)) return unauthorized();
   const rows = await d1ListSolicitantes(env, { ativos: true });
   return jsonRes({ names: rows.map(r => r.name) });
+}
+
+// =====================================================================
+// PRESENÇA ("online" no painel de admin, 2026-11-17). Mecanismo clássico de heartbeat:
+// a aba do solicitante manda POST /api/presence a cada 60 s (e ao mostrar/esconder a aba,
+// via Page Visibility API, e ao fechar, via pagehide + fetch keepalive). O servidor guarda
+// só o último sinal por pessoa; quem decide "online" é o painel: sinal há menos de
+// PRESENCA_ONLINE_MS. Fica em D1 (não em KV) porque o KV grátis só aceita 1000 escritas/dia.
+// A tabela se cria sozinha na primeira escrita (sem rota de migração pra esquecer).
+// =====================================================================
+const PRESENCA_ONLINE_MS = 180_000;
+
+async function ensurePresencaTable(env) {
+  await env.CHAMADOS_DB.prepare(
+    'CREATE TABLE IF NOT EXISTS presenca (name TEXT PRIMARY KEY, last_seen INTEGER NOT NULL, visivel INTEGER NOT NULL DEFAULT 1)'
+  ).run();
+}
+
+async function handlePresence(request, env) {
+  if (!hasValidSecret(request, env)) return unauthorized();
+  const session = await requireSession(request, env);
+  if (!session) return sessionInvalid();
+  let body = {};
+  try { body = await request.json(); } catch { /* corpo vazio vale como "visível" */ }
+  const saindo = body?.saindo === true;
+  const visivel = body?.visivel === false ? 0 : 1;
+  const sql = 'INSERT INTO presenca (name, last_seen, visivel) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET last_seen = excluded.last_seen, visivel = excluded.visivel';
+  const grava = () => env.CHAMADOS_DB.prepare(sql).bind(session.name, saindo ? 0 : Date.now(), visivel).run();
+  try {
+    try {
+      await grava();
+    } catch (err) {
+      if (!/no such table/i.test(String(err?.message))) throw err;
+      await ensurePresencaTable(env);
+      await grava();
+    }
+  } catch {
+    // presença nunca derruba o app: falha vira "ok: false", sem erro HTTP
+    return jsonRes({ ok: false });
+  }
+  return jsonRes({ ok: true });
+}
+
+// GET /admin/presenca — quem mandou sinal. `agora` vem do servidor pra o painel não
+// depender do relógio do computador da TI.
+async function handleAdminPresenca(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  let rows = [];
+  try {
+    const { results } = await env.CHAMADOS_DB.prepare('SELECT name, last_seen, visivel FROM presenca WHERE last_seen > 0').all();
+    rows = results || [];
+  } catch { /* tabela ainda não existe: ninguém mandou sinal */ }
+  return jsonRes({ agora: Date.now(), janelaMs: PRESENCA_ONLINE_MS, presenca: rows });
 }
 
 // =====================================================================

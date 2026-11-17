@@ -717,6 +717,47 @@ async function test(name, fn) {
     assert.strictEqual(res.status, 403);
   });
 
+  console.log('--- presença (online no painel de admin) ---');
+  const ADM_PRES = { 'X-Admin-Secret': env.ADMIN_SECRET };
+  await test('POST /api/presence sem sessão dá 401', async () => {
+    const res = await worker.fetch(req('POST', '/api/presence', { headers: SECRET_HEADERS, body: '{}' }), env);
+    assert.strictEqual(res.status, 401);
+  });
+  await test('GET /admin/presenca sem X-Admin-Secret dá 403', async () => {
+    const res = await worker.fetch(req('GET', '/admin/presenca'), env);
+    assert.strictEqual(res.status, 403);
+  });
+  await test('sinal de vida grava a presença da pessoa da sessão (aba visível)', async () => {
+    const res = await worker.fetch(req('POST', '/api/presence', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: JSON.stringify({ visivel: true }) }), env);
+    assert.strictEqual(res.status, 200);
+    const data = await worker.fetch(req('GET', '/admin/presenca', { headers: ADM_PRES }), env).then(r => r.json());
+    assert.ok(data.agora > 0 && data.janelaMs > 0);
+    const p = data.presenca.find(x => x.name === 'Michael Vasconcelos');
+    assert.ok(p, 'Michael deveria aparecer');
+    assert.strictEqual(p.visivel, 1);
+    assert.ok(Math.abs(data.agora - p.last_seen) < 5000);
+  });
+  await test('aba em segundo plano grava visivel = 0', async () => {
+    await worker.fetch(req('POST', '/api/presence', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: JSON.stringify({ visivel: false }) }), env);
+    const data = await worker.fetch(req('GET', '/admin/presenca', { headers: ADM_PRES }), env).then(r => r.json());
+    assert.strictEqual(data.presenca.find(x => x.name === 'Michael Vasconcelos').visivel, 0);
+  });
+  await test('"saindo" tira a pessoa da lista na hora', async () => {
+    await worker.fetch(req('POST', '/api/presence', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: JSON.stringify({ saindo: true }) }), env);
+    const data = await worker.fetch(req('GET', '/admin/presenca', { headers: ADM_PRES }), env).then(r => r.json());
+    assert.ok(!data.presenca.find(x => x.name === 'Michael Vasconcelos'));
+  });
+  await test('sem a tabela presenca (produção antes do 1º sinal) a gravação cria a tabela sozinha', async () => {
+    await env.CHAMADOS_DB.prepare('DROP TABLE presenca').run();
+    const vazio = await worker.fetch(req('GET', '/admin/presenca', { headers: ADM_PRES }), env);
+    assert.strictEqual(vazio.status, 200);
+    assert.deepStrictEqual((await vazio.json()).presenca, []);
+    const res = await worker.fetch(req('POST', '/api/presence', { headers: { ...SECRET_HEADERS, 'X-Session-Token': token }, body: '{}' }), env);
+    assert.strictEqual((await res.json()).ok, true);
+    const data = await worker.fetch(req('GET', '/admin/presenca', { headers: ADM_PRES }), env).then(r => r.json());
+    assert.ok(data.presenca.find(x => x.name === 'Michael Vasconcelos'));
+  });
+
   console.log('--- /admin/users (visão geral de quem já criou senha) ---');
   await test('sem X-Admin-Secret dá 403', async () => {
     const res = await worker.fetch(req('GET', '/admin/users'), env);

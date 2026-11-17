@@ -11,6 +11,7 @@ import {
   AdminApiError,
   fetchAdminSolicitantes,
   fetchAdminUsers,
+  fetchAdminPresenca,
   isSessionError,
   setSolicitanteAtivo,
   setSolicitanteEmail,
@@ -44,6 +45,7 @@ export function UsuariosView() {
   const [soExternos, setSoExternos] = useState(false)
   const [soAcessaram, setSoAcessaram] = useState(false)
   const [busca, setBusca] = useState("")
+  const [soOnline, setSoOnline] = useState(false)
 
   const solicitantesQuery = useQuery({
     queryKey: ["admin-solicitantes"],
@@ -52,6 +54,14 @@ export function UsuariosView() {
   const usersQuery = useQuery({
     queryKey: ["admin-users"],
     queryFn: () => fetchAdminUsers(secret),
+  })
+
+  // Presença: atualiza a cada 20 s enquanto a tela está aberta (o sinal da aba do solicitante
+  // chega a cada 60 s; janela de "online" definida pelo servidor).
+  const presencaQuery = useQuery({
+    queryKey: ["admin-presenca"],
+    queryFn: () => fetchAdminPresenca(secret),
+    refetchInterval: 20_000,
   })
 
   function onQueryError(err: unknown) {
@@ -163,9 +173,19 @@ Apagar tudo mesmo?`)
   const solicitantes = termo
     ? porOrigem.filter((s) => semAcento(s.name).includes(termo) || semAcento(s.email ?? "").includes(termo))
     : porOrigem
+  const agoraServidor = presencaQuery.data?.agora ?? 0
+  const janela = presencaQuery.data?.janelaMs ?? 180_000
+  const sinais = new Map((presencaQuery.data?.presenca ?? []).map((p) => [p.name, p]))
+  const estadoPresenca = (name: string): "ativo" | "segundo-plano" | "offline" => {
+    const p = sinais.get(name)
+    if (!p || agoraServidor - p.last_seen > janela) return "offline"
+    return p.visivel === 1 ? "ativo" : "segundo-plano"
+  }
+  const totalOnline = todos.filter((s) => estadoPresenca(s.name) !== "offline").length
   const comSenha = new Set((usersQuery.data?.users ?? []).map((u) => u.name))
   const totalAcessaram = todos.filter((s) => comSenha.has(s.name)).length
-  const visiveis = soAcessaram ? solicitantes.filter((s) => comSenha.has(s.name)) : solicitantes
+  const porAcesso = soAcessaram ? solicitantes.filter((s) => comSenha.has(s.name)) : solicitantes
+  const visiveis = soOnline ? porAcesso.filter((s) => estadoPresenca(s.name) !== "offline") : porAcesso
   // Quem já acessou sobe pro topo (pedido 2026-11-11); sort estável mantém a ordem alfabética
   // dentro de cada grupo.
   const jaAcessou = (s: AdminSolicitante) => (comSenha.has(s.name) ? 0 : 1)
@@ -234,6 +254,10 @@ Apagar tudo mesmo?`)
         <input type="checkbox" checked={soAcessaram} onChange={(e) => setSoAcessaram(e.target.checked)} className="h-3.5 w-3.5" />
         Mostrar só quem já acessou ({totalAcessaram})
       </label>
+      <label className="flex w-fit items-center gap-2 text-xs text-muted-foreground">
+        <input type="checkbox" checked={soOnline} onChange={(e) => setSoOnline(e.target.checked)} className="h-3.5 w-3.5" />
+        Mostrar só online ({totalOnline})
+      </label>
       {totalExternos > 0 && (
         <label className="flex w-fit items-center gap-2 text-xs text-muted-foreground">
           <input type="checkbox" checked={soExternos} onChange={(e) => setSoExternos(e.target.checked)} className="h-3.5 w-3.5" />
@@ -249,6 +273,7 @@ Apagar tudo mesmo?`)
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <th className="px-3 py-2 font-medium">Nome</th>
+                <th className="px-3 py-2 font-medium">Presença</th>
                 <th className="px-3 py-2 font-medium">Origem</th>
                 <th className="px-3 py-2 font-medium">E-mail / telefone</th>
                 <th className="px-3 py-2 font-medium">Cadastro</th>
@@ -264,6 +289,9 @@ Apagar tudo mesmo?`)
                   <tr key={s.name} className="border-b border-border last:border-0 hover:bg-muted/30">
                     <td className={`px-3 py-2 font-medium ${s.ativo !== 1 ? "text-muted-foreground line-through" : "text-foreground"}`}>
                       {s.name}
+                    </td>
+                    <td className="px-3 py-2">
+                      <PresencaBadge estado={estadoPresenca(s.name)} visto={sinais.get(s.name)?.last_seen} agora={agoraServidor} />
                     </td>
                     <td className="px-3 py-2">
                       <span
@@ -358,7 +386,7 @@ Apagar tudo mesmo?`)
               })}
               {solicitantes.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-xs text-muted-foreground">
+                  <td colSpan={7} className="px-3 py-6 text-center text-xs text-muted-foreground">
                     {busca.trim()
                       ? `Nenhum solicitante com “${busca.trim()}”.`
                       : soExternos ? "Nenhum solicitante externo cadastrado ainda." : "Nenhum solicitante cadastrado ainda."}
@@ -378,5 +406,27 @@ Apagar tudo mesmo?`)
         e-mail e telefone — desative se um cadastro externo parecer indevido.
       </p>
     </div>
+  )
+}
+
+// Bolinha + texto: verde = aba em uso agora; âmbar = aba aberta em segundo plano (ou
+// minimizada); cinza = sem sinal. O texto existe pra não depender só da cor.
+function PresencaBadge({ estado, visto, agora }: { estado: "ativo" | "segundo-plano" | "offline"; visto?: number; agora: number }) {
+  if (estado === "offline") {
+    const min = visto && agora ? Math.max(1, Math.round((agora - visto) / 60_000)) : null
+    const quando = min === null ? "sem registro" : min < 60 ? `visto há ${min} min` : min < 1440 ? `visto há ${Math.round(min / 60)} h` : `visto há ${Math.round(min / 1440)} d`
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground" title="Sem sinal da aba">
+        <span className="h-2 w-2 rounded-full bg-muted-foreground/40" aria-hidden="true" /> Offline · {quando}
+      </span>
+    )
+  }
+  const ativo = estado === "ativo"
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${ativo ? "text-emerald-700 dark:text-emerald-400" : "text-amber-700 dark:text-amber-400"}`}
+      title={ativo ? "Aba aberta e em uso" : "Aba aberta, mas em segundo plano"}>
+      <span className={`h-2 w-2 rounded-full ${ativo ? "bg-emerald-500" : "bg-amber-500"}`} aria-hidden="true" />
+      {ativo ? "Online" : "Aba aberta (inativa)"}
+    </span>
   )
 }

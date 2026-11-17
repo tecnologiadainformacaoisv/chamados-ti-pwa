@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tan
 import { useRegisterSW } from "virtual:pwa-register/react"
 import { LogOut } from "lucide-react"
 import { useAgora } from "@/hooks/use-agora"
+import { usePresenca } from "@/hooks/use-presenca"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { SessionAuthProvider, useSessionAuth } from "@/hooks/use-session-auth"
@@ -48,6 +49,7 @@ function SolicitanteShell() {
   const [tab, setTab] = useState("novo-chamado")
   const [waTask, setWaTask] = useState<{ task: Task; slaLabel: string; anexoWarning?: string } | null>(null)
   const bootedOnce = useRef(false)
+  usePresenca(sessionToken)
 
   // Deep-link só na entrada: se tiver taskId no hash (clique em notificação com o app
   // fechado), abre a aba certa e destaca o card; senão sempre cai em "Novo Chamado" —
