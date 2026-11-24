@@ -267,6 +267,7 @@ async function routeRequest(request, env, ctx) {
       // login do app), e nada mais no frontend chamava /api/field.
       if (pathname === '/api/solicitantes')  return handleListSolicitantes(request, env);
       if (pathname === '/api/my-tasks')      return handleGetMyTasks(request, env);
+      if (pathname === '/admin/me')          return handleAdminMe(request, env);
       if (pathname === '/admin/users')       return handleAdminListUsers(request, env);
       if (pathname === '/admin/tasks')       return handleAdminListTasks(request, env);
       if (pathname === '/admin/metrics')     return handleAdminMetrics(request, env);
@@ -430,6 +431,10 @@ async function handleCreateTask(request, env) {
   const assigneeIds = (payload.assignees || []).map(Number);
   if (assigneeIds.some(n => !Number.isInteger(n) || n <= 0)) {
     return jsonRes({ error: 'lista de atendentes inválida' }, 400);
+  }
+  // Regra (2026-11-24): escolher quem atende é obrigatório, e é um só (Everson OU Henrique).
+  if (assigneeIds.length !== 1 || !OPERADOR_IDS.includes(assigneeIds[0])) {
+    return jsonRes({ error: 'escolha um atendente: Everson ou Henrique' }, 400);
   }
   // Equipamento (opcional, 2026-11-23): se vier, tem que existir e estar em uso.
   const equip = await resolveEquipamentoId(env, payload.equipamento_id);
@@ -888,23 +893,69 @@ async function handleLogin(request, env) {
 const MAX_ADMIN_FAILURES     = 5;
 const ADMIN_LOCKOUT_SECONDS  = 15 * 60;
 
-async function isAdmin(request, env) {
-  if (!env.ADMIN_SECRET) return false;
+// Operadores de TI (ids = os mesmos de OPERADORES no frontend). Cada chamado tem EXATAMENTE
+// um desses como atendente (regra de 2026-11-24, pedido do usuário).
+const OPERADOR_IDS = [170628721, 200498355]; // Everson, Henrique
+const OPERADOR_ADMIN_ID = 200498355; // Henrique (desenvolvedor): usa a ADMIN_SECRET e também só vê os dele
+const OPERADOR_NOMES = { 170628721: 'Everson', 200498355: 'Henrique' };
 
+// Papéis do painel (2026-11-24): `admin` (ADMIN_SECRET, o desenvolvedor — vê e faz tudo) e
+// `operador` (uma chave por operador em env.OPERADOR_SECRETS, JSON {"<id>":"<chave>"} —
+// só enxerga/mexe nos chamados atribuídos a ele). Mesmo header X-Admin-Secret e mesmo
+// lockout por IP. Devolve { role:'admin' } | { role:'operador', operadorId } | null.
+async function getStaff(request, env) {
   const provided = request.headers.get('X-Admin-Secret');
-  if (!provided) return false;
+  if (!provided) return null;
 
   const ip      = request.headers.get('CF-Connecting-IP') || 'unknown';
   const failKey = `adminfail_${ip}`;
   const failCount = parseInt(await env.SUBSCRIPTIONS.get(failKey) || '0');
-  if (failCount >= MAX_ADMIN_FAILURES) return false;
+  if (failCount >= MAX_ADMIN_FAILURES) return null;
 
-  if (provided !== env.ADMIN_SECRET) {
+  let staff = null;
+  if (env.ADMIN_SECRET && provided === env.ADMIN_SECRET) {
+    staff = { role: 'admin', operadorId: OPERADOR_ADMIN_ID };
+  } else if (env.OPERADOR_SECRETS) {
+    let mapa = {};
+    try { mapa = JSON.parse(env.OPERADOR_SECRETS) || {}; } catch { mapa = {}; }
+    for (const [id, chave] of Object.entries(mapa)) {
+      const idNum = Number(id);
+      if (chave && provided === chave && OPERADOR_IDS.includes(idNum)) { staff = { role: 'operador', operadorId: idNum }; break; }
+    }
+  }
+
+  if (!staff) {
     await env.SUBSCRIPTIONS.put(failKey, String(failCount + 1), { expirationTtl: ADMIN_LOCKOUT_SECONDS });
-    return false;
+    return null;
   }
   if (failCount > 0) await env.SUBSCRIPTIONS.delete(failKey);
-  return true;
+  return staff;
+}
+
+// Só o admin (desenvolvedor): usuários, solicitantes, migrações, exclusão, criar chamado.
+async function isAdmin(request, env) {
+  const s = await getStaff(request, env);
+  return !!s && s.role === 'admin';
+}
+
+// Admin OU operador (rotas do dia a dia da TI). Devolve o papel, ou null.
+async function isStaff(request, env) {
+  return getStaff(request, env);
+}
+
+// Cada pessoa da TI (admin incluso) só acessa chamado atribuído a ela.
+async function staffCanAccessChamado(env, staff, chamadoId) {
+  const r = await env.CHAMADOS_DB.prepare(
+    'SELECT 1 AS ok FROM chamado_assignees WHERE chamado_id = ? AND assignee_id = ?'
+  ).bind(chamadoId, staff.operadorId).first();
+  return !!r;
+}
+
+// GET /admin/me — diz ao painel quem entrou (papel e, se operador, o id).
+async function handleAdminMe(request, env) {
+  const staff = await isStaff(request, env);
+  if (!staff) return unauthorized();
+  return jsonRes(staff);
 }
 
 async function handleAdminListUsers(request, env) {
@@ -980,13 +1031,15 @@ async function handleAdminResetSenha(request, env, name) {
 // — D1 não pagina como fetchAllTasks, não existe teto de páginas aqui.
 // =====================================================================
 async function handleAdminListTasks(request, env) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+  const staff = await isStaff(request, env);
+  if (!staff) return unauthorized();
 
   const { searchParams } = new URL(request.url);
   const statusFilter      = searchParams.get('status');
   const setorFilter       = searchParams.get('setor');
   const tipoFilter        = searchParams.get('tipo');
-  const operadorFilter    = searchParams.get('operador');
+  // Operador só vê os dele: o filtro é imposto no servidor, ignorando o que vier na URL.
+  const operadorFilter    = String(staff.operadorId);
   const solicitanteFilter = searchParams.get('solicitante');
 
   const rows = await d1ListChamados(env, {
@@ -1042,6 +1095,8 @@ async function handleAdminCreateTask(request, env) {
   const solicitante = typeof body.solicitante === 'string' ? body.solicitante.trim() : '';
   if (!name) return jsonRes({ error: 'nome do chamado é obrigatório' }, 400);
   if (!solicitante) return jsonRes({ error: 'solicitante é obrigatório' }, 400);
+  const assigneeId = Number(body.assigneeId);
+  if (!OPERADOR_IDS.includes(assigneeId)) return jsonRes({ error: 'escolha um atendente: Everson ou Henrique' }, 400);
   if (!(await d1IsSolicitanteAtivo(env, solicitante))) {
     return jsonRes({ error: 'solicitante não encontrado ou inativo' }, 400);
   }
@@ -1068,8 +1123,8 @@ async function handleAdminCreateTask(request, env) {
       setor: setorIdx,
       solicitante,
       due_date: dueDate,
-      assignee_id: null,
-      assignee_ids: [],
+      assignee_id: assigneeId,
+      assignee_ids: [assigneeId],
     });
   } catch (err) {
     return jsonRes({ error: `não foi possível criar o chamado: ${err.message}` }, 400);
@@ -1109,7 +1164,8 @@ async function handleAdminCreateTask(request, env) {
 const OPERACAO_INICIO_MS = Date.UTC(2026, 9, 16, 3, 0, 0);
 
 async function handleAdminMetrics(request, env) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+  // Métricas são gerais (decisão do usuário): admin e operador veem o mesmo agregado.
+  if (!(await isStaff(request, env))) return unauthorized();
 
   const { searchParams } = new URL(request.url);
   const desdeRaw = searchParams.get('desde');
@@ -1164,8 +1220,10 @@ async function applyAdminTaskUpdate(env, taskId, body) {
   if (body.solucao !== undefined && typeof body.solucao !== 'string') {
     return { error: 'solucao precisa ser uma string', statusCode: 400 };
   }
-  if (body.assigneeId !== undefined && body.assigneeId !== null && !Number.isFinite(Number(body.assigneeId))) {
-    return { error: 'assigneeId precisa ser um número, null (remove atribuição), ou omitido', statusCode: 400 };
+  // Regra (2026-11-24): todo chamado tem exatamente um operador de TI — nada de "sem
+  // atribuição" nem de operador desconhecido.
+  if (body.assigneeId !== undefined && !OPERADOR_IDS.includes(Number(body.assigneeId))) {
+    return { error: 'assigneeId precisa ser um operador de TI válido (um só)', statusCode: 400 };
   }
   if (body.status === undefined && body.solucao === undefined && body.assigneeId === undefined) {
     return { error: 'nada pra atualizar — mande status, solucao e/ou assigneeId', statusCode: 400 };
@@ -1242,7 +1300,10 @@ async function applyAdminTaskUpdate(env, taskId, body) {
 }
 
 async function handleAdminUpdateTask(request, env, taskId) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+  const staff = await isStaff(request, env);
+  if (!staff) return unauthorized();
+  if (!(await d1GetChamado(env, taskId))) return jsonRes({ error: 'chamado não encontrado' }, 404);
+  if (!(await staffCanAccessChamado(env, staff, taskId))) return jsonRes({ error: 'este chamado não é seu' }, 403);
 
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
@@ -1267,7 +1328,8 @@ async function handleAdminUpdateTask(request, env, taskId) {
 // =====================================================================
 const BULK_MAX_IDS = 50;
 async function handleAdminBulkUpdateTasks(request, env) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+  const staff = await isStaff(request, env);
+  if (!staff) return unauthorized();
 
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
@@ -1283,6 +1345,11 @@ async function handleAdminBulkUpdateTasks(request, env) {
 
   const results = [];
   for (const id of ids) {
+    if (!(await d1GetChamado(env, id))) { results.push({ id, ok: false, error: 'chamado não encontrado' }); continue; }
+    if (!(await staffCanAccessChamado(env, staff, id))) {
+      results.push({ id, ok: false, error: 'este chamado não é seu' });
+      continue;
+    }
     const r = await applyAdminTaskUpdate(env, id, patchBody);
     results.push({ id, ok: !r.error, error: r.error, updated: r.updated });
   }
@@ -1351,7 +1418,8 @@ async function handleSubscribe(request, env) {
 // chamado novo é criado. Reenviar com o mesmo `id` sobrescreve — idempotente.
 // =====================================================================
 async function handleAdminSubscribe(request, env) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+  const staff = await isStaff(request, env);
+  if (!staff) return unauthorized();
 
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
@@ -1367,7 +1435,9 @@ async function handleAdminSubscribe(request, env) {
     return jsonRes({ error: 'subscription inválida (precisa de endpoint e keys.p256dh/keys.auth)' }, 400);
   }
 
-  await env.SUBSCRIPTIONS.put(`adminsub_${id}`, JSON.stringify(body.subscription));
+  // Guarda de quem é a inscrição: operador só recebe aviso dos chamados dele (admin recebe todos).
+  const guardada = { ...body.subscription, operadorId: staff.operadorId, papel: staff.role };
+  await env.SUBSCRIPTIONS.put(`adminsub_${id}`, JSON.stringify(guardada));
   return jsonRes({ ok: true });
 }
 
@@ -1381,7 +1451,7 @@ async function handleAdminSubscribe(request, env) {
 // ninguém ver o erro. Body: { id: string } — mesmo id de handleAdminSubscribe.
 // =====================================================================
 async function handleAdminSubscribeTest(request, env) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+  if (!(await isStaff(request, env))) return unauthorized();
 
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
@@ -1507,7 +1577,7 @@ async function sendWebPush(sub, payloadStr, env) {
 // (chamada isolada num try/catch próprio em handleCreateTask). Subscription morta é
 // apagada na hora, em vez de ficar tentando pra sempre a cada chamado novo.
 // =====================================================================
-async function notifyAdmins(env, payloadObj, tag = "notifyAdmins") {
+async function notifyAdmins(env, payloadObj, tag = "notifyAdmins", { paraOperadorId = null } = {}) {
   const ids = [];
   let cursor;
   do {
@@ -1523,8 +1593,15 @@ async function notifyAdmins(env, payloadObj, tag = "notifyAdmins") {
   await Promise.allSettled(ids.map(async (key) => {
     const subJson = await env.SUBSCRIPTIONS.get(key);
     if (!subJson) return;
+    const sub = JSON.parse(subJson);
+    // Inscrição de operador só recebe os chamados atribuídos a ele; a do admin recebe todos.
+    // Inscrições antigas (sem campos) eram do Henrique. Chamado novo: só quem é o atendente.
+    // Aviso geral (conta nova, paraOperadorId nulo): só o admin.
+    const subOp = sub.operadorId ?? OPERADOR_ADMIN_ID;
+    const subPapel = sub.papel ?? 'admin';
+    if (paraOperadorId != null ? subOp !== paraOperadorId : subPapel !== 'admin') return;
     try {
-      await sendWebPush(JSON.parse(subJson), payload, env);
+      await sendWebPush(sub, payload, env);
     } catch (err) {
       // Endpoint não existe mais (navegador desinstalado/subscription revogada) —
       // limpa em vez de continuar tentando pra sempre a cada aviso.
@@ -1542,7 +1619,7 @@ async function notifyAdminsNovoChamado(env, row) {
     title: 'Chamados de TI – ISV',
     body:  `Novo chamado: "${row.name}" — aberto por ${row.solicitante || 'alguém'}`,
     data:  { task_id: row.id, status: 'aberto', type: 'novo_chamado' },
-  }, 'notifyAdminsNovoChamado');
+  }, 'notifyAdminsNovoChamado', { paraOperadorId: row.assignee_id ?? null });
 }
 
 // Alerta de conta nova (2026-11-16, pedido do usuário: "preciso saber quando alguém criar
@@ -2099,7 +2176,10 @@ async function d1ListEventos(env, chamadoId) {
 // GET /admin/tasks/:id/eventos — timeline completa (eventos + notas), mais antigo
 // primeiro (o frontend já espera essa ordem, igual ao mockup do MVP visual).
 async function handleAdminListEventos(request, env, taskId) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+  const staff = await isStaff(request, env);
+  if (!staff) return unauthorized();
+  if (!(await d1GetChamado(env, taskId))) return jsonRes({ error: 'chamado não encontrado' }, 404);
+  if (!(await staffCanAccessChamado(env, staff, taskId))) return jsonRes({ error: 'este chamado não é seu' }, 403);
   const chamado = await d1GetChamado(env, taskId);
   if (!chamado) return jsonRes({ error: 'chamado não encontrado' }, 404);
   return jsonRes({ eventos: await d1ListEventos(env, taskId) });
@@ -2110,13 +2190,19 @@ async function handleAdminListEventos(request, env, taskId) {
 // escrevendo — o painel preenche com um dos OPERADORES via select, mas o servidor não
 // força isso, só exige não-vazio).
 async function handleAdminCreateEvento(request, env, taskId) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+  const staff = await isStaff(request, env);
+  if (!staff) return unauthorized();
+  if (!(await d1GetChamado(env, taskId))) return jsonRes({ error: 'chamado não encontrado' }, 404);
+  if (!(await staffCanAccessChamado(env, staff, taskId))) return jsonRes({ error: 'este chamado não é seu' }, 403);
   const chamado = await d1GetChamado(env, taskId);
   if (!chamado) return jsonRes({ error: 'chamado não encontrado' }, 404);
 
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
-  const autor = typeof body.autor === 'string' ? body.autor.trim() : '';
+  // Operador não escolhe quem escreve: o autor é ele mesmo (não dá pra assinar como o outro).
+  const autor = staff.role === 'operador'
+    ? OPERADOR_NOMES[staff.operadorId]
+    : (typeof body.autor === 'string' ? body.autor.trim() : '');
   const texto = typeof body.texto === 'string' ? body.texto.trim() : '';
   if (!autor) return jsonRes({ error: 'autor é obrigatório' }, 400);
   if (!texto) return jsonRes({ error: 'texto é obrigatório' }, 400);
@@ -2856,7 +2942,7 @@ async function resolveEquipamentoId(env, valor) {
 }
 
 async function handleAdminListEquipamentos(request, env) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+  if (!(await isStaff(request, env))) return unauthorized();
   const { results } = await env.CHAMADOS_DB.prepare(`SELECT * FROM equipamentos WHERE ativo = 1 ORDER BY tipo, tombamento, modelo`).all();
   // Chamados por equipamento. Antes da migração a coluna não existe: devolve a lista com zeros.
   const contagem = new Map();
@@ -2888,7 +2974,7 @@ async function handleListEquipamentosSolicitante(request, env) {
 }
 
 async function handleAdminSaveEquipamento(request, env, id) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+  if (!(await isStaff(request, env))) return unauthorized();
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
   if (!body || typeof body !== 'object') return jsonRes({ error: 'corpo inválido' }, 400);
@@ -2999,7 +3085,7 @@ function inteiroPositivoOuNulo(v, max, nome) {
 }
 
 async function handleAdminListToners(request, env) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+  if (!(await isStaff(request, env))) return unauthorized();
   const { results: toners } = await env.CHAMADOS_DB.prepare(
     `SELECT t.*, e.tombamento, e.marca, e.modelo, e.setor, e.local, e.ip
        FROM toners t LEFT JOIN equipamentos e ON e.id = t.equipamento_id
@@ -3017,7 +3103,7 @@ async function handleAdminListToners(request, env) {
 }
 
 async function handleAdminSaveToner(request, env, id) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+  if (!(await isStaff(request, env))) return unauthorized();
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
   if (!body || typeof body !== 'object') return jsonRes({ error: 'corpo inválido' }, 400);
@@ -3077,7 +3163,7 @@ async function handleAdminSaveToner(request, env, id) {
 }
 
 async function handleAdminRegistrarRecarga(request, env, tonerId) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+  if (!(await isStaff(request, env))) return unauthorized();
   let body = {};
   try { body = (await request.json()) || {}; } catch { /* corpo vazio vale: recarga agora */ }
   const toner = await env.CHAMADOS_DB.prepare(`SELECT id FROM toners WHERE id = ? AND ativo = 1`).bind(tonerId).first();
@@ -3102,7 +3188,7 @@ async function handleAdminRegistrarRecarga(request, env, tonerId) {
 
 // Desfaz o clique errado: apaga só a recarga mais recente (a que distorceria o ciclo médio).
 async function handleAdminDesfazerRecarga(request, env, tonerId) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+  if (!(await isStaff(request, env))) return unauthorized();
   const ultima = await env.CHAMADOS_DB.prepare(
     `SELECT id FROM toner_recargas WHERE toner_id = ? ORDER BY feita_em DESC, rowid DESC LIMIT 1`
   ).bind(tonerId).first();
@@ -3344,7 +3430,9 @@ function anexoResponse(obj, filename) {
 // Acesso da TI aos anexos (2026-11-11): antes só o dono (sessão) abria, então a TI não via
 // o print que o solicitante mandou. Mesma proteção ADMIN_SECRET das outras rotas /admin/*.
 async function handleAdminListAnexos(request, env, taskId) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+  const staff = await isStaff(request, env);
+  if (!staff) return unauthorized();
+  if (!(await staffCanAccessChamado(env, staff, taskId))) return jsonRes({ error: 'este chamado não é seu' }, 403);
   const origin = new URL(request.url).origin;
   const anexos = await d1ListAnexos(env, taskId);
   return jsonRes({
@@ -3356,9 +3444,11 @@ async function handleAdminListAnexos(request, env, taskId) {
 }
 
 async function handleAdminGetAnexo(request, env, anexoId) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+  const staff = await isStaff(request, env);
+  if (!staff) return unauthorized();
   const row = await d1GetAnexoRow(env, anexoId);
   if (!row) return jsonRes({ error: 'anexo não encontrado' }, 404);
+  if (!(await staffCanAccessChamado(env, staff, row.chamado_id))) return jsonRes({ error: 'este chamado não é seu' }, 403);
   const obj = await r2GetAnexo(env, row.r2_key);
   if (!obj) return jsonRes({ error: 'arquivo não encontrado no armazenamento' }, 404);
   return anexoResponse(obj, row.filename);

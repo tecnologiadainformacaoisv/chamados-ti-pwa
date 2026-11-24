@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState, type CSSProperties } from "react"
 import { ChevronDown, ChevronRight, Check, Circle, Clock, Flag, TriangleAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { useAdminAuth } from "@/hooks/use-admin-auth"
 import { CriarChamadoInline } from "@/components/criar-chamado-inline"
 import {
   SETORES,
@@ -69,6 +70,7 @@ export function TasksTable({
   creatingTask: boolean
   createTaskError: string | null
 }) {
+  const { role } = useAdminAuth()
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed)
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
@@ -201,7 +203,7 @@ export function TasksTable({
                         {/* "Adicionar Chamado" (2026-09-15) — só no grupo Aberto, ver
                             comentário em handleAdminCreateTask (push-worker.js) pro
                             porquê: todo chamado sempre nasce aberto. */}
-                        {statusKey === "aberto" && (
+                        {statusKey === "aberto" && role === "admin" && (
                           <tr>
                             <td colSpan={13} className="p-0">
                               <CriarChamadoInline
@@ -235,7 +237,7 @@ export function TasksTable({
                             </td>
                           </tr>
                         )}
-                        {statusKey === "aberto" && (
+                        {statusKey === "aberto" && role === "admin" && (
                           <tr>
                             <td colSpan={13} className="p-0">
                               <CriarChamadoInline
@@ -271,12 +273,11 @@ export function TasksTable({
               ))}
             </SelectContent>
           </Select>
-          <Select value="" onValueChange={(v) => { onBulkUpdate(selectedIds, { assigneeId: v === SEM_ATRIBUICAO ? null : Number(v) }); setSelected(new Set()) }}>
+          <Select value="" onValueChange={(v) => { onBulkUpdate(selectedIds, { assigneeId: Number(v) }); setSelected(new Set()) }}>
             <SelectTrigger size="sm" className="h-7 border-none bg-white/10 text-xs text-primary-foreground hover:bg-white/20">
               <SelectValue placeholder="Reatribuir" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={SEM_ATRIBUICAO}>Sem atribuição</SelectItem>
               {Object.entries(OPERADORES).map(([id, nome]) => (
                 <SelectItem key={id} value={id}>{nome}</SelectItem>
               ))}
@@ -382,12 +383,12 @@ function TaskRow({
             senão abrir o select também dispararia o "clicar na linha abre Gerenciar"
             (ver onClick da <tr>). */}
         <div className="flex items-center gap-1.5">
-          <Select value={operadorAtual} onValueChange={(v) => onQuickUpdate({ assigneeId: v === SEM_ATRIBUICAO ? null : Number(v) })}>
+          <Select value={operadorAtual} onValueChange={(v) => onQuickUpdate({ assigneeId: Number(v) })}>
             <SelectTrigger size="sm" className="h-6 border-none bg-transparent px-1.5 shadow-none hover:bg-muted">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={SEM_ATRIBUICAO}>Sem atribuição</SelectItem>
+              {operadorAtual === SEM_ATRIBUICAO && <SelectItem value={SEM_ATRIBUICAO} disabled>Sem operador</SelectItem>}
               {Object.entries(OPERADORES).map(([id, nome]) => (
                 <SelectItem key={id} value={id}>{nome}</SelectItem>
               ))}

@@ -150,6 +150,25 @@ async function test(name, fn) {
   const workerPath = pathToFileURL(path.join(__dirname, '..', 'push-worker.js')).href;
   const { default: worker, d1GetChamado, d1SetAssignees, d1CreateSolicitante, d1ListAnexos, d1CreateChamado, d1ListEventos } = await import(workerPath);
 
+  // Regra de 2026-11-24: todo chamado nasce com exatamente um operador. Os testes antigos criam
+  // chamado sem se importar com isso, então este adaptador completa o corpo com o Everson quando
+  // o teste não mandou atendente. Os testes da regra em si usam o header X-Test-Raw (sem adaptar).
+  const fetchReal = worker.fetch.bind(worker);
+  worker.fetch = async (request, env2, ctx) => {
+    const p = new URL(request.url).pathname;
+    if (request.method === 'POST' && (p === '/api/tasks' || p === '/admin/tasks') && !request.headers.get('X-Test-Raw')) {
+      try {
+        const corpo = JSON.parse(await request.clone().text());
+        if (corpo && typeof corpo === 'object') {
+          if (p === '/api/tasks' && corpo.assignees === undefined) corpo.assignees = [200498355];
+          if (p === '/admin/tasks' && corpo.assigneeId === undefined) corpo.assigneeId = 200498355;
+          request = new Request(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(corpo) });
+        }
+      } catch { /* corpo inválido: deixa o Worker responder */ }
+    }
+    return fetchReal(request, env2, ctx);
+  };
+
   // Fase M5 (2026-08-13, migração de saída da ClickUp): push-worker.js não chama mais
   // `fetch()` pra `api.clickup.com` em NENHUMA rota — este mock vira um guarda-costas
   // que quebra alto (em vez de silenciosamente bater na rede real) se algum código
@@ -215,7 +234,7 @@ async function test(name, fn) {
   // `POST /admin/migrate-d1` (removida nesta fase), agora vão direto por aqui.
   await seedChamadoComId(env, 'task-michael-1', {
     name: 'Chamado do Michael', status: 'encerrado', priority: 1, tipo: 0, setor: 1,
-    solicitante: 'Michael Vasconcelos', assignee_id: 170628721, assignee_ids: [170628721],
+    solicitante: 'Michael Vasconcelos', assignee_id: 200498355, assignee_ids: [200498355],
     due_date: FAKE_DUE_DATE_MICHAEL, date_closed: FAKE_DUE_DATE_MICHAEL - 60000,
     start_date: FAKE_DUE_DATE_MICHAEL - 3600000,
   });
@@ -1443,7 +1462,7 @@ async function test(name, fn) {
   const adminEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
   await seedChamadoComId(adminEnv, 'task-michael-1', {
     name: 'Chamado do Michael', status: 'encerrado', priority: 1, tipo: 0, setor: 1,
-    solicitante: 'Michael Vasconcelos', assignee_id: 170628721, assignee_ids: [170628721],
+    solicitante: 'Michael Vasconcelos', assignee_id: 200498355, assignee_ids: [200498355],
     due_date: FAKE_DUE_DATE_MICHAEL, date_closed: FAKE_DUE_DATE_MICHAEL - 60000,
     start_date: FAKE_DUE_DATE_MICHAEL - 3600000,
   });
@@ -1500,10 +1519,12 @@ async function test(name, fn) {
     assert.strictEqual(tasks[0].id, 'task-ariele-1');
   });
   await test('filtro por operador (assignee) funciona', async () => {
+    // Desde 2026-11-24 o painel só lista os chamados da própria pessoa (admin = Henrique):
+    // o filtro da URL não abre os do outro operador.
     const res = await worker.fetch(req('GET', '/admin/tasks?operador=170628721', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
-    const { total, tasks } = await res.json();
-    assert.strictEqual(total, 1);
-    assert.strictEqual(tasks[0].id, 'task-michael-1');
+    const { tasks } = await res.json();
+    assert.ok(tasks.length >= 1);
+    assert.ok(tasks.every(t => t.assignees.some(a => a.id === 200498355)), 'só chamados do Henrique');
   });
   await test('filtro por setor (orderindex) funciona', async () => {
     const res = await worker.fetch(req('GET', '/admin/tasks?setor=0', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
@@ -1539,9 +1560,9 @@ async function test(name, fn) {
     assert.strictEqual(data.tasks[0].id, 'task-ariele-1');
   });
   await test('devolve o array completo de assignees (não só o primeiro) — preserva o aviso de múltiplos operadores no painel', async () => {
-    const res = await worker.fetch(req('GET', '/admin/tasks?operador=170628721', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
+    const res = await worker.fetch(req('GET', '/admin/tasks', { headers: { 'X-Admin-Secret': adminEnv.ADMIN_SECRET } }), adminEnv);
     const { tasks } = await res.json();
-    assert.deepStrictEqual(tasks[0].assignees.map(a => a.id), [170628721]);
+    assert.deepStrictEqual(tasks.find(t => t.id === 'task-michael-1').assignees.map(a => a.id), [200498355]);
   });
 
   // Fase M5 (2026-08-13): fetchAllTasks (e o teste de paginação/truncated que existia
@@ -1574,14 +1595,14 @@ async function test(name, fn) {
     assert.strictEqual(data.sla.atrasadoPercent, 50);
 
     // Só o chamado do Michael tem start_date+date_closed -> só Everson entra na média.
-    const everson = data.tempoMedioPorOperador['170628721'];
+    const everson = data.tempoMedioPorOperador['200498355'];
     assert.ok(everson, 'Everson deveria aparecer no tempo médio de atendimento');
     // D1 não guarda nome de operador, só o id (diferente da versão ClickUp-based, que
     // tinha `a.username` de graça) — o painel resolve id->nome via OPERADORES no cliente.
     assert.strictEqual(everson.nome, null);
     assert.strictEqual(everson.totalChamados, 1);
     assert.ok(everson.mediaMs > 0);
-    assert.strictEqual(data.tempoMedioPorOperador['200498355'], undefined, 'chamado da Ariele não foi encerrado, não deveria contar tempo de atendimento pro Henrique');
+    assert.strictEqual(data.tempoMedioPorOperador['170628721'], undefined, 'chamado da Ariele não foi encerrado, não deveria contar tempo de atendimento pro Henrique');
 
     assert.deepStrictEqual(data.satisfacao, { mediaNota: null, totalAvaliacoes: 0 }, 'ninguém avaliou nada ainda neste dataset isolado');
   });
@@ -1721,7 +1742,7 @@ async function test(name, fn) {
   async function criarChamadoTeste(overrides = {}) {
     const row = await d1CreateChamado(env, {
       name: 'Chamado de teste (M4)', priority: 3, tipo: 0, setor: 0,
-      solicitante: 'Michael Vasconcelos', status: 'aberto', assignee_id: 170628721,
+      solicitante: 'Michael Vasconcelos', status: 'aberto', assignee_id: 200498355,
       ...overrides,
     });
     return row.id;
@@ -1939,16 +1960,14 @@ async function test(name, fn) {
       'due_date deveria seguir o padrão de finalização da prioridade (~15min a partir de agora), não o due_date de aceitação + tempo pausado'
     );
   });
-  await test('assigneeId:null ("Sem atribuição") limpa assignee_id e a tabela de junção', async () => {
-    const id = await criarChamadoTeste({ assignee_id: 170628721, assignee_ids: [170628721, 200498355] });
+  await test('assigneeId:null ("sem atribuição") agora é recusado — todo chamado tem um operador (2026-11-24)', async () => {
+    const id = await criarChamadoTeste({ assignee_id: 200498355, assignee_ids: [200498355] });
     const res = await worker.fetch(req('POST', `/admin/tasks/${id}`, {
       headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ assigneeId: null })
     }), env);
-    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.status, 400);
     const linha = await d1GetChamado(env, id);
-    assert.strictEqual(linha.assignee_id, null);
-    const { results } = await env.CHAMADOS_DB.prepare('SELECT assignee_id FROM chamado_assignees WHERE chamado_id = ?').bind(id).all();
-    assert.deepStrictEqual(results, [], 'assigneeId:null deveria remover todo mundo da tabela de junção também');
+    assert.strictEqual(linha.assignee_id, 200498355, 'não pode ter mudado nada');
   });
 
   console.log('--- POST /admin/tasks/:id/delete (exclusão de verdade, 2026-08-17) ---');
@@ -2029,15 +2048,15 @@ async function test(name, fn) {
     assert.deepStrictEqual(await d1ListEventos(env, id), []);
   });
   await test('reatribuir operador via POST /admin/tasks/:id grava um evento automático', async () => {
-    const id = await criarChamadoTeste({ assignee_id: 170628721, assignee_ids: [170628721] });
+    const id = await criarChamadoTeste({ assignee_id: 200498355, assignee_ids: [200498355] });
     await worker.fetch(req('POST', `/admin/tasks/${id}`, {
-      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ assigneeId: 200498355 })
+      headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify({ assigneeId: 170628721 })
     }), env);
     const eventos = await d1ListEventos(env, id);
     const evOperador = eventos.find(e => e.tipo === 'operador');
     assert.ok(evOperador, 'deveria ter gravado um evento de troca de operador');
-    assert.strictEqual(evOperador.de_valor, '170628721');
-    assert.strictEqual(evOperador.para_valor, '200498355');
+    assert.strictEqual(evOperador.de_valor, '200498355');
+    assert.strictEqual(evOperador.para_valor, '170628721');
   });
 
   console.log('--- GET/POST /admin/tasks/:id/eventos (notas manuais) ---');
@@ -2378,7 +2397,7 @@ async function test(name, fn) {
     const atomicEnv = { CLICKUP_API_KEY: 'fake', SUBSCRIBE_SECRET: 'shared-secret', ADMIN_SECRET: 'admin-secret', SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
     const created = await d1CreateChamado(atomicEnv, {
       name: 'Chamado pra teste de atomicidade', priority: 3, tipo: 0, setor: 0,
-      solicitante: 'Michael Vasconcelos', status: 'aberto', assignee_id: 170628721,
+      solicitante: 'Michael Vasconcelos', status: 'aberto', assignee_id: 200498355,
     });
 
     const realBatch = atomicEnv.CHAMADOS_DB.batch.bind(atomicEnv.CHAMADOS_DB);
@@ -2386,7 +2405,7 @@ async function test(name, fn) {
     try {
       const res = await worker.fetch(req('POST', `/admin/tasks/${created.id}`, {
         headers: { 'X-Admin-Secret': atomicEnv.ADMIN_SECRET },
-        body: JSON.stringify({ assigneeId: 200498355 }),
+        body: JSON.stringify({ assigneeId: 170628721 }),
       }), atomicEnv);
       assert.strictEqual(res.status, 400, 'D1 é a escrita agora — uma falha real deveria virar erro, não um 200 silencioso');
     } finally {
@@ -2394,9 +2413,9 @@ async function test(name, fn) {
     }
 
     const after = await d1GetChamado(atomicEnv, created.id);
-    assert.strictEqual(after.assignee_id, 170628721, 'assignee_id NÃO deveria ter mudado — o batch falhou, nada aplicou');
+    assert.strictEqual(after.assignee_id, 200498355, 'assignee_id NÃO deveria ter mudado — o batch falhou, nada aplicou');
     const { results } = await atomicEnv.CHAMADOS_DB.prepare('SELECT assignee_id FROM chamado_assignees WHERE chamado_id = ?').bind(created.id).all();
-    assert.deepStrictEqual(results.map(r => r.assignee_id), [170628721], 'tabela de junção também não deveria ter mudado — sem isso, ficaria mostrando o Henrique enquanto assignee_id ainda diz Everson (ou pior, vazia)');
+    assert.deepStrictEqual(results.map(r => r.assignee_id), [200498355], 'tabela de junção também não deveria ter mudado — sem isso, ficaria mostrando o Henrique enquanto assignee_id ainda diz Everson (ou pior, vazia)');
   });
 
   // ===================================================================
@@ -3022,6 +3041,98 @@ async function test(name, fn) {
     const r = await (await worker.fetch(req('POST', '/agente/leituras', { headers: AG, body: JSON.stringify({ leituras: [{ equipamento_id: imp.id, suprimentos: [{ cor: 'preto', nivel: 33 }] }] }) }), env)).json();
     assert.strictEqual(r.atualizados, 1);
   });
+
+  console.log('--- papéis do painel: admin vê tudo, operador só os dele (2026-11-24) ---');
+  {
+    const EV = 170628721, HE = 200498355;
+    const pEnv = { ...env, OPERADOR_SECRETS: JSON.stringify({ [EV]: 'chave-everson' }), SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
+    const ADM = { 'X-Admin-Secret': 'admin-secret' };
+    const OPE = { 'X-Admin-Secret': 'chave-everson' };
+    const mk = async (nome, assignee) => (await d1CreateChamado(pEnv, { name: nome, priority: 3, tipo: 0, setor: 0, solicitante: 'Fulano', status: 'aberto', assignee_id: assignee, assignee_ids: [assignee] })).id;
+    const idEv = await mk('do Everson', EV);
+    const idHe = await mk('do Henrique', HE);
+    const get = (p, h) => worker.fetch(req('GET', p, { headers: h }), pEnv);
+    const post = (p, h, b) => worker.fetch(req('POST', p, { headers: h, body: JSON.stringify(b) }), pEnv);
+
+    await test('/admin/me diz o papel de cada chave', async () => {
+      assert.deepStrictEqual(await (await get('/admin/me', ADM)).json(), { role: 'admin', operadorId: HE });
+      assert.deepStrictEqual(await (await get('/admin/me', OPE)).json(), { role: 'operador', operadorId: EV });
+      assert.strictEqual((await get('/admin/me', { 'X-Admin-Secret': 'errada' })).status, 403);
+    });
+    await test('cada um vê só os seus (admin = Henrique, operador = Everson), mesmo pedindo outro filtro', async () => {
+      const a = await (await get('/admin/tasks', ADM)).json();
+      assert.deepStrictEqual(a.tasks.map(t => t.name), ['do Henrique']);
+      assert.deepStrictEqual((await (await get('/admin/tasks?operador=' + EV, ADM)).json()).tasks.map(t => t.name), ['do Henrique']);
+      const o = await (await get('/admin/tasks', OPE)).json();
+      assert.deepStrictEqual(o.tasks.map(t => t.name), ['do Everson']);
+      const forjado = await (await get('/admin/tasks?operador=' + HE, OPE)).json();
+      assert.deepStrictEqual(forjado.tasks.map(t => t.name), ['do Everson'], 'filtro da URL não pode abrir os chamados do outro');
+    });
+    await test('métricas são gerais: o operador vê o mesmo agregado', async () => {
+      const a = await (await get('/admin/metrics', ADM)).json();
+      const o = await (await get('/admin/metrics', OPE)).json();
+      assert.strictEqual(o.total, a.total);
+    });
+    await test('operador não altera, comenta nem abre anexos de chamado alheio (403)', async () => {
+      assert.strictEqual((await post('/admin/tasks/' + idHe, OPE, { status: 'em atendimento' })).status, 403);
+      assert.strictEqual((await get('/admin/tasks/' + idHe + '/eventos', OPE)).status, 403);
+      assert.strictEqual((await post('/admin/tasks/' + idHe + '/eventos', OPE, { autor: 'Everson', texto: 'oi' })).status, 403);
+      assert.strictEqual((await get('/admin/tasks/' + idHe + '/anexos', OPE)).status, 403);
+      assert.strictEqual((await d1GetChamado(pEnv, idHe)).status, 'aberto');
+    });
+    await test('operador altera o chamado dele; a nota sai sempre com o nome dele', async () => {
+      assert.strictEqual((await post('/admin/tasks/' + idEv, OPE, { status: 'em atendimento' })).status, 200);
+      assert.strictEqual((await d1GetChamado(pEnv, idEv)).status, 'em atendimento');
+      const r = await post('/admin/tasks/' + idEv + '/eventos', OPE, { autor: 'Henrique', texto: 'tentando assinar como o outro' });
+      assert.strictEqual(r.status, 200);
+      assert.strictEqual((await r.json()).evento.autor, 'Everson');
+    });
+    await test('ação em lote do operador pula o que não é dele', async () => {
+      const r = await (await post('/admin/tasks/bulk', OPE, { ids: [idEv, idHe], status: 'pendente' })).json();
+      assert.strictEqual(r.sucesso, 1);
+      assert.strictEqual((await d1GetChamado(pEnv, idHe)).status, 'aberto');
+    });
+    await test('operador não acessa Usuários, solicitantes, exclusão nem criação pela TI (403)', async () => {
+      assert.strictEqual((await get('/admin/users', OPE)).status, 403);
+      assert.strictEqual((await get('/admin/solicitantes', OPE)).status, 403);
+      assert.strictEqual((await get('/admin/presenca', OPE)).status, 403);
+      assert.strictEqual((await post('/admin/tasks/' + idEv + '/delete', OPE, {})).status, 403);
+      assert.strictEqual((await worker.fetch(req('POST', '/admin/tasks', { headers: { ...OPE, 'X-Test-Raw': '1' }, body: JSON.stringify({ name: 'x', solicitante: 'Fulano', assigneeId: EV }) }), pEnv)).status, 403);
+    });
+    await test('operador usa inventário (equipamentos/toners)', async () => {
+      assert.strictEqual((await get('/admin/equipamentos', OPE)).status, 200);
+      assert.strictEqual((await get('/admin/toners', OPE)).status, 200);
+    });
+    await test('chave de operador inexistente em OPERADOR_SECRETS não vira acesso; sem a variável só o admin entra', async () => {
+      const semVar = { ...pEnv, OPERADOR_SECRETS: undefined };
+      assert.strictEqual((await worker.fetch(req('GET', '/admin/tasks', { headers: OPE }), semVar)).status, 403);
+      assert.strictEqual((await worker.fetch(req('GET', '/admin/tasks', { headers: ADM }), semVar)).status, 200);
+    });
+    await test('atendente é obrigatório e único: sem ninguém, os dois ou desconhecido dá 400', async () => {
+      const sessao = await (async () => {
+        const nome = 'Pessoa Atendente';
+        await d1CreateSolicitante(pEnv, nome, emailFor(nome));
+        const r = await worker.fetch(req('POST', '/auth/register', { headers: SECRET_HEADERS, body: JSON.stringify({ email: emailFor(nome), password: 'senhasegura1', nome }) }), pEnv);
+        return (await r.json()).token;
+      })();
+      const cria = async (assignees) => {
+        await pEnv.SUBSCRIPTIONS.delete('throttle_create_Pessoa Atendente');
+        return worker.fetch(req('POST', '/api/tasks', { headers: { ...SECRET_HEADERS, 'X-Session-Token': sessao, 'X-Test-Raw': '1' }, body: JSON.stringify({ name: 'x', assignees }) }), pEnv);
+      };
+      assert.strictEqual((await cria(undefined)).status, 400);
+      assert.strictEqual((await cria([])).status, 400);
+      assert.strictEqual((await cria([EV, HE])).status, 400);
+      assert.strictEqual((await cria([999])).status, 400);
+      assert.strictEqual((await cria([HE])).status, 200);
+    });
+    await test('TI cria chamado só com atendente válido', async () => {
+      const cria = (b) => worker.fetch(req('POST', '/admin/tasks', { headers: { ...ADM, 'X-Test-Raw': '1' }, body: JSON.stringify({ name: 'y', solicitante: 'Fulano', ...b }) }), pEnv);
+      await d1CreateSolicitante(pEnv, 'Fulano', emailFor('Fulano')).catch(() => {});
+      assert.strictEqual((await cria({})).status, 400);
+      assert.strictEqual((await cria({ assigneeId: 5 })).status, 400);
+      assert.strictEqual((await cria({ assigneeId: HE })).status, 200);
+    });
+  }
 
   console.log(`\n${passed} passaram, ${failed} falharam`);
   process.exit(failed > 0 ? 1 : 0);

@@ -123,6 +123,11 @@ export async function mockAdminRoutes(
   const eventos = opts.eventos ?? []
   const secret = opts.secret ?? ADMIN_SECRET
 
+  await on(page, "**/admin/me", "GET", (route) => {
+    const header = route.request().headers()["x-admin-secret"]
+    if (header !== secret) return fulfillJson(route, { error: "forbidden" }, 403)
+    return fulfillJson(route, { role: "admin" })
+  })
   await on(page, "**/admin/users", "GET", (route) => {
     const header = route.request().headers()["x-admin-secret"]
     if (header !== secret) return fulfillJson(route, { error: "forbidden" }, 403)

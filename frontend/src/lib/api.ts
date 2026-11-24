@@ -69,8 +69,11 @@ export async function adminRequest<T>(secret: string, path: string): Promise<T> 
   return res.json()
 }
 
-export async function validateSecret(secret: string): Promise<void> {
-  await adminRequest(secret, "/users")
+export type StaffInfo = { role: "admin" | "operador"; operadorId?: number }
+
+// Valida a chave e diz quem entrou: admin (vê tudo) ou operador (só os chamados dele).
+export async function validateSecret(secret: string): Promise<StaffInfo> {
+  return adminRequest<StaffInfo>(secret, "/me")
 }
 
 export async function fetchTasks(secret: string, filtros: Filtros): Promise<{ tasks: Task[]; total: number; truncated: boolean }> {
@@ -89,7 +92,7 @@ export type UpdatePayload = { status?: string; solucao?: string; assigneeId?: nu
 // do painel. Diferente do fluxo do solicitante (POST /api/tasks, sessão própria) — ver
 // handleAdminCreateTask em push-worker.js pro porquê disso ser uma rota separada.
 // Sempre nasce "aberto" (regra de negócio, não é escolha do cliente).
-export type CreateTaskPayload = { name: string; solicitante: string; tipo?: number; setor?: number; description?: string }
+export type CreateTaskPayload = { name: string; solicitante: string; assigneeId: number; tipo?: number; setor?: number; description?: string }
 
 export async function createAdminTask(secret: string, body: CreateTaskPayload): Promise<Task> {
   const res = await fetch(`${ADMIN_BASE}/tasks`, {

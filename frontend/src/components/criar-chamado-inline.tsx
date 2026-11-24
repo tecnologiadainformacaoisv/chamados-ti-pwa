@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { TIPOS, SETORES } from "@/lib/constants"
+import { TIPOS, SETORES, OPERADORES } from "@/lib/constants"
 import type { CreateTaskPayload } from "@/lib/api"
 
 // "Adicionar Chamado" inline na Tabela (2026-09-15, mesma mecânica da ClickUp, pedido
@@ -29,8 +29,10 @@ export function CriarChamadoInline({
   const [solicitante, setSolicitante] = useState("")
   const [tipo, setTipo] = useState("")
   const [setor, setSetor] = useState("")
+  const [atendente, setAtendente] = useState("")
 
   function resetAndClose() {
+    setAtendente("")
     setName("")
     setSolicitante("")
     setTipo("")
@@ -39,10 +41,11 @@ export function CriarChamadoInline({
   }
 
   function handleSubmit() {
-    if (!name.trim() || !solicitante) return
+    if (!name.trim() || !solicitante || !atendente) return
     onCreate({
       name: name.trim(),
       solicitante,
+      assigneeId: Number(atendente),
       tipo: tipo ? Number(tipo) : undefined,
       setor: setor ? Number(setor) : undefined,
     })
@@ -98,6 +101,17 @@ export function CriarChamadoInline({
               </SelectContent>
             </Select>
           </div>
+          <div className="flex flex-col gap-1.5">
+            <Label className="text-xs">Atendente *</Label>
+            <Select value={atendente} onValueChange={setAtendente}>
+              <SelectTrigger className="w-full"><SelectValue placeholder="Everson ou Henrique" /></SelectTrigger>
+              <SelectContent>
+                {Object.entries(OPERADORES).map(([id, nome]) => (
+                  <SelectItem key={id} value={id}>{nome}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <div className="flex min-w-0 flex-col gap-1.5">
               <Label className="text-xs">Tipo</Label>
@@ -125,7 +139,7 @@ export function CriarChamadoInline({
           {error && <p className="text-xs text-destructive">{error}</p>}
           <div className="flex justify-end gap-2">
             <Button size="sm" variant="ghost" onClick={resetAndClose}>Cancelar</Button>
-            <Button size="sm" onClick={handleSubmit} disabled={creating || !name.trim() || !solicitante}>
+            <Button size="sm" onClick={handleSubmit} disabled={creating || !name.trim() || !solicitante || !atendente}>
               {creating ? "Criando…" : "Criar"}
             </Button>
           </div>

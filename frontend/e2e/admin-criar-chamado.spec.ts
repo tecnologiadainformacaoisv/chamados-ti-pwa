@@ -46,9 +46,11 @@ test.describe("Adicionar Chamado inline (Tabela)", () => {
     await page.getByLabel("Título").fill("Impressora sem tinta")
     await page.locator('[data-slot="popover-content"] [data-slot="select-trigger"]').first().click()
     await page.getByRole("option", { name: "Fulano de Tal" }).click()
+    await page.locator('[data-slot="popover-content"] [data-slot="select-trigger"]').nth(1).click()
+    await page.getByRole("option", { name: "Henrique" }).click()
     await page.getByRole("button", { name: "Criar" }).click()
 
-    await expect.poll(() => posted).toEqual({ name: "Impressora sem tinta", solicitante: "Fulano de Tal" })
+    await expect.poll(() => posted).toEqual({ name: "Impressora sem tinta", solicitante: "Fulano de Tal", assigneeId: 200498355 })
     // popover fecha sozinho depois do sucesso
     await expect(page.getByLabel("Título")).not.toBeVisible()
   })
@@ -76,6 +78,8 @@ test.describe("Adicionar Chamado inline (Tabela)", () => {
     await page.getByLabel("Título").fill("Impressora sem tinta")
     await page.locator('[data-slot="popover-content"] [data-slot="select-trigger"]').first().click()
     await page.getByRole("option", { name: "Fulano de Tal" }).click()
+    await page.locator('[data-slot="popover-content"] [data-slot="select-trigger"]').nth(1).click()
+    await page.getByRole("option", { name: "Henrique" }).click()
     await page.getByRole("button", { name: "Criar" }).click()
 
     await expect(page.getByText("solicitante não encontrado ou inativo")).toBeVisible()

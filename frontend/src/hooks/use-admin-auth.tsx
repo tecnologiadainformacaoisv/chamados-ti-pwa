@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react"
-import { validateSecret } from "@/lib/api"
+import { validateSecret, type StaffInfo } from "@/lib/api"
 
 const STORAGE_KEY = "admin_secret"
 
@@ -8,6 +8,8 @@ type AuthState = "checking" | "gate" | "authed"
 type AdminAuthContextValue = {
   state: AuthState
   secret: string
+  role: "admin" | "operador"
+  operadorId: number | null
   error: string | null
   login: (secret: string) => Promise<void>
   logout: () => void
@@ -22,12 +24,13 @@ const AdminAuthContext = createContext<AdminAuthContextValue | null>(null)
 export function AdminAuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>("checking")
   const [secret, setSecret] = useState("")
+  const [staff, setStaff] = useState<StaffInfo>({ role: "admin" })
   const [error, setError] = useState<string | null>(null)
   const checkedOnce = useRef(false)
 
   const checkStored = useCallback(async (value: string, isRetry = false): Promise<void> => {
     try {
-      await validateSecret(value)
+      setStaff(await validateSecret(value))
       setSecret(value)
       setState("authed")
     } catch (err) {
@@ -62,7 +65,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (value: string) => {
     setError(null)
-    await validateSecret(value) // deixa o erro propagar pro form tratar
+    setStaff(await validateSecret(value)) // deixa o erro propagar pro form tratar
     localStorage.setItem(STORAGE_KEY, value)
     setSecret(value)
     setState("authed")
@@ -75,7 +78,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   return (
-    <AdminAuthContext.Provider value={{ state, secret, error, login, logout }}>
+    <AdminAuthContext.Provider value={{ state, secret, role: staff.role, operadorId: staff.operadorId ?? null, error, login, logout }}>
       {children}
     </AdminAuthContext.Provider>
   )

@@ -43,7 +43,7 @@ export function TaskModal({
   saving: boolean
   error: string | null
 }) {
-  const { secret, logout } = useAdminAuth()
+  const { secret, logout, role, operadorId } = useAdminAuth()
   const queryClient = useQueryClient()
 
   const [status, setStatus] = useState("aberto")
@@ -171,6 +171,8 @@ export function TaskModal({
     let salvo: string | null = null
     try { salvo = localStorage.getItem("admin_nota_autor") } catch { /* sem localStorage */ }
     const atribuido = task.assignees?.[0] ? String(task.assignees[0].id) : null
+    // Operador escreve sempre como ele mesmo (o servidor também força isso).
+    if (role === "operador" && operadorId != null) { setNotaAutorState(String(operadorId)); setNotaTexto(""); setNotaError(null); return }
     setNotaAutorState(salvo && OPERADORES[salvo] ? salvo : atribuido && OPERADORES[atribuido] ? atribuido : SEM_ATRIBUICAO)
     setNotaTexto("")
     setNotaError(null)
@@ -210,7 +212,7 @@ export function TaskModal({
   function handleSave() {
     const body: UpdatePayload = { status, solucao }
     if (operadorTouched) {
-      body.assigneeId = operador === SEM_ATRIBUICAO ? null : Number(operador)
+      if (operador !== SEM_ATRIBUICAO) body.assigneeId = Number(operador)
     }
     onSave(body)
   }
@@ -316,7 +318,8 @@ export function TaskModal({
             >
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value={SEM_ATRIBUICAO}>Sem atribuição</SelectItem>
+                {/* Chamado sem operador (legado) só mostra o aviso; não dá pra escolher "sem atribuição". */}
+                {operador === SEM_ATRIBUICAO && <SelectItem value={SEM_ATRIBUICAO} disabled>Escolha o operador</SelectItem>}
                 {Object.entries(OPERADORES).map(([id, nome]) => (
                   <SelectItem key={id} value={id}>{nome}</SelectItem>
                 ))}
@@ -402,7 +405,7 @@ export function TaskModal({
 
             <div className="flex flex-col gap-2 rounded-md border border-border p-2.5">
               <div className="flex gap-2">
-                <Select value={notaAutor === SEM_ATRIBUICAO ? "" : notaAutor} onValueChange={setNotaAutor}>
+                <Select disabled={role === "operador"} value={notaAutor === SEM_ATRIBUICAO ? "" : notaAutor} onValueChange={setNotaAutor}>
                   <SelectTrigger className="w-36"><SelectValue placeholder="Quem escreve?" /></SelectTrigger>
                   <SelectContent>
                     {Object.entries(OPERADORES).map(([id, nome]) => (
@@ -448,14 +451,16 @@ export function TaskModal({
               maiores; primeiro no DOM = último visualmente no empilhamento mobile,
               longe do polegar de quem só quer Cancelar/Salvar). Ação destrutiva e
               irreversível, de propósito num variant/posição diferente do resto. */}
-          <Button
-            variant="destructive"
-            className="sm:mr-auto"
-            onClick={handleDelete}
-            disabled={saving || deleteMutation.isPending}
-          >
-            {deleteMutation.isPending ? "Excluindo…" : "Excluir"}
-          </Button>
+          {role === "admin" && (
+            <Button
+              variant="destructive"
+              className="sm:mr-auto"
+              onClick={handleDelete}
+              disabled={saving || deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? "Excluindo…" : "Excluir"}
+            </Button>
+          )}
           <Button variant="outline" onClick={onClose} disabled={saving}>
             Cancelar
           </Button>

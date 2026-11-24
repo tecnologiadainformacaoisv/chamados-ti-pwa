@@ -10,6 +10,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
+import { useAdminAuth } from "@/hooks/use-admin-auth"
 import { SidebarControl } from "@/components/sidebar-control"
 import type { SidebarMode } from "@/hooks/use-sidebar-mode"
 import logoIsv from "@/assets/logo-isv.svg"
@@ -52,6 +53,8 @@ export function AppSidebar({
   onMouseEnter?: () => void
   onMouseLeave?: () => void
 }) {
+  // Usuários é só do desenvolvedor (admin); o operador não vê a seção.
+  const { role } = useAdminAuth()
   return (
     <Sidebar
       collapsible="icon"
@@ -94,7 +97,7 @@ export function AppSidebar({
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {NAV_ITEMS.map((item) => (
+              {NAV_ITEMS.filter((item) => item.id !== "usuarios" || role === "admin").map((item) => (
                 <SidebarMenuItem key={item.id}>
                   <SidebarMenuButton
                     isActive={secaoAtiva === item.id}
