@@ -13,6 +13,7 @@ import {
 } from "@/lib/constants"
 import { getCF, isAtrasado, venceLogo, fmtDate, fmtDateFull, type Task } from "@/lib/api"
 import { Clock } from "lucide-react"
+import { AnexoTag } from "@/components/anexo-tag"
 import { numeroChamado, timeUntil } from "@/lib/ticket-helpers"
 import { Button } from "@/components/ui/button"
 
@@ -163,6 +164,7 @@ function KanbanCard({
       {numeroChamado(task) && <p className="mb-0.5 text-xs font-bold tabular-nums text-muted-foreground">{numeroChamado(task)}</p>}
       <p className="mb-2 line-clamp-2 text-sm font-medium break-words text-foreground" title={task.name}>
         {task.name || "(sem título)"}
+        <AnexoTag task={task} />
       </p>
       <div className="mb-2 flex flex-wrap gap-1">
         {tipo && (

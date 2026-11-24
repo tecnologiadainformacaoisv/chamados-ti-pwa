@@ -3134,6 +3134,15 @@ async function test(name, fn) {
     });
   }
 
+  await test('GET /admin/tasks informa quantos anexos cada chamado tem (tag de anexo)', async () => {
+    const aEnv = { ...env, SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
+    const mk = async (nome) => (await d1CreateChamado(aEnv, { name: nome, priority: 3, tipo: 0, setor: 0, solicitante: 'F', status: 'aberto', assignee_id: 200498355, assignee_ids: [200498355] })).id;
+    const com = await mk('com anexo'); const sem = await mk('sem anexo');
+    for (const n of [1, 2]) await aEnv.CHAMADOS_DB.prepare('INSERT INTO chamado_anexos (id, chamado_id, r2_key, filename, content_type, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind('ax' + n, com, 'k' + n, 'f' + n + '.png', 'image/png', 10, Date.now()).run();
+    const j = await (await worker.fetch(req('GET', '/admin/tasks', { headers: { 'X-Admin-Secret': 'admin-secret' } }), aEnv)).json();
+    assert.strictEqual(j.tasks.find(x => x.id === com).anexos_count, 2);
+    assert.strictEqual(j.tasks.find(x => x.id === sem).anexos_count, 0);
+  });
   console.log(`\n${passed} passaram, ${failed} falharam`);
   process.exit(failed > 0 ? 1 : 0);
 })();

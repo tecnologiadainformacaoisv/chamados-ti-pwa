@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Check, Circle, Clock, Flag, TriangleAlert } 
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
+import { AnexoTag } from "@/components/anexo-tag"
 import { CriarChamadoInline } from "@/components/criar-chamado-inline"
 import {
   SETORES,
@@ -345,6 +346,7 @@ function TaskRow({
       <td className="max-w-48 truncate px-3 py-1 font-medium" title={task.name}>
         {numeroChamado(task) && <span className="mr-1.5 font-bold tabular-nums text-muted-foreground">{numeroChamado(task)}</span>}
         {task.name || "(sem título)"}
+        <AnexoTag task={task} />
       </td>
       <td className="px-3 py-1">
         {prioridade ? (

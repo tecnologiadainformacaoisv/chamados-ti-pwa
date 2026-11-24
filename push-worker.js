@@ -1049,6 +1049,7 @@ async function handleAdminListTasks(request, env) {
     assigneeId: operadorFilter ?? undefined,
     solicitante: solicitanteFilter ?? undefined,
     withAssignees: true,
+    withAnexos: true,
   });
   const tasks = rows.map(d1RowToTaskShape);
 
@@ -1878,6 +1879,13 @@ async function d1ListChamados(env, filters = {}) {
   const { results } = await env.CHAMADOS_DB.prepare(sql).bind(...params).all();
   const rows = (results || []).map(d1Row);
 
+  if (filters.withAnexos) {
+    // Uma consulta só pra todos (tabela pequena): quantos anexos cada chamado tem.
+    const { results: cont } = await env.CHAMADOS_DB.prepare('SELECT chamado_id, COUNT(*) AS n FROM chamado_anexos GROUP BY chamado_id').all();
+    const mapa = new Map((cont || []).map(c => [c.chamado_id, c.n]));
+    for (const row of rows) row.anexos_count = mapa.get(row.id) || 0;
+  }
+
   if (filters.withAssignees) {
     const assigneesMap = await d1GetAssigneesMap(env, rows.map(r => r.id));
     for (const row of rows) row.assignee_ids = assigneesMap.get(row.id) || [];
@@ -1926,6 +1934,7 @@ function d1RowToTaskShape(row) {
     nota: row.nota ?? null,
     numero: row.numero ?? null,
     equipamento_id: row.equipamento_id ?? null,
+    anexos_count: row.anexos_count ?? 0,
     due_date: row.due_date != null ? String(row.due_date) : null,
     date_created: String(row.date_created),
     date_updated: String(row.updated_at),

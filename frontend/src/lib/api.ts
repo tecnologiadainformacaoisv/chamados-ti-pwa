@@ -28,6 +28,7 @@ export type Task = {
   nota?: number | null
   // Número sequencial do chamado (2026-11-11); ausente/null em chamado ainda não numerado.
   numero?: number | null
+  anexos_count?: number
   custom_fields?: CustomField[]
   // Só presente no GET de uma task individual (GET /tasks/:id) — a listagem não devolve.
   attachments?: Attachment[]
