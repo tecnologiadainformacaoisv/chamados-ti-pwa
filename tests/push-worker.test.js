@@ -3134,6 +3134,32 @@ async function test(name, fn) {
     });
   }
 
+  console.log('--- importação única de chamados que ficaram na ClickUp (2026-11-24) ---');
+  {
+    const iEnv = { ...env, SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
+    const imp = (b, h = { 'X-Admin-Secret': 'admin-secret' }) => worker.fetch(req('POST', '/admin/import-chamados', { headers: h, body: JSON.stringify(b) }), iEnv);
+    const base = { name: 'Impressora travada', status: 'em atendimento', priority: 1, tipo: 1, setor: 7, solicitante: 'Josy', assignee_ids: [200498355], date_created: 1000, start_date: 1500, due_date: 2000 };
+    await test('importa mantendo id/status/datas, numera, e o dono vê no painel', async () => {
+      assert.strictEqual((await imp({ chamados: [{ id: '17tpTEST1', ...base }, { id: '17tpTEST2', ...base, status: 'aberto' }] }, {})).status, 403);
+      const r = await (await imp({ chamados: [{ id: '17tpTEST1', ...base }, { id: '17tpTEST2', ...base, status: 'aberto' }] })).json();
+      assert.deepStrictEqual([r.imported, r.skipped, r.errors.length], [2, 0, 0]);
+      const t = await (await worker.fetch(req('GET', '/admin/tasks', { headers: { 'X-Admin-Secret': 'admin-secret' } }), iEnv)).json();
+      const a = t.tasks.find(x => x.id === '17tpTEST1');
+      assert.ok(a && a.status.status === 'em atendimento');
+      const numeros = (await iEnv.CHAMADOS_DB.prepare('SELECT numero FROM chamados ORDER BY numero').all()).results.map(x => x.numero);
+      assert.deepStrictEqual(numeros, [1, 2]);
+    });
+    await test('rodar de novo não duplica; status inválido e dryRun', async () => {
+      const r = await (await imp({ chamados: [{ id: '17tpTEST1', ...base }] })).json();
+      assert.deepStrictEqual([r.imported, r.skipped], [0, 1]);
+      const ruim = await (await imp({ chamados: [{ id: 'x', ...base, status: 'nada' }] })).json();
+      assert.strictEqual(ruim.errors.length, 1);
+      const seco = await (await imp({ dryRun: true, chamados: [{ id: '17tpTEST9', ...base }] })).json();
+      assert.strictEqual(seco.imported, 1);
+      assert.strictEqual(await iEnv.CHAMADOS_DB.prepare('SELECT 1 FROM chamados WHERE id = ?').bind('17tpTEST9').first(), null);
+    });
+  }
+
   console.log(`\n${passed} passaram, ${failed} falharam`);
   process.exit(failed > 0 ? 1 : 0);
 })();
