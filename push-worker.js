@@ -1188,7 +1188,28 @@ async function handleAdminMetrics(request, env) {
     return jsonRes({ error: 'desde/ate precisam ser epoch ms (número)' }, 400);
   }
 
-  return jsonRes({ ...(await d1GetMetrics(env, { desde, ate })), inicioOperacao: OPERACAO_INICIO_MS });
+  // Filtros (todos opcionais, combinam com E). Valor inválido = 400, nunca ignorado em silêncio.
+  const filtros = {};
+  for (const [chave, valido] of [
+    ['setor', n => n >= 0 && n < 100], ['tipo', n => n >= 0 && n < 100],
+    ['prioridade', n => n >= 1 && n <= 3], ['operador', n => n > 0],
+  ]) {
+    const raw = searchParams.get(chave);
+    if (raw == null || raw === '') continue;
+    // Só dígitos: Number() aceitaria "0x10", "1e1", "+3" e " " (vira 0), e o filtro mudaria sem aviso.
+    const n = /^\d+$/.test(raw) ? Number(raw) : NaN;
+    if (!Number.isInteger(n) || !valido(n)) return jsonRes({ error: `${chave} inválido` }, 400);
+    filtros[chave] = n;
+  }
+  const statusRaw = searchParams.get('status');
+  if (statusRaw) {
+    if (!D1_VALID_STATUSES.includes(statusRaw.toLowerCase())) return jsonRes({ error: 'status inválido' }, 400);
+    filtros.status = statusRaw.toLowerCase();
+  }
+  const solicitanteRaw = searchParams.get('solicitante');
+  if (solicitanteRaw) filtros.solicitante = solicitanteRaw.slice(0, 120);
+
+  return jsonRes({ ...(await d1GetMetrics(env, { desde, ate, ...filtros })), inicioOperacao: OPERACAO_INICIO_MS });
 }
 
 // =====================================================================
@@ -2069,17 +2090,37 @@ async function handleAdminDeleteTask(request, env, taskId) {
 // resultado (não no SQL) de propósito, pra manter a query e o resto da função
 // idênticos ao de sempre; volume da tabela não justifica complicar a query por
 // isso. Omitidos, comportamento idêntico ao de antes (agregado geral).
-async function d1GetMetrics(env, { desde, ate } = {}) {
+// Filtros opcionais (2026-11-24, "Everson ama filtros"): além do período, `setor`/`tipo` (orderindex),
+// `prioridade` (1 urgente, 2 alta, 3 normal), `status`, `solicitante` (nome exato) e `operador`
+// (id; vale para QUALQUER atendente do chamado, via chamado_assignees). Todos se combinam (E).
+async function d1GetMetrics(env, { desde, ate, setor, tipo, prioridade, status, solicitante, operador } = {}) {
   const { results } = await env.CHAMADOS_DB.prepare(
-    'SELECT id, status, tipo, setor, due_date, date_closed, start_date, date_created, nota FROM chamados'
+    'SELECT id, status, priority, solicitante, tipo, setor, due_date, date_closed, start_date, date_created, nota FROM chamados'
   ).all();
   let rows = results || [];
   if (desde != null) rows = rows.filter(r => r.date_created >= desde);
   if (ate   != null) rows = rows.filter(r => r.date_created <= ate);
+  if (setor      != null) rows = rows.filter(r => r.setor === setor);
+  if (tipo       != null) rows = rows.filter(r => r.tipo === tipo);
+  if (prioridade != null) rows = rows.filter(r => r.priority === prioridade);
+  if (status     != null) rows = rows.filter(r => r.status === status);
+  if (solicitante)        rows = rows.filter(r => r.solicitante === solicitante);
+
+  // Quem atende cada chamado (uma consulta só; a tabela é pequena). Serve ao filtro por operador e ao
+  // "volume por operador".
+  const { results: atribuicoes } = await env.CHAMADOS_DB.prepare('SELECT chamado_id, assignee_id FROM chamado_assignees').all();
+  const atendentesDe = new Map();
+  for (const a of atribuicoes || []) {
+    if (!atendentesDe.has(a.chamado_id)) atendentesDe.set(a.chamado_id, []);
+    atendentesDe.get(a.chamado_id).push(a.assignee_id);
+  }
+  if (operador != null) rows = rows.filter(r => (atendentesDe.get(r.id) || []).includes(operador));
 
   const porStatus = {};
   const porTipo    = {};
   const porSetor   = {};
+  const porPrioridade = {};
+  const porOperador   = {};
   let dentroDoSla = 0;
   let atrasado    = 0;
   let somaNotas   = 0;
@@ -2092,6 +2133,8 @@ async function d1GetMetrics(env, { desde, ate } = {}) {
 
   for (const r of rows) {
     porStatus[r.status] = (porStatus[r.status] || 0) + 1;
+    porPrioridade[r.priority] = (porPrioridade[r.priority] || 0) + 1;
+    for (const op of atendentesDe.get(r.id) || []) porOperador[op] = (porOperador[op] || 0) + 1;
     if (r.tipo != null)  porTipo[r.tipo]   = (porTipo[r.tipo]   || 0) + 1;
     if (r.setor != null) porSetor[r.setor] = (porSetor[r.setor] || 0) + 1;
 
@@ -2135,6 +2178,8 @@ async function d1GetMetrics(env, { desde, ate } = {}) {
     porStatus,
     porTipo,
     porSetor,
+    porPrioridade,
+    porOperador,
     sla: {
       dentroDoSla,
       atrasado,

@@ -66,6 +66,8 @@ export function makeMetrics(overrides: Record<string, unknown> = {}) {
     porStatus: { aberto: 1, "em atendimento": 0, pendente: 0, encerrado: 1 },
     porTipo: { 0: 1, 3: 1 },
     porSetor: { 0: 2 },
+    porPrioridade: { 1: 1, 3: 1 },
+    porOperador: { "170628721": 1, "200498355": 1 },
     sla: { dentroDoSla: 1, atrasado: 1, dentroDoSlaPercent: 50, atrasadoPercent: 50 },
     tempoMedioPorOperador: { "170628721": 3600_000 },
     ...overrides,

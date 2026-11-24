@@ -447,6 +447,9 @@ export type Metrics = {
   porStatus: Record<string, number>
   porTipo: Record<string, number>
   porSetor: Record<string, number>
+  /** Volume por prioridade (chaves 1 urgente, 2 alta, 3 normal) e por operador (id do atendente). */
+  porPrioridade: Record<string, number>
+  porOperador: Record<string, number>
   sla: { dentroDoSla: number; atrasado: number; dentroDoSlaPercent: number | null; atrasadoPercent: number | null }
   tempoMedioPorOperador: Record<string, OperadorTempo>
   // Nota de satisfação (2026-09-21) — média das notas 1-5 dadas pelos solicitantes,
@@ -460,10 +463,25 @@ export type Metrics = {
 // Fase A do roadmap pós-MVP-visual (2026-08-14): `desde`/`ate` (epoch ms, ambos
 // opcionais) filtram o agregado por período — `d1GetMetrics`/`handleAdminMetrics`
 // já suportam isso no servidor, sem migração de schema (`date_created` já existia).
-export async function fetchMetrics(secret: string, params?: { desde?: number; ate?: number }): Promise<Metrics> {
+// Filtros do Dashboard (2026-11-24): combinam entre si (E) e com o período. `operador` vale para
+// qualquer atendente do chamado; `prioridade` é 1 urgente, 2 alta, 3 normal.
+export type FiltrosMetricas = {
+  operador?: number
+  setor?: number
+  tipo?: number
+  prioridade?: number
+  status?: string
+  solicitante?: string
+}
+
+export async function fetchMetrics(secret: string, params?: { desde?: number; ate?: number } & FiltrosMetricas): Promise<Metrics> {
   const qs = new URLSearchParams()
   if (params?.desde != null) qs.set("desde", String(params.desde))
   if (params?.ate != null) qs.set("ate", String(params.ate))
+  for (const chave of ["operador", "setor", "tipo", "prioridade", "status", "solicitante"] as const) {
+    const v = params?.[chave]
+    if (v != null && v !== "") qs.set(chave, String(v))
+  }
   const query = qs.toString()
   return adminRequest(secret, `/metrics${query ? `?${query}` : ""}`)
 }

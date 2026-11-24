@@ -3207,6 +3207,64 @@ async function test(name, fn) {
     assert.deepStrictEqual(await r.json(), { error: 'erro interno do servidor' });
   });
 
+  // ---------------- Filtros do Dashboard (24/11/2026) ----------------
+  async function cenarioMetricas() {
+    const env = eqEnv();
+    const EV = 170628721, HE = 200498355;
+    const mk = (d) => d1CreateChamado(env, { priority: 3, tipo: 0, setor: 0, ...d });
+    await mk({ name: 'A', priority: 1, tipo: 0, setor: 0, solicitante: 'Ana', assignee_id: EV });
+    await mk({ name: 'B', priority: 3, tipo: 1, setor: 1, solicitante: 'Bia', assignee_id: HE, status: 'encerrado' });
+    await mk({ name: 'C', priority: 3, tipo: 0, setor: 1, solicitante: 'Ana', assignee_ids: [EV, HE], assignee_id: EV, status: 'pendente' });
+    return { env, EV, HE };
+  }
+  const metricas = async (env, qs = '') => (await eqGet(env, `/admin/metrics${qs}`)).json();
+
+  await test('métricas sem filtro contam tudo e trazem o volume por prioridade e por operador', async () => {
+    const { env, EV, HE } = await cenarioMetricas();
+    const m = await metricas(env);
+    assert.strictEqual(m.total, 3);
+    assert.deepStrictEqual(m.porPrioridade, { 1: 1, 3: 2 });
+    assert.deepStrictEqual(m.porOperador, { [EV]: 2, [HE]: 2 }, 'chamado com 2 atendentes conta para os dois');
+  });
+  await test('métricas: cada filtro isolado devolve só os chamados certos', async () => {
+    const { env, EV, HE } = await cenarioMetricas();
+    const total = async (qs) => (await metricas(env, qs)).total;
+    assert.strictEqual(await total(`?operador=${EV}`), 2);
+    assert.strictEqual(await total(`?operador=${HE}`), 2, 'achado mesmo quando não é o primeiro atendente');
+    assert.strictEqual(await total('?setor=1'), 2);
+    assert.strictEqual(await total('?tipo=0'), 2);
+    assert.strictEqual(await total('?prioridade=1'), 1);
+    assert.strictEqual(await total('?prioridade=3'), 2);
+    assert.strictEqual(await total('?status=pendente'), 1);
+    assert.strictEqual(await total('?status=ENCERRADO'), 1, 'status aceita maiúsculas');
+    assert.strictEqual(await total('?solicitante=Ana'), 2);
+    assert.strictEqual(await total('?solicitante=Fulano%20Inexistente'), 0);
+  });
+  await test('métricas: filtros se combinam (E) e os agregados acompanham o recorte', async () => {
+    const { env, HE } = await cenarioMetricas();
+    const m = await metricas(env, `?tipo=0&operador=${HE}`);
+    assert.strictEqual(m.total, 1, 'só o chamado C é do tipo 0 E do Henrique');
+    assert.deepStrictEqual(m.porStatus, { pendente: 1 });
+    assert.deepStrictEqual(m.porSetor, { 1: 1 });
+    assert.strictEqual((await metricas(env, '?setor=7')).total, 0);
+    const vazio = await metricas(env, '?setor=7');
+    assert.deepStrictEqual([vazio.porStatus, vazio.porPrioridade, vazio.porOperador], [{}, {}, {}], 'recorte vazio mantém a estrutura');
+    // período + filtro juntos
+    assert.strictEqual((await metricas(env, `?prioridade=3&desde=${Date.now() + 86400000}`)).total, 0);
+  });
+  await test('métricas: filtro inválido dá 400 (nunca é ignorado em silêncio) e o operador também filtra', async () => {
+    const { env } = await cenarioMetricas();
+    for (const qs of ['?setor=abc', '?tipo=-1', '?prioridade=9', '?prioridade=0', '?operador=0', '?operador=1.5', '?status=lixo', '?setor=%20', '?tipo=0x10', '?prioridade=1e0', '?setor=%2B1']) {
+      assert.strictEqual((await eqGet(env, `/admin/metrics${qs}`)).status, 400, qs);
+    }
+    assert.strictEqual((await eqGet(env, '/admin/metrics?setor=', ADM)).status, 200, 'valor vazio = sem filtro');
+    assert.strictEqual((await eqGet(env, '/admin/metrics?setor=1', {})).status, 403);
+    const comOperador = { ...env, OPERADOR_SECRETS: JSON.stringify({ 170628721: 'chave-do-everson' }) };
+    const r = await worker.fetch(req('GET', '/admin/metrics?prioridade=1', { headers: { 'X-Admin-Secret': 'chave-do-everson' } }), comOperador);
+    assert.strictEqual(r.status, 200, 'o Everson (operador) usa os filtros do Dashboard');
+    assert.strictEqual((await r.json()).total, 1);
+  });
+
   console.log(`\n${passed} passaram, ${failed} falharam`);
   process.exit(failed > 0 ? 1 : 0);
 })();

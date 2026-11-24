@@ -95,4 +95,113 @@ test.describe("Dashboard", () => {
     // timeout maior que o padrão pra não ficar flaky.
     await expect(page.getByText("Erro ao calcular métricas.")).toBeVisible({ timeout: 15_000 })
   })
+
+  // ---- Filtros do Dashboard (2026-11-24, "Everson ama filtros") ----
+  const metricasDe = (url: string) => new URL(url).searchParams
+
+  test("cada filtro vira parâmetro do pedido, aparece como etiqueta e some ao ser removido", async ({ page }) => {
+    await mockAdminRoutes(page, { metrics: makeMetrics({ total: 18 }) })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Dashboard")
+    const pedido = (esperado: Record<string, string>) =>
+      page.waitForRequest((r) => {
+        if (!/\/admin\/metrics/.test(r.url())) return false
+        const q = metricasDe(r.url())
+        return Object.entries(esperado).every(([k, v]) => q.get(k) === v)
+      })
+
+    let p = pedido({ setor: "0" })
+    await page.getByLabel("Setor").click()
+    await page.getByRole("option", { name: "Administrativo" }).click()
+    await p
+    await expect(page.getByRole("button", { name: "Remover filtro Setor: Administrativo" })).toBeVisible()
+
+    // um segundo filtro SOMA ao primeiro (E)
+    p = pedido({ setor: "0", prioridade: "1" })
+    await page.getByLabel("Prioridade").click()
+    await page.getByRole("option", { name: "Urgente" }).click()
+    await p
+    await expect(page.getByText("Mostrando 18 chamados com o recorte aplicado.")).toBeVisible()
+
+    p = pedido({ setor: "0", prioridade: "1", status: "pendente" })
+    await page.getByLabel("Situação").click()
+    await page.getByRole("option", { name: "Pendente" }).click()
+    await p
+
+    // remover UMA etiqueta tira só aquele filtro
+    await page.getByRole("button", { name: "Remover filtro Prioridade: Urgente" }).click()
+    await expect(page.getByRole("button", { name: /Remover filtro Prioridade/ })).toHaveCount(0)
+    await expect(page.getByRole("button", { name: /Remover filtro Setor/ })).toBeVisible()
+
+    // limpar tudo volta ao aviso de "todos os chamados"
+    await page.getByRole("button", { name: "Limpar filtros" }).click()
+    await expect(page.getByRole("button", { name: /Remover filtro/ })).toHaveCount(0)
+    await expect(page.getByText("Contando todos os 18 chamados desde o início")).toBeVisible()
+  })
+
+  test("filtro por atendente (o que o Everson usa) manda o id do operador", async ({ page }) => {
+    await mockAdminRoutes(page, { metrics: makeMetrics({ total: 18 }) })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Dashboard")
+    const pedido = page.waitForRequest((r) => /\/admin\/metrics/.test(r.url()) && metricasDe(r.url()).get("operador") === "170628721")
+    await page.getByLabel("Atendente").click()
+    await page.getByRole("option", { name: "Everson" }).click()
+    await pedido
+    await expect(page.getByRole("button", { name: "Remover filtro Atendente: Everson" })).toBeVisible()
+  })
+
+  test("clicar numa barra de volume liga o filtro e clicar de novo desliga", async ({ page }) => {
+    await mockAdminRoutes(page, { metrics: makeMetrics({ total: 18 }) })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Dashboard")
+    const barra = page.getByRole("button", { name: /Filtrar só por "Notebooks"/ })
+    const pedido = page.waitForRequest((r) => /\/admin\/metrics/.test(r.url()) && metricasDe(r.url()).get("tipo") === "0")
+    await barra.click()
+    await pedido
+    await expect(page.getByRole("button", { name: "Remover filtro Tipo: Notebooks" })).toBeVisible()
+    await page.getByRole("button", { name: /Tirar o filtro "Notebooks"/ }).click()
+    await expect(page.getByRole("button", { name: /Remover filtro Tipo/ })).toHaveCount(0)
+  })
+
+  test("recorte sem nenhum chamado explica e oferece limpar os filtros", async ({ page }) => {
+    await mockAdminRoutes(page, { metrics: makeMetrics({ total: 18 }) })
+    // com algum filtro de setor, o servidor (mock) responde zero chamados
+    await page.route(/\/admin\/metrics\?.*setor=/, (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(makeMetrics({ total: 0, porStatus: {}, porTipo: {}, porSetor: {}, porPrioridade: {}, porOperador: {} })) }),
+    )
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Dashboard")
+    await page.getByLabel("Setor").click()
+    await page.getByRole("option", { name: "Diretoria" }).click()
+    await expect(page.getByText("Nenhum chamado com esses filtros.")).toBeVisible()
+    await page.getByRole("button", { name: "Limpar filtros" }).last().click()
+    await expect(page.getByText("Nenhum chamado com esses filtros.")).toHaveCount(0)
+    await expect(page.getByText("Contando todos os 18 chamados desde o início")).toBeVisible()
+  })
+
+  test("atalhos 'Este mês' e 'Mês passado' preenchem as datas no fuso local", async ({ page }) => {
+    await mockAdminRoutes(page, { metrics: makeMetrics({ total: 18 }) })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Dashboard")
+    const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+    const h = new Date()
+    const de = page.locator('input[type="date"]').first()
+    const ate = page.locator('input[type="date"]').nth(1)
+    await page.getByRole("button", { name: "Este mês" }).click()
+    await expect(de).toHaveValue(iso(new Date(h.getFullYear(), h.getMonth(), 1)))
+    await expect(ate).toHaveValue(iso(h))
+    await page.getByRole("button", { name: "Mês passado" }).click()
+    await expect(de).toHaveValue(iso(new Date(h.getFullYear(), h.getMonth() - 1, 1)))
+    await expect(ate).toHaveValue(iso(new Date(h.getFullYear(), h.getMonth(), 0)))
+  })
+
+  test("o volume por prioridade e por atendente aparece no Dashboard", async ({ page }) => {
+    await mockAdminRoutes(page, { metrics: makeMetrics({ total: 18, porPrioridade: { 1: 4, 2: 6, 3: 8 }, porOperador: { "170628721": 9, "200498355": 9 } }) })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Dashboard")
+    await expect(page.getByText("Volume por prioridade")).toBeVisible()
+    await expect(page.getByRole("button", { name: /Filtrar só por "Urgente"/ })).toContainText("4")
+    await expect(page.getByText("Volume por atendente")).toBeVisible()
+    await expect(page.getByRole("button", { name: /Filtrar só por "Everson"/ })).toContainText("9")
+  })
 })
