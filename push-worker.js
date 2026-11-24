@@ -256,6 +256,7 @@ async function routeRequest(request, env, ctx) {
       const resetSenhaMatch = pathname.match(/^\/admin\/users\/([^/]+)\/reset-senha$/);
       if (resetSenhaMatch) return handleAdminResetSenha(request, env, resetSenhaMatch[1]);
       if (pathname === '/admin/migrate-schema-anexos') return handleAdminMigrateSchemaAnexos(request, env);
+      if (pathname === '/admin/fix-prazos') return handleAdminFixPrazos(request, env);
       if (pathname === '/admin/subscribe/test') return handleAdminSubscribeTest(request, env);
       if (pathname === '/admin/subscribe') return handleAdminSubscribe(request, env);
       if (pathname === '/admin/tasks') return handleAdminCreateTask(request, env);
@@ -3452,6 +3453,27 @@ async function handleAdminGetAnexo(request, env, anexoId) {
   const obj = await r2GetAnexo(env, row.r2_key);
   if (!obj) return jsonRes({ error: 'arquivo não encontrado no armazenamento' }, 404);
   return anexoResponse(obj, row.filename);
+}
+
+// POST /admin/fix-prazos — correção ÚNICA (2026-11-24): chamados reabertos em massa receberam prazos
+// novos (start/due a partir de "agora") e perderam os originais. Restaura start_date/due_date
+// a partir dos valores de origem. Só admin, só esses dois campos, no máximo 20 por chamada.
+// Body: { itens: [{ id, start_date, due_date }] } (null limpa). Remover depois de usar.
+async function handleAdminFixPrazos(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  const itens = body && body.itens;
+  if (!Array.isArray(itens) || itens.length === 0 || itens.length > 20) return jsonRes({ error: 'itens[] de 1 a 20' }, 400);
+  const num = (v) => (v === null || v === undefined ? null : (Number.isFinite(Number(v)) ? Number(v) : undefined));
+  const out = { atualizados: 0, naoEncontrados: [], erros: [] };
+  for (const it of itens) {
+    const st = num(it && it.start_date), du = num(it && it.due_date);
+    if (!it || typeof it.id !== 'string' || st === undefined || du === undefined) { out.erros.push(it && it.id); continue; }
+    const r = await env.CHAMADOS_DB.prepare('UPDATE chamados SET start_date = ?, due_date = ?, updated_at = ? WHERE id = ?').bind(st, du, Date.now(), it.id).run();
+    if (r.meta && r.meta.changes === 0) out.naoEncontrados.push(it.id); else out.atualizados++;
+  }
+  return jsonRes({ ok: out.erros.length === 0, ...out });
 }
 
 // =====================================================================

@@ -3134,6 +3134,16 @@ async function test(name, fn) {
     });
   }
 
+  await test('fix-prazos restaura start/due só pro admin, sem mexer no resto', async () => {
+    const fEnv = { ...env, SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
+    const c = await d1CreateChamado(fEnv, { name: 'x', priority: 3, tipo: 0, setor: 0, solicitante: 'F', status: 'em atendimento', assignee_id: 200498355, assignee_ids: [200498355] });
+    const fp = (h, b) => worker.fetch(req('POST', '/admin/fix-prazos', { headers: h, body: JSON.stringify(b) }), fEnv);
+    assert.strictEqual((await fp({}, { itens: [{ id: c.id, start_date: 1, due_date: 2 }] })).status, 403);
+    const r = await (await fp({ 'X-Admin-Secret': 'admin-secret' }, { itens: [{ id: c.id, start_date: 1000, due_date: 2000 }, { id: 'nao-existe', start_date: 1, due_date: 2 }] })).json();
+    assert.deepStrictEqual([r.atualizados, r.naoEncontrados], [1, ['nao-existe']]);
+    const l = await d1GetChamado(fEnv, c.id);
+    assert.deepStrictEqual([l.start_date, l.due_date, l.status], [1000, 2000, 'em atendimento']);
+  });
   console.log(`\n${passed} passaram, ${failed} falharam`);
   process.exit(failed > 0 ? 1 : 0);
 })();
