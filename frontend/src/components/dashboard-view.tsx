@@ -19,6 +19,9 @@ function inicioDoDia(iso: string): number {
 function fimDoDia(iso: string): number {
   return new Date(`${iso}T23:59:59.999`).getTime()
 }
+// Data em que o sistema passou a ser usado de verdade (atalho "Só a operação").
+const INICIO_OPERACAO_ISO = "2026-10-16"
+
 function isoHoje(offsetDias = 0): string {
   const d = new Date()
   d.setDate(d.getDate() - offsetDias)
@@ -92,12 +95,6 @@ export function DashboardView() {
     return (
       <div className="flex flex-col gap-6">
         {periodoBar}
-        {data.inicioOperacao != null && (
-          <p className="-mt-3 text-xs text-muted-foreground">
-            Métricas contadas desde {new Date(data.inicioOperacao).toLocaleDateString("pt-BR")} (início da operação) — chamados anteriores
-            ficam só no histórico da Gestão.
-          </p>
-        )}
         <div className="rounded-lg border border-dashed border-border px-4 py-12 text-center">
           <p className="font-medium text-foreground">Ainda sem chamados neste período.</p>
           <p className="mt-1 text-sm text-muted-foreground">Os números aparecem conforme os chamados forem abertos e encerrados.</p>
@@ -109,10 +106,9 @@ export function DashboardView() {
   return (
     <div className="flex flex-col gap-6">
       {periodoBar}
-      {data.inicioOperacao != null && (
+      {!de && !ate && (
         <p className="-mt-3 text-xs text-muted-foreground">
-          Métricas contadas desde {new Date(data.inicioOperacao).toLocaleDateString("pt-BR")} (início da operação) — chamados anteriores
-          ficam só no histórico da Gestão.
+          Contando todos os {data.total} chamados desde o início. Use as datas ou os atalhos para filtrar o período.
         </p>
       )}
       {data.truncated && (
@@ -190,6 +186,7 @@ function PeriodoFilterBar({
   }
 
   const semFiltro = !de && !ate
+  const soOperacao = de === INICIO_OPERACAO_ISO && !ate
 
   return (
     <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border bg-card p-3 shadow-sm">
@@ -201,11 +198,19 @@ function PeriodoFilterBar({
         <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Até</Label>
         <Input type="date" value={ate} min={de || undefined} onChange={(e) => onAte(e.target.value)} className="w-36" />
       </div>
-      <div className="flex items-center gap-1 pb-0.5">
+      <div className="flex flex-wrap items-center gap-1 pb-0.5">
         <Button size="sm" variant="ghost" onClick={() => aplicarAtalho(0)}>Hoje</Button>
         <Button size="sm" variant="ghost" onClick={() => aplicarAtalho(6)}>7 dias</Button>
         <Button size="sm" variant="ghost" onClick={() => aplicarAtalho(29)}>30 dias</Button>
-        <Button size="sm" variant={semFiltro ? "secondary" : "ghost"} onClick={() => aplicarAtalho(null)} title="Todo o período desde o início da operação">Desde o início</Button>
+        <Button size="sm" variant={semFiltro ? "secondary" : "ghost"} onClick={() => aplicarAtalho(null)} title="Todos os chamados, desde o primeiro">Desde o início</Button>
+        <Button
+          size="sm"
+          variant={soOperacao ? "secondary" : "ghost"}
+          onClick={() => { onDe(INICIO_OPERACAO_ISO); onAte("") }}
+          title="Só os chamados abertos a partir de 16/10/2026, quando o sistema passou a ser usado de verdade (os anteriores vêm da fase de testes e da ClickUp)"
+        >
+          Só a operação (16/10)
+        </Button>
       </div>
       {!semFiltro && (
         <span className="pb-1.5 text-xs text-muted-foreground">

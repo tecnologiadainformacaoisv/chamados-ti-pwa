@@ -10,26 +10,32 @@ test.describe("Dashboard", () => {
     await expect(page.getByText("42", { exact: true })).toBeVisible()
   })
 
-  // Marco de início da operação (2026-10-16): o servidor só conta chamados daqui em diante
-  // e avisa a data na resposta — o painel precisa deixar isso explícito pra ninguém
-  // estranhar o total baixo.
-  // Sem nenhum chamado no período (caso real nos primeiros dias — as métricas só contam
-  // desde o início da operação): uma mensagem só, em vez de 8 cartões "0" (UX 2026-10-16).
+  // Sem nenhum chamado no período: uma mensagem só, em vez de 8 cartões "0" (UX 2026-10-16).
   test("sem chamados no período mostra uma mensagem só, não 8 cartões zerados", async ({ page }) => {
     await mockAdminRoutes(page, { metrics: makeMetrics({ total: 0, porStatus: {}, inicioOperacao: Date.UTC(2026, 9, 16, 12, 0, 0) }) })
     await gotoAdminLoggedIn(page)
     await abrirSecaoAdmin(page, "Dashboard")
     await expect(page.getByText("Ainda sem chamados neste período.")).toBeVisible()
     await expect(page.getByText("Total de chamados")).toHaveCount(0)
-    await expect(page.getByText(/Métricas contadas desde 16/)).toBeVisible()
+    await expect(page.getByText(/Métricas contadas desde/)).toHaveCount(0)
   })
 
-  test("avisa desde quando as métricas são contadas (início da operação)", async ({ page }) => {
-    await mockAdminRoutes(page, { metrics: makeMetrics({ inicioOperacao: Date.UTC(2026, 9, 16, 12, 0, 0) }) })
+  // 2026-11-24: o corte em 16/10 foi removido; o padrão é TODOS os chamados, e a operação real vira atalho.
+  test("conta todos os chamados desde o início e o atalho 'Só a operação' pede desde 16/10", async ({ page }) => {
+    await mockAdminRoutes(page, { metrics: makeMetrics({ total: 488, inicioOperacao: Date.UTC(2026, 9, 16, 3, 0, 0) }) })
     await gotoAdminLoggedIn(page)
     await abrirSecaoAdmin(page, "Dashboard")
-    await expect(page.getByText("Métricas contadas desde 16/10/2026", { exact: false })).toBeVisible()
+    await expect(page.getByText("Contando todos os 488 chamados desde o início")).toBeVisible()
+    await expect(page.getByText(/Métricas contadas desde/)).toHaveCount(0)
     await expect(page.getByRole("button", { name: "Desde o início" })).toBeVisible()
+    const pedido = page.waitForRequest((r) => /\/admin\/metrics\?.*desde=/.test(r.url()))
+    await page.getByRole("button", { name: /Só a operação/ }).click()
+    const url = new URL((await pedido).url())
+    expect(Number(url.searchParams.get("desde"))).toBeGreaterThan(Date.UTC(2026, 9, 15))
+    expect(Number(url.searchParams.get("desde"))).toBeLessThan(Date.UTC(2026, 9, 17))
+    await expect(page.locator('input[type="date"]').first()).toHaveValue("2026-10-16")
+    await page.getByRole("button", { name: "Desde o início" }).click()
+    await expect(page.locator('input[type="date"]').first()).toHaveValue("")
   })
 
   // Satisfação (2026-09-21, "julgo essencial") — média das notas 1-5 dadas pelos

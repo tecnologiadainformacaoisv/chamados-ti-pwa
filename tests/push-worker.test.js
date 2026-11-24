@@ -1611,8 +1611,7 @@ async function test(name, fn) {
   // (desde/ate, epoch ms). task-michael-1/task-ariele-1 foram criados agora (Date.now())
   // via seedChamadoComId — ajusta date_created direto no D1 pra ter datas conhecidas.
   await test('desde/ate filtram por date_created — chamado fora do intervalo não conta', async () => {
-    // Datas relativas ao marco de início da operação (16/10/2026 00:00 Fortaleza) — as
-    // métricas ignoram tudo antes dele (ver OPERACAO_INICIO_MS), então 1970 não serve mais.
+    // Datas relativas ao marco de início da operação (16/10/2026 00:00 Fortaleza).
     const MARCO = Date.UTC(2026, 9, 16, 3, 0, 0);
     await adminEnv.CHAMADOS_DB.prepare('UPDATE chamados SET date_created = ? WHERE id = ?').bind(MARCO + 1_000_000, 'task-michael-1').run();
     await adminEnv.CHAMADOS_DB.prepare('UPDATE chamados SET date_created = ? WHERE id = ?').bind(MARCO + 5_000_000, 'task-ariele-1').run();
@@ -1622,21 +1621,21 @@ async function test(name, fn) {
     const data = await res.json();
     assert.strictEqual(data.total, 1, 'só o chamado do Michael deveria estar dentro do range');
   });
-  await test('chamados anteriores ao marco de início da operação ficam fora das métricas (mesmo sem desde)', async () => {
+  await test('o marco de início da operação NÃO corta mais as métricas: sem filtro conta tudo, e o período decide o resto', async () => {
     const MARCO = Date.UTC(2026, 9, 16, 3, 0, 0);
     const headers = { 'X-Admin-Secret': adminEnv.ADMIN_SECRET };
     const antes = await (await worker.fetch(req('GET', '/admin/metrics', { headers }), adminEnv)).json();
-    assert.strictEqual(antes.inicioOperacao, MARCO);
-    // Ariele passa a ser "legado" (1 ms antes do marco): sai da contagem, continua no banco.
+    assert.strictEqual(antes.inicioOperacao, MARCO, 'o marco continua sendo informado (vira atalho no painel)');
+    // Ariele passa a ser "legado" (1 ms antes do marco): continua CONTANDO nas métricas.
     await adminEnv.CHAMADOS_DB.prepare('UPDATE chamados SET date_created = ? WHERE id = ?').bind(MARCO - 1, 'task-ariele-1').run();
     const depois = await (await worker.fetch(req('GET', '/admin/metrics', { headers }), adminEnv)).json();
-    assert.strictEqual(depois.total, antes.total - 1);
-    // Pedir um período ANTERIOR ao marco também não traz o legado de volta (piso no desde).
+    assert.strictEqual(depois.total, antes.total, 'chamado anterior ao marco entra no total');
+    // Pedir um período ANTERIOR ao marco traz exatamente o legado.
     const antigo = await (await worker.fetch(req('GET', `/admin/metrics?desde=0&ate=${MARCO}`, { headers }), adminEnv)).json();
-    assert.strictEqual(antigo.total, 0);
-    // E o chamado continua visível na Gestão (nada foi apagado).
-    const tasks = await (await worker.fetch(req('GET', '/admin/tasks', { headers }), adminEnv)).json();
-    assert.ok((tasks.tasks || tasks).some(x => x.id === 'task-ariele-1'));
+    assert.strictEqual(antigo.total, 1);
+    // E "só a operação" (desde o marco) deixa o legado de fora, por escolha de quem filtra.
+    const soOperacao = await (await worker.fetch(req('GET', `/admin/metrics?desde=${MARCO}`, { headers }), adminEnv)).json();
+    assert.strictEqual(soOperacao.total, antes.total - 1);
     await adminEnv.CHAMADOS_DB.prepare('UPDATE chamados SET date_created = ? WHERE id = ?').bind(MARCO + 5_000_000, 'task-ariele-1').run();
   });
   await test('desde/ate inválido (não-numérico) devolve 400', async () => {

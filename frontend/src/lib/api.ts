@@ -453,7 +453,7 @@ export type Metrics = {
   // no mesmo escopo de período (desde/ate) do resto das métricas. `mediaNota: null`
   // quando ninguém avaliou nada ainda nesse período.
   satisfacao: { mediaNota: number | null; totalAvaliacoes: number }
-  // Marco de início da operação (epoch ms): as métricas só contam daqui em diante.
+  // Marco de início da operação (epoch ms). Só informativo: as métricas contam tudo, e o painel usa isto no atalho "só a operação".
   inicioOperacao?: number
 }
 
