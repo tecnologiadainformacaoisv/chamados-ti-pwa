@@ -3155,6 +3155,59 @@ async function test(name, fn) {
     assert.strictEqual((await ia(A, { ...ok, url: 'https://clickup-attachments.com.evil.com/b.png' })).status, 400);
     assert.strictEqual((await ia(A, { ...ok, chamado_id: 'nao-existe' })).status, 404);
   });
+  // ---------------- Banco que nunca rodou a migração do inventário (24/11/2026) ----------------
+  // Bug de produção: o código foi publicado antes da migração e as abas Inventário e Toners ficaram
+  // "Não foi possível carregar". Agora as rotas criam o esquema sozinhas no primeiro uso.
+  const bancoSemInventario = () => {
+    const raw = new DatabaseSync(':memory:');
+    raw.exec(fs.readFileSync(path.join(__dirname, '..', 'd1', 'schema.sql'), 'utf8'));
+    raw.exec('DROP INDEX idx_chamados_equipamento; ALTER TABLE chamados DROP COLUMN equipamento_id; DROP TABLE toner_recargas; DROP TABLE toners; DROP TABLE equipamentos;');
+    return { ...hEnv, CHAMADOS_DB: makeD1FromSqlite(raw), SUBSCRIPTIONS: makeMockKV(), TONER_AGENT_SECRET: 'segredo-do-agente' };
+  };
+
+  await test('banco sem migração: as telas de admin abrem (listas vazias) e o primeiro cadastro já funciona', async () => {
+    const env = bancoSemInventario();
+    assert.deepStrictEqual(await (await eqGet(env, '/admin/equipamentos')).json(), { equipamentos: [] });
+    assert.deepStrictEqual(await (await eqGet(env, '/admin/toners')).json(), { toners: [] });
+    const imp = await eqPost(env, '/admin/equipamentos', { tipo: 'impressora', tombamento: 'F 1', ip: '10.0.0.1' });
+    assert.strictEqual(imp.status, 201);
+    const { id } = await imp.json();
+    assert.strictEqual((await eqPost(env, '/admin/toners', { equipamento_id: id, codigo: 'TN-1', cor: 'preto' })).status, 201);
+    assert.strictEqual((await eqGet(env, '/admin/toners')).status, 200);
+  });
+  await test('banco sem migração: rotas do agente e a lista do solicitante também se preparam sozinhas', async () => {
+    const env = bancoSemInventario();
+    const lista = await worker.fetch(req('GET', '/agente/impressoras', { headers: AG }), env);
+    assert.strictEqual(lista.status, 200);
+    assert.deepStrictEqual((await lista.json()).impressoras, []);
+    const env2 = bancoSemInventario();
+    const post = await worker.fetch(req('POST', '/agente/leituras', { headers: AG, body: JSON.stringify({ leituras: [] }) }), env2);
+    assert.strictEqual(post.status, 200);
+    const env3 = bancoSemInventario();
+    await d1CreateSolicitante(env3, 'Pessoa Sem Migracao', emailFor('Pessoa Sem Migracao'));
+    const reg = await worker.fetch(req('POST', '/auth/register', { headers: { ...SECRET_HEADERS, 'CF-Connecting-IP': '10.6.6.6' }, body: JSON.stringify({ email: emailFor('Pessoa Sem Migracao'), nome: 'Pessoa Sem Migracao', password: 'senhaboa123' }) }), env3);
+    const r = await worker.fetch(req('GET', '/api/equipamentos', { headers: comSessao((await reg.json()).token) }), env3);
+    assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual((await r.json()).equipamentos, []);
+  });
+  await test('banco sem migração: abrir chamado continua funcionando (equipamento inexistente é recusado, não quebra)', async () => {
+    const env = bancoSemInventario();
+    await d1CreateSolicitante(env, 'Pessoa Chamado Antigo', emailFor('Pessoa Chamado Antigo'));
+    const reg = await worker.fetch(req('POST', '/auth/register', { headers: { ...SECRET_HEADERS, 'CF-Connecting-IP': '10.5.5.5' }, body: JSON.stringify({ email: emailFor('Pessoa Chamado Antigo'), nome: 'Pessoa Chamado Antigo', password: 'senhaboa123' }) }), env);
+    const h = comSessao((await reg.json()).token);
+    const abre = (extra) => worker.fetch(req('POST', '/api/tasks', { headers: h, body: JSON.stringify({ name: 'Imp', custom_fields: tipoOk, ...extra }) }), env);
+    assert.strictEqual((await abre({})).status, 200);
+    await env.SUBSCRIPTIONS.delete('throttle_create_Pessoa Chamado Antigo');
+    assert.strictEqual((await abre({ equipamento_id: 'fantasma' })).status, 400);
+  });
+  await test('erro inesperado vira resposta 500 em JSON, com CORS (antes: página 1101 sem CORS)', async () => {
+    const quebrado = { ...hEnv, SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: { prepare() { throw new Error('banco fora do ar'); }, batch() { throw new Error('banco fora do ar'); } } };
+    const r = await worker.fetch(req('GET', '/admin/tasks', { headers: { ...ADM, Origin: 'https://chamados.institutosaovicente.com.br' } }), quebrado);
+    assert.strictEqual(r.status, 500);
+    assert.strictEqual(r.headers.get('access-control-allow-origin'), 'https://chamados.institutosaovicente.com.br');
+    assert.deepStrictEqual(await r.json(), { error: 'erro interno do servidor' });
+  });
+
   console.log(`\n${passed} passaram, ${failed} falharam`);
   process.exit(failed > 0 ? 1 : 0);
 })();

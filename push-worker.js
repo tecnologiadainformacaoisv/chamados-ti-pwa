@@ -168,7 +168,16 @@ function withCors(response, request) {
 
 export default {
   async fetch(request, env, ctx) {
-    return withCors(await routeRequest(request, env, ctx), request);
+    let resposta;
+    try {
+      resposta = await routeRequest(request, env, ctx);
+    } catch (err) {
+      // Antes, uma exceção solta virava a página de erro 1101 da Cloudflare, SEM cabeçalho de CORS: o
+      // navegador só enxergava "falha de rede" e a tela não conseguia dizer o que aconteceu.
+      console.error(`erro não tratado em ${request.method} ${new URL(request.url).pathname}: ${err && err.message}`);
+      resposta = jsonRes({ error: 'erro interno do servidor' }, 500);
+    }
+    return withCors(resposta, request);
   },
 };
 
@@ -2953,6 +2962,7 @@ async function resolveEquipamentoId(env, valor) {
 
 async function handleAdminListEquipamentos(request, env) {
   if (!(await isStaff(request, env))) return unauthorized();
+  await garantirEsquemaInventario(env);
   const { results } = await env.CHAMADOS_DB.prepare(`SELECT * FROM equipamentos WHERE ativo = 1 ORDER BY tipo, tombamento, modelo`).all();
   // Chamados por equipamento. Antes da migração a coluna não existe: devolve a lista com zeros.
   const contagem = new Map();
@@ -2976,6 +2986,7 @@ async function handleListEquipamentosSolicitante(request, env) {
   if (!hasValidSecret(request, env)) return unauthorized();
   const session = await requireSession(request, env);
   if (!session) return sessionInvalid();
+  await garantirEsquemaInventario(env);
   const { results } = await env.CHAMADOS_DB.prepare(
     `SELECT id, tombamento, tipo, marca, modelo, setor, local FROM equipamentos
       WHERE ativo = 1 AND status != 'baixado' ORDER BY tipo, tombamento, modelo`
@@ -2985,6 +2996,7 @@ async function handleListEquipamentosSolicitante(request, env) {
 
 async function handleAdminSaveEquipamento(request, env, id) {
   if (!(await isStaff(request, env))) return unauthorized();
+  await garantirEsquemaInventario(env);
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
   if (!body || typeof body !== 'object') return jsonRes({ error: 'corpo inválido' }, 400);
@@ -3045,34 +3057,64 @@ async function handleAdminSaveEquipamento(request, env, id) {
   }
 }
 
-async function handleAdminMigrateSchemaEquipamentos(request, env) {
-  if (!(await isAdmin(request, env))) return unauthorized();
+// Esquema do Inventário/Toners aplicado de forma idempotente. É o que as rotas
+// POST /admin/migrate-schema-equipamentos e -toners rodam, e também o que as próprias rotas rodam
+// sozinhas no primeiro uso (garantirEsquemaInventario) — sem isso, publicar o código antes de rodar a
+// migração derrubava as abas Inventário e Toners ("Não foi possível carregar") até alguém lembrar dela.
+// Devolve null se deu certo, ou a mensagem de erro.
+async function aplicarEsquemaInventario(env) {
+  const db = env.CHAMADOS_DB;
   try {
-    await env.CHAMADOS_DB.batch([
-      env.CHAMADOS_DB.prepare(`CREATE TABLE IF NOT EXISTS equipamentos (
+    await db.batch([
+      db.prepare(`CREATE TABLE IF NOT EXISTS equipamentos (
         id TEXT PRIMARY KEY, tombamento TEXT, tipo TEXT NOT NULL, marca TEXT, modelo TEXT, numero_serie TEXT,
         origem TEXT NOT NULL DEFAULT 'patrimonio', fornecedor TEXT, setor INTEGER, local TEXT, ip TEXT,
         status TEXT NOT NULL DEFAULT 'ativo', observacao TEXT, ativo INTEGER NOT NULL DEFAULT 1,
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`),
-      env.CHAMADOS_DB.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_equipamentos_tombamento ON equipamentos (tombamento) WHERE tombamento IS NOT NULL`),
-      env.CHAMADOS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_equipamentos_tipo ON equipamentos (tipo)`),
+      db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_equipamentos_tombamento ON equipamentos (tombamento) WHERE tombamento IS NOT NULL`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_equipamentos_tipo ON equipamentos (tipo)`),
+      db.prepare(`CREATE TABLE IF NOT EXISTS toners (
+        id TEXT PRIMARY KEY, equipamento_id TEXT NOT NULL, codigo TEXT NOT NULL, cor TEXT NOT NULL DEFAULT 'preto',
+        capacidade_paginas INTEGER, ciclo_dias_padrao INTEGER, observacao TEXT,
+        nivel_percentual INTEGER, nivel_lido_em INTEGER, ativo INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL)`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_toners_equipamento ON toners (equipamento_id)`),
+      db.prepare(`CREATE TABLE IF NOT EXISTS toner_recargas (
+        id TEXT PRIMARY KEY, toner_id TEXT NOT NULL, feita_em INTEGER NOT NULL, autor TEXT, observacao TEXT)`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_toner_recargas_toner ON toner_recargas (toner_id, feita_em)`),
     ]);
   } catch (err) {
-    return jsonRes({ error: `migração de schema falhou (equipamentos): ${err.message}` }, 500);
+    return `criar as tabelas do inventário falhou: ${err.message}`;
   }
-  for (const [tabela, coluna] of [['chamados', 'equipamento_id TEXT'], ['equipamentos', 'ip TEXT']]) {
+  // Colunas acrescentadas depois da primeira versão das tabelas (bancos que já tinham a tabela).
+  for (const [tabela, coluna] of [['chamados', 'equipamento_id TEXT'], ['equipamentos', 'ip TEXT'], ['toners', 'nivel_percentual INTEGER'], ['toners', 'nivel_lido_em INTEGER']]) {
     try {
-      await env.CHAMADOS_DB.prepare(`ALTER TABLE ${tabela} ADD COLUMN ${coluna}`).run();
+      await db.prepare(`ALTER TABLE ${tabela} ADD COLUMN ${coluna}`).run();
     } catch (err) {
-      if (!/duplicate column/i.test(err.message)) return jsonRes({ error: `migração de schema falhou (${tabela}.${coluna}): ${err.message}` }, 500);
+      if (!/duplicate column/i.test(err.message)) return `acrescentar ${tabela}.${coluna} falhou: ${err.message}`;
     }
   }
   try {
-    await env.CHAMADOS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_chamados_equipamento ON chamados (equipamento_id)`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_chamados_equipamento ON chamados (equipamento_id)`).run();
   } catch (err) {
-    return jsonRes({ error: `migração de schema falhou (índice): ${err.message}` }, 500);
+    return `criar o índice de chamados.equipamento_id falhou: ${err.message}`;
   }
-  return jsonRes({ ok: true });
+  return null;
+}
+
+// Por banco (não por variável global): cada instância do Worker faz isso no máximo uma vez.
+const esquemaInventarioGarantido = new WeakSet();
+async function garantirEsquemaInventario(env) {
+  if (esquemaInventarioGarantido.has(env.CHAMADOS_DB)) return;
+  const erro = await aplicarEsquemaInventario(env);
+  if (erro) throw new Error(erro);
+  esquemaInventarioGarantido.add(env.CHAMADOS_DB);
+}
+
+async function handleAdminMigrateSchemaEquipamentos(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  const erro = await aplicarEsquemaInventario(env);
+  return erro ? jsonRes({ error: `migração de schema falhou: ${erro}` }, 500) : jsonRes({ ok: true });
 }
 
 // =====================================================================
@@ -3096,6 +3138,7 @@ function inteiroPositivoOuNulo(v, max, nome) {
 
 async function handleAdminListToners(request, env) {
   if (!(await isStaff(request, env))) return unauthorized();
+  await garantirEsquemaInventario(env);
   const { results: toners } = await env.CHAMADOS_DB.prepare(
     `SELECT t.*, e.tombamento, e.marca, e.modelo, e.setor, e.local, e.ip
        FROM toners t LEFT JOIN equipamentos e ON e.id = t.equipamento_id
@@ -3114,6 +3157,7 @@ async function handleAdminListToners(request, env) {
 
 async function handleAdminSaveToner(request, env, id) {
   if (!(await isStaff(request, env))) return unauthorized();
+  await garantirEsquemaInventario(env);
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
   if (!body || typeof body !== 'object') return jsonRes({ error: 'corpo inválido' }, 400);
@@ -3174,6 +3218,7 @@ async function handleAdminSaveToner(request, env, id) {
 
 async function handleAdminRegistrarRecarga(request, env, tonerId) {
   if (!(await isStaff(request, env))) return unauthorized();
+  await garantirEsquemaInventario(env);
   let body = {};
   try { body = (await request.json()) || {}; } catch { /* corpo vazio vale: recarga agora */ }
   const toner = await env.CHAMADOS_DB.prepare(`SELECT id FROM toners WHERE id = ? AND ativo = 1`).bind(tonerId).first();
@@ -3199,6 +3244,7 @@ async function handleAdminRegistrarRecarga(request, env, tonerId) {
 // Desfaz o clique errado: apaga só a recarga mais recente (a que distorceria o ciclo médio).
 async function handleAdminDesfazerRecarga(request, env, tonerId) {
   if (!(await isStaff(request, env))) return unauthorized();
+  await garantirEsquemaInventario(env);
   const ultima = await env.CHAMADOS_DB.prepare(
     `SELECT id FROM toner_recargas WHERE toner_id = ? ORDER BY feita_em DESC, rowid DESC LIMIT 1`
   ).bind(tonerId).first();
@@ -3207,31 +3253,9 @@ async function handleAdminDesfazerRecarga(request, env, tonerId) {
   return jsonRes({ ok: true });
 }
 
+// Mesma migração (o esquema do inventário e dos toners é um só); rota mantida por compatibilidade.
 async function handleAdminMigrateSchemaToners(request, env) {
-  if (!(await isAdmin(request, env))) return unauthorized();
-  try {
-    await env.CHAMADOS_DB.batch([
-      env.CHAMADOS_DB.prepare(`CREATE TABLE IF NOT EXISTS toners (
-        id TEXT PRIMARY KEY, equipamento_id TEXT NOT NULL, codigo TEXT NOT NULL, cor TEXT NOT NULL DEFAULT 'preto',
-        capacidade_paginas INTEGER, ciclo_dias_padrao INTEGER, observacao TEXT,
-        nivel_percentual INTEGER, nivel_lido_em INTEGER, ativo INTEGER NOT NULL DEFAULT 1,
-        created_at INTEGER NOT NULL)`),
-      env.CHAMADOS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_toners_equipamento ON toners (equipamento_id)`),
-      env.CHAMADOS_DB.prepare(`CREATE TABLE IF NOT EXISTS toner_recargas (
-        id TEXT PRIMARY KEY, toner_id TEXT NOT NULL, feita_em INTEGER NOT NULL, autor TEXT, observacao TEXT)`),
-      env.CHAMADOS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_toner_recargas_toner ON toner_recargas (toner_id, feita_em)`),
-    ]);
-  } catch (err) {
-    return jsonRes({ error: `migração de schema falhou (toners): ${err.message}` }, 500);
-  }
-  for (const coluna of ['nivel_percentual INTEGER', 'nivel_lido_em INTEGER']) {
-    try {
-      await env.CHAMADOS_DB.prepare(`ALTER TABLE toners ADD COLUMN ${coluna}`).run();
-    } catch (err) {
-      if (!/duplicate column/i.test(err.message)) return jsonRes({ error: `migração de schema falhou (toners.${coluna}): ${err.message}` }, 500);
-    }
-  }
-  return jsonRes({ ok: true });
+  return handleAdminMigrateSchemaEquipamentos(request, env);
 }
 
 // =====================================================================
@@ -3255,6 +3279,7 @@ function agenteAutorizado(request, env) {
 
 async function handleAgenteListaImpressoras(request, env) {
   if (!agenteAutorizado(request, env)) return unauthorized();
+  await garantirEsquemaInventario(env);
   const { results } = await env.CHAMADOS_DB.prepare(
     `SELECT id, tombamento, marca, modelo, ip FROM equipamentos
       WHERE ativo = 1 AND tipo = 'impressora' AND status != 'baixado' AND ip IS NOT NULL ORDER BY tombamento`
@@ -3270,6 +3295,7 @@ async function handleAgenteListaImpressoras(request, env) {
 
 async function handleAgenteLeituras(request, env) {
   if (!agenteAutorizado(request, env)) return unauthorized();
+  await garantirEsquemaInventario(env);
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
   if (!body || !Array.isArray(body.leituras) || body.leituras.length > AGENTE_MAX_LEITURAS) {
