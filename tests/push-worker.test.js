@@ -3143,6 +3143,18 @@ async function test(name, fn) {
     assert.strictEqual(j.tasks.find(x => x.id === com).anexos_count, 2);
     assert.strictEqual(j.tasks.find(x => x.id === sem).anexos_count, 0);
   });
+  await test('import-anexo-url: só admin, só host da ClickUp, chamado precisa existir', async () => {
+    const aEnv = { ...env, SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
+    const c = await d1CreateChamado(aEnv, { name: 'x', priority: 3, tipo: 0, setor: 0, solicitante: 'F', status: 'aberto', assignee_id: 200498355, assignee_ids: [200498355] });
+    const ia = (h, b) => worker.fetch(req('POST', '/admin/import-anexo-url', { headers: h, body: JSON.stringify(b) }), aEnv);
+    const A = { 'X-Admin-Secret': 'admin-secret' };
+    const ok = { chamado_id: c.id, url: 'https://t1.p.clickup-attachments.com/a/b.png', filename: 'b.png' };
+    assert.strictEqual((await ia({}, ok)).status, 403);
+    assert.strictEqual((await ia(A, { ...ok, url: 'https://evil.example.com/b.png' })).status, 400);
+    assert.strictEqual((await ia(A, { ...ok, url: 'http://t1.p.clickup-attachments.com/b.png' })).status, 400);
+    assert.strictEqual((await ia(A, { ...ok, url: 'https://clickup-attachments.com.evil.com/b.png' })).status, 400);
+    assert.strictEqual((await ia(A, { ...ok, chamado_id: 'nao-existe' })).status, 404);
+  });
   console.log(`\n${passed} passaram, ${failed} falharam`);
   process.exit(failed > 0 ? 1 : 0);
 })();

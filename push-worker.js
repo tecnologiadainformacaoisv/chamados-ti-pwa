@@ -256,6 +256,7 @@ async function routeRequest(request, env, ctx) {
       const resetSenhaMatch = pathname.match(/^\/admin\/users\/([^/]+)\/reset-senha$/);
       if (resetSenhaMatch) return handleAdminResetSenha(request, env, resetSenhaMatch[1]);
       if (pathname === '/admin/migrate-schema-anexos') return handleAdminMigrateSchemaAnexos(request, env);
+      if (pathname === '/admin/import-anexo-url') return handleAdminImportAnexoUrl(request, env);
       if (pathname === '/admin/subscribe/test') return handleAdminSubscribeTest(request, env);
       if (pathname === '/admin/subscribe') return handleAdminSubscribe(request, env);
       if (pathname === '/admin/tasks') return handleAdminCreateTask(request, env);
@@ -3461,6 +3462,45 @@ async function handleAdminGetAnexo(request, env, anexoId) {
   const obj = await r2GetAnexo(env, row.r2_key);
   if (!obj) return jsonRes({ error: 'arquivo não encontrado no armazenamento' }, 404);
   return anexoResponse(obj, row.filename);
+}
+
+// POST /admin/import-anexo-url — importação ÚNICA de anexos que ficaram só na ClickUp (2026-11-24).
+// Os chamados importados da ClickUp (outubro e hoje) vieram sem os arquivos. O Worker baixa a URL
+// temporária (uso único) que a ClickUp entrega e grava no R2 + chamado_anexos. Só aceita endereços
+// https de *.clickup-attachments.com (nada de URL arbitrária). Idempotente por (chamado, nome do arquivo).
+// Body: { chamado_id, url, filename, content_type? }. Remover depois de usar.
+async function handleAdminImportAnexoUrl(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  const { chamado_id, url, filename } = body || {};
+  if (typeof chamado_id !== 'string' || typeof filename !== 'string' || !filename || typeof url !== 'string') {
+    return jsonRes({ error: 'chamado_id, url e filename são obrigatórios' }, 400);
+  }
+  let u;
+  try { u = new URL(url); } catch { return jsonRes({ error: 'url inválida' }, 400); }
+  if (u.protocol !== 'https:' || !u.hostname.endsWith('.clickup-attachments.com')) {
+    return jsonRes({ error: 'só aceita https://*.clickup-attachments.com' }, 400);
+  }
+  if (!(await d1GetChamado(env, chamado_id))) return jsonRes({ error: 'chamado não encontrado' }, 404);
+  const ja = await env.CHAMADOS_DB.prepare('SELECT 1 FROM chamado_anexos WHERE chamado_id = ? AND filename = ?').bind(chamado_id, filename).first();
+  if (ja) return jsonRes({ ok: true, skipped: true });
+
+  const resp = await fetch(url);
+  if (!resp.ok) return jsonRes({ error: `download falhou (HTTP ${resp.status})` }, 502);
+  const bytes = await resp.arrayBuffer();
+  if (bytes.byteLength > MAX_ANEXO_BYTES) return jsonRes({ error: 'arquivo maior que o limite' }, 413);
+  const tipo = body.content_type || resp.headers.get('content-type') || 'application/octet-stream';
+  const { key, size, contentType } = await r2UploadAnexo(env, chamado_id, filename, tipo, bytes);
+  try {
+    await env.CHAMADOS_DB.prepare(
+      'INSERT INTO chamado_anexos (id, chamado_id, r2_key, filename, content_type, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).bind(crypto.randomUUID(), chamado_id, key, filename, contentType, size ?? bytes.byteLength, Date.now()).run();
+  } catch (err) {
+    await r2DeleteAnexo(env, key).catch(() => {});
+    return jsonRes({ error: 'não foi possível salvar o anexo' }, 500);
+  }
+  return jsonRes({ ok: true, size: size ?? bytes.byteLength });
 }
 
 // =====================================================================
