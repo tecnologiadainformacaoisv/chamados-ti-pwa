@@ -11,6 +11,7 @@ import { EncerrarComSolucaoDialog } from "@/components/encerrar-com-solucao-dial
 import { CommandPalette, type Comando } from "@/components/command-palette"
 import { DesfazerAviso } from "@/components/desfazer-aviso"
 import { LinhaDoDia } from "@/components/linha-do-dia"
+import { AcoesPendentes, casaFiltro, ROTULO_FILTRO, type FiltroRapido } from "@/components/acoes-pendentes"
 import { FilaAtendimento } from "@/components/fila-atendimento"
 import { useDesfazer } from "@/hooks/use-desfazer"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
@@ -48,7 +49,7 @@ export function GestaoView() {
   const [createError, setCreateError] = useState<string | null>(null)
   // Fase 3 do redesign de UX (2026-10-19): foco do teclado, filtro rápido, paleta e "Desfazer" seguro
   const [focoId, setFocoId] = useState<string | null>(null)
-  const [rapido, setRapido] = useState<"todos" | "atrasados" | "hora">("todos")
+  const [rapido, setRapido] = useState<"todos" | "hora" | FiltroRapido>("todos")
   const [paletaAberta, setPaletaAberta] = useState(false)
   const [acaoErro, setAcaoErro] = useState<string | null>(null)
   const desfazer = useDesfazer()
@@ -107,12 +108,14 @@ export function GestaoView() {
       : tasks
     // Filtros rápidos ("o que preciso atender agora"): só chamados em andamento, que são os que têm
     // prazo correndo — pendente tem o SLA pausado e encerrado já acabou.
+    const agora = Date.now()
     const rapidos = rapido === "todos"
       ? filtrados
       : filtrados.filter((t) => {
+          if (rapido !== "hora") return casaFiltro(rapido, t, agora)
           const st = (t.status?.status || "").toLowerCase()
           if (st !== "aberto" && st !== "em atendimento") return false
-          return rapido === "atrasados" ? isAtrasado(t) : isAtrasado(t) || venceLogo(t, 60)
+          return isAtrasado(t) || venceLogo(t, 60)
         })
     return [...rapidos].sort(compararUrgencia)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `tick` só força a reordenação por tempo
@@ -385,6 +388,10 @@ export function GestaoView() {
         <LinhaDoDia tasks={tasks} focoId={focoId} onOpenTask={(t) => { setFocoId(t.id); setSelectedTask(t) }} />
       )}
 
+      {!tasksQuery.isLoading && !!tasksQuery.data && (
+        <AcoesPendentes tasks={tasks} ativo={rapido} onFiltrar={(f) => setRapido(rapido === f ? "todos" : f)} />
+      )}
+
       <div className="flex flex-col gap-4 bg-background pt-2 pb-3 md:sticky md:top-16 md:z-10">
         <FiltersBar
           filtros={filtros}
@@ -405,6 +412,11 @@ export function GestaoView() {
                   {rotulo}
                 </Button>
               ))}
+              {rapido !== "todos" && rapido !== "atrasados" && rapido !== "hora" && (
+                <Button size="sm" variant="default" aria-label={`Remover filtro: ${ROTULO_FILTRO[rapido]}`} onClick={() => setRapido("todos")}>
+                  {ROTULO_FILTRO[rapido]} <span aria-hidden>✕</span>
+                </Button>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2">

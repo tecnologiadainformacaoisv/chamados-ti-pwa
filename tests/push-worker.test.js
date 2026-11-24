@@ -2729,6 +2729,300 @@ async function test(name, fn) {
     assert.strictEqual((await d1GetChamado(sEnv, c.id)).numero, 1);
   });
 
+  // ---------------- Inventário de equipamentos (2026-11-23) ----------------
+  const eqEnv = () => ({ ...hEnv, CHAMADOS_DB: freshD1(), SUBSCRIPTIONS: makeMockKV() });
+  const eqPost = (env, path, body, headers = ADM) => worker.fetch(req('POST', path, { headers, body: JSON.stringify(body) }), env);
+  const eqGet = (env, path, headers = ADM) => worker.fetch(req('GET', path, { headers }), env);
+
+  await test('equipamentos: criar exige admin e tipo, e a lista mostra o que foi criado', async () => {
+    const env = eqEnv();
+    assert.strictEqual((await eqPost(env, '/admin/equipamentos', { tipo: 'impressora' }, {})).status, 403);
+    assert.strictEqual((await eqPost(env, '/admin/equipamentos', { marca: 'Brother' })).status, 400);
+    const c = await eqPost(env, '/admin/equipamentos', { tipo: 'impressora', tombamento: 'F 0001', marca: 'Brother', modelo: 'HL-1', origem: 'locado', fornecedor: 'Locadora X', setor: 1, local: 'Sala 3' });
+    assert.strictEqual(c.status, 201);
+    const lista = await (await eqGet(env, '/admin/equipamentos')).json();
+    assert.strictEqual(lista.equipamentos.length, 1);
+    assert.strictEqual(lista.equipamentos[0].tombamento, 'F 0001');
+    assert.strictEqual(lista.equipamentos[0].origem, 'locado');
+    assert.strictEqual(lista.equipamentos[0].chamadosTotal, 0);
+    assert.strictEqual((await eqGet(env, '/admin/equipamentos', {})).status, 403);
+  });
+  await test('equipamentos: valores inválidos são recusados e tombamento repetido dá 409', async () => {
+    const env = eqEnv();
+    for (const corpo of [{ tipo: 'geladeira' }, { tipo: 'outro', origem: 'roubado' }, { tipo: 'outro', status: 'quebradão' }, { tipo: 'outro', setor: 'x' }, { tipo: 'outro', marca: 'a'.repeat(61) }, { tipo: 'outro', modelo: 5 }]) {
+      assert.strictEqual((await eqPost(env, '/admin/equipamentos', corpo)).status, 400, JSON.stringify(corpo).slice(0, 60));
+    }
+    assert.strictEqual((await eqPost(env, '/admin/equipamentos', { tipo: 'monitor', tombamento: 'F 7' })).status, 201);
+    assert.strictEqual((await eqPost(env, '/admin/equipamentos', { tipo: 'monitor', tombamento: 'F 7' })).status, 409);
+    // vários sem tombamento são permitidos
+    assert.strictEqual((await eqPost(env, '/admin/equipamentos', { tipo: 'monitor' })).status, 201);
+    assert.strictEqual((await eqPost(env, '/admin/equipamentos', { tipo: 'monitor' })).status, 201);
+  });
+  await test('equipamentos: editar muda só o que veio, 404 se não existe, ativo:false some da lista', async () => {
+    const env = eqEnv();
+    const { id } = await (await eqPost(env, '/admin/equipamentos', { tipo: 'computador', marca: 'Dell', local: 'Recepção' })).json();
+    assert.strictEqual((await eqPost(env, `/admin/equipamentos/${id}`, { status: 'manutencao' })).status, 200);
+    let e = (await (await eqGet(env, '/admin/equipamentos')).json()).equipamentos[0];
+    assert.strictEqual(e.status, 'manutencao');
+    assert.strictEqual(e.marca, 'Dell');
+    assert.strictEqual(e.local, 'Recepção');
+    assert.strictEqual((await eqPost(env, `/admin/equipamentos/${id}`, { local: null })).status, 200);
+    e = (await (await eqGet(env, '/admin/equipamentos')).json()).equipamentos[0];
+    assert.strictEqual(e.local, null);
+    assert.strictEqual((await eqPost(env, `/admin/equipamentos/${id}`, {})).status, 400);
+    assert.strictEqual((await eqPost(env, '/admin/equipamentos/nao-existe', { marca: 'X' })).status, 404);
+    assert.strictEqual((await eqPost(env, `/admin/equipamentos/${id}`, { ativo: false })).status, 200);
+    assert.strictEqual((await (await eqGet(env, '/admin/equipamentos')).json()).equipamentos.length, 0);
+  });
+  await test('equipamentos: o solicitante só vê os em uso, sem número de série, e precisa de sessão', async () => {
+    const env = eqEnv();
+    await eqPost(env, '/admin/equipamentos', { tipo: 'impressora', tombamento: 'F 1', numero_serie: 'SECRETO-123' });
+    await eqPost(env, '/admin/equipamentos', { tipo: 'impressora', tombamento: 'F 2', status: 'baixado' });
+    const sem = await worker.fetch(req('GET', '/api/equipamentos', { headers: SECRET_HEADERS }), env);
+    assert.strictEqual(sem.status, 401);
+    await d1CreateSolicitante(env, 'Pessoa Equip', emailFor('Pessoa Equip'));
+    const reg = await worker.fetch(req('POST', '/auth/register', { headers: { ...SECRET_HEADERS, 'CF-Connecting-IP': '10.9.9.9' }, body: JSON.stringify({ email: emailFor('Pessoa Equip'), nome: 'Pessoa Equip', password: 'senhaboa123' }) }), env);
+    const token = (await reg.json()).token;
+    const r = await worker.fetch(req('GET', '/api/equipamentos', { headers: comSessao(token) }), env);
+    assert.strictEqual(r.status, 200);
+    const { equipamentos } = await r.json();
+    assert.deepStrictEqual(equipamentos.map(x => x.tombamento), ['F 1']);
+    assert.ok(!('numero_serie' in equipamentos[0]), 'não expõe nº de série ao solicitante');
+  });
+  await test('chamado com equipamento: vincula, conta no inventário e recusa equipamento inválido ou baixado', async () => {
+    const env = eqEnv();
+    const { id: eqId } = await (await eqPost(env, '/admin/equipamentos', { tipo: 'impressora', tombamento: 'F 10' })).json();
+    const { id: baixadoId } = await (await eqPost(env, '/admin/equipamentos', { tipo: 'impressora', tombamento: 'F 11', status: 'baixado' })).json();
+    await d1CreateSolicitante(env, 'Pessoa Vinculo', emailFor('Pessoa Vinculo'));
+    const reg = await worker.fetch(req('POST', '/auth/register', { headers: { ...SECRET_HEADERS, 'CF-Connecting-IP': '10.8.8.8' }, body: JSON.stringify({ email: emailFor('Pessoa Vinculo'), nome: 'Pessoa Vinculo', password: 'senhaboa123' }) }), env);
+    const h = comSessao((await reg.json()).token);
+    const abre = (extra) => worker.fetch(req('POST', '/api/tasks', { headers: h, body: JSON.stringify({ name: 'Imp', custom_fields: tipoOk, ...extra }) }), env);
+
+    const ruim = await abre({ equipamento_id: 'nao-existe' });
+    assert.strictEqual(ruim.status, 400);
+    assert.strictEqual((await abre({ equipamento_id: baixadoId })).status, 400);
+    assert.strictEqual((await abre({ equipamento_id: 12345 })).status, 400);
+    // pedido recusado não consome o throttle de 60s
+    const ok = await abre({ equipamento_id: eqId });
+    assert.strictEqual(ok.status, 200);
+    const corpo = await ok.json();
+    assert.strictEqual(corpo.equipamento_id, eqId);
+    assert.strictEqual((await d1GetChamado(env, corpo.id)).equipamento_id, eqId);
+    const e = (await (await eqGet(env, '/admin/equipamentos')).json()).equipamentos.find(x => x.id === eqId);
+    assert.deepStrictEqual([e.chamadosTotal, e.chamadosAbertos], [1, 1]);
+    // sem equipamento continua funcionando (opcional)
+    await env.SUBSCRIPTIONS.delete('throttle_create_Pessoa Vinculo');
+    const sem = await (await abre({})).json();
+    assert.strictEqual(sem.equipamento_id, null);
+  });
+  await test('chamado criado pelo admin também aceita equipamento', async () => {
+    const env = eqEnv();
+    const { id: eqId } = await (await eqPost(env, '/admin/equipamentos', { tipo: 'monitor' })).json();
+    await d1CreateSolicitante(env, 'Pessoa Admin Eq', emailFor('Pessoa Admin Eq'));
+    const r = await eqPost(env, '/admin/tasks', { name: 'Monitor sem imagem', solicitante: 'Pessoa Admin Eq', tipo: 6, equipamento_id: eqId });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual((await r.json()).equipamento_id, eqId);
+    assert.strictEqual((await eqPost(env, '/admin/tasks', { name: 'X', solicitante: 'Pessoa Admin Eq', equipamento_id: 'fantasma' })).status, 400);
+  });
+  await test('migração de equipamentos: cria tabela e coluna num banco antigo, exige admin e é idempotente', async () => {
+    const raw = new DatabaseSync(':memory:');
+    raw.exec(fs.readFileSync(path.join(__dirname, '..', 'd1', 'schema.sql'), 'utf8'));
+    raw.exec('DROP INDEX idx_chamados_equipamento; ALTER TABLE chamados DROP COLUMN equipamento_id; DROP TABLE equipamentos;');
+    const env = { ...hEnv, CHAMADOS_DB: makeD1FromSqlite(raw), SUBSCRIPTIONS: makeMockKV() };
+    // deploy antes da migração: abrir chamado sem equipamento continua funcionando
+    const antes = await d1CreateChamado(env, { name: 'Antes', priority: 3, tipo: 0, setor: 0, solicitante: 'X' });
+    assert.ok(antes.id);
+    assert.strictEqual((await eqPost(env, '/admin/migrate-schema-equipamentos', {}, {})).status, 403);
+    assert.strictEqual((await eqPost(env, '/admin/migrate-schema-equipamentos', {})).status, 200);
+    assert.strictEqual((await eqPost(env, '/admin/migrate-schema-equipamentos', {})).status, 200);
+    const c = await eqPost(env, '/admin/equipamentos', { tipo: 'rede', tombamento: 'SW-1' });
+    assert.strictEqual(c.status, 201);
+    const { id } = await c.json();
+    const novo = await d1CreateChamado(env, { name: 'Depois', priority: 3, tipo: 0, setor: 0, solicitante: 'X', equipamento_id: id });
+    assert.strictEqual(novo.equipamento_id, id);
+    assert.strictEqual((await d1GetChamado(env, antes.id)).equipamento_id, null);
+  });
+
+  // ---------------- Toners (2026-11-23) ----------------
+  async function tonerEnv() {
+    const env = eqEnv();
+    const imp = await (await eqPost(env, '/admin/equipamentos', { tipo: 'impressora', tombamento: 'F 1' })).json();
+    const mon = await (await eqPost(env, '/admin/equipamentos', { tipo: 'monitor', tombamento: 'F 2' })).json();
+    return { env, imp: imp.id, mon: mon.id };
+  }
+
+  await test('toners: cadastrar exige admin, código e uma impressora do inventário', async () => {
+    const { env, imp, mon } = await tonerEnv();
+    assert.strictEqual((await eqPost(env, '/admin/toners', { equipamento_id: imp, codigo: 'TN-1' }, {})).status, 403);
+    assert.strictEqual((await eqPost(env, '/admin/toners', { equipamento_id: imp })).status, 400);
+    assert.strictEqual((await eqPost(env, '/admin/toners', { codigo: 'TN-1' })).status, 400);
+    assert.strictEqual((await eqPost(env, '/admin/toners', { equipamento_id: 'fantasma', codigo: 'TN-1' })).status, 400);
+    const monitor = await eqPost(env, '/admin/toners', { equipamento_id: mon, codigo: 'TN-1' });
+    assert.strictEqual(monitor.status, 400);
+    assert.match((await monitor.json()).error, /impressora/);
+    for (const corpo of [{ cor: 'verde' }, { capacidade_paginas: -5 }, { capacidade_paginas: 1.5 }, { ciclo_dias_padrao: 99999 }, { codigo: 'x'.repeat(41) }]) {
+      assert.strictEqual((await eqPost(env, '/admin/toners', { equipamento_id: imp, codigo: 'TN-1', ...corpo })).status, 400, JSON.stringify(corpo));
+    }
+    const ok = await eqPost(env, '/admin/toners', { equipamento_id: imp, codigo: 'TN-1060', cor: 'preto', capacidade_paginas: 2600, ciclo_dias_padrao: 45 });
+    assert.strictEqual(ok.status, 201);
+    const lista = await (await eqGet(env, '/admin/toners')).json();
+    assert.strictEqual(lista.toners.length, 1);
+    assert.strictEqual(lista.toners[0].codigo, 'TN-1060');
+    assert.strictEqual(lista.toners[0].tombamento, 'F 1');
+    assert.ok('ip' in lista.toners[0] && 'local' in lista.toners[0] && 'setor' in lista.toners[0], 'a lista traz onde a impressora está');
+    assert.deepStrictEqual(lista.toners[0].recargas, []);
+    assert.strictEqual((await eqGet(env, '/admin/toners', {})).status, 403);
+  });
+  await test('toners: recarga entra na lista em ordem, valida a data e "desfazer" apaga só a mais recente', async () => {
+    const { env, imp } = await tonerEnv();
+    const { id } = await (await eqPost(env, '/admin/toners', { equipamento_id: imp, codigo: 'TN-9' })).json();
+    const D = 86400000, agora = Date.now();
+    assert.strictEqual((await eqPost(env, `/admin/toners/${id}/recarga`, {}, {})).status, 403);
+    assert.strictEqual((await eqPost(env, '/admin/toners/nao-existe/recarga', {})).status, 404);
+    assert.strictEqual((await eqPost(env, `/admin/toners/${id}/recarga`, { feita_em: agora + 5 * D })).status, 400);
+    assert.strictEqual((await eqPost(env, `/admin/toners/${id}/recarga`, { feita_em: 'ontem' })).status, 400);
+    assert.strictEqual((await eqPost(env, `/admin/toners/${id}/recarga`, { feita_em: agora - 60 * D, autor: 'Everson' })).status, 201);
+    assert.strictEqual((await eqPost(env, `/admin/toners/${id}/recarga`, { feita_em: agora - 30 * D })).status, 201);
+    assert.strictEqual((await eqPost(env, `/admin/toners/${id}/recarga`, {})).status, 201); // sem corpo útil = agora
+    let rec = (await (await eqGet(env, '/admin/toners')).json()).toners[0].recargas;
+    assert.strictEqual(rec.length, 3);
+    assert.ok(rec[0] < rec[1] && rec[1] < rec[2], 'em ordem cronológica');
+    assert.strictEqual((await eqPost(env, `/admin/toners/${id}/recarga/desfazer`, {}, {})).status, 403);
+    assert.strictEqual((await eqPost(env, `/admin/toners/${id}/recarga/desfazer`, {})).status, 200);
+    const depois = (await (await eqGet(env, '/admin/toners')).json()).toners[0].recargas;
+    assert.deepStrictEqual(depois, rec.slice(0, 2));
+    await eqPost(env, `/admin/toners/${id}/recarga/desfazer`, {});
+    await eqPost(env, `/admin/toners/${id}/recarga/desfazer`, {});
+    assert.strictEqual((await eqPost(env, `/admin/toners/${id}/recarga/desfazer`, {})).status, 404);
+  });
+  await test('toners: editar muda só o que veio, ativo:false some da lista, 404 se não existe', async () => {
+    const { env, imp } = await tonerEnv();
+    const { id } = await (await eqPost(env, '/admin/toners', { equipamento_id: imp, codigo: 'TN-5', ciclo_dias_padrao: 30 })).json();
+    assert.strictEqual((await eqPost(env, `/admin/toners/${id}`, { cor: 'ciano' })).status, 200);
+    let t = (await (await eqGet(env, '/admin/toners')).json()).toners[0];
+    assert.deepStrictEqual([t.cor, t.codigo, t.ciclo_dias_padrao], ['ciano', 'TN-5', 30]);
+    assert.strictEqual((await eqPost(env, `/admin/toners/${id}`, { ciclo_dias_padrao: null })).status, 200);
+    t = (await (await eqGet(env, '/admin/toners')).json()).toners[0];
+    assert.strictEqual(t.ciclo_dias_padrao, null);
+    assert.strictEqual((await eqPost(env, `/admin/toners/${id}`, { codigo: '' })).status, 400);
+    assert.strictEqual((await eqPost(env, `/admin/toners/${id}`, {})).status, 400);
+    assert.strictEqual((await eqPost(env, '/admin/toners/nao-existe', { cor: 'preto' })).status, 404);
+    assert.strictEqual((await eqPost(env, `/admin/toners/${id}`, { ativo: false })).status, 200);
+    assert.strictEqual((await (await eqGet(env, '/admin/toners')).json()).toners.length, 0);
+  });
+  await test('migração de toners: cria as tabelas num banco antigo, exige admin e é idempotente', async () => {
+    const raw = new DatabaseSync(':memory:');
+    raw.exec(fs.readFileSync(path.join(__dirname, '..', 'd1', 'schema.sql'), 'utf8'));
+    raw.exec('DROP TABLE toner_recargas; DROP TABLE toners;');
+    const env = { ...hEnv, CHAMADOS_DB: makeD1FromSqlite(raw), SUBSCRIPTIONS: makeMockKV() };
+    assert.strictEqual((await eqPost(env, '/admin/migrate-schema-toners', {}, {})).status, 403);
+    assert.strictEqual((await eqPost(env, '/admin/migrate-schema-toners', {})).status, 200);
+    assert.strictEqual((await eqPost(env, '/admin/migrate-schema-toners', {})).status, 200);
+    const imp = await (await eqPost(env, '/admin/equipamentos', { tipo: 'impressora' })).json();
+    assert.strictEqual((await eqPost(env, '/admin/toners', { equipamento_id: imp.id, codigo: 'TN-X' })).status, 201);
+  });
+
+  // ---------------- Leitura de toners pelo IP (agente na rede interna, 2026-11-23) ----------------
+  const AG = { 'X-Agente-Secret': 'segredo-do-agente' };
+  const agEnv = () => ({ ...eqEnv(), TONER_AGENT_SECRET: 'segredo-do-agente' });
+  async function agenteCenario() {
+    const env = agEnv();
+    const imp = (await (await eqPost(env, '/admin/equipamentos', { tipo: 'impressora', tombamento: 'F 1', ip: '192.168.0.10' })).json()).id;
+    await eqPost(env, '/admin/equipamentos', { tipo: 'impressora', tombamento: 'F 2' }); // sem IP: o agente não consulta
+    await eqPost(env, '/admin/equipamentos', { tipo: 'monitor', tombamento: 'F 3', ip: '192.168.0.11' }); // não é impressora
+    await eqPost(env, '/admin/toners', { equipamento_id: imp, codigo: 'TN-P', cor: 'preto' });
+    await eqPost(env, '/admin/toners', { equipamento_id: imp, codigo: 'TN-C', cor: 'ciano' });
+    return { env, imp };
+  }
+
+  await test('IP do equipamento: valida o formato, normaliza e pode ser limpo', async () => {
+    const env = eqEnv();
+    for (const ip of ['abc', '1.2.3', '1.2.3.4.5', '256.1.1.1', '1.2.3.-4', 'a.b.c.d', 123]) {
+      assert.strictEqual((await eqPost(env, '/admin/equipamentos', { tipo: 'impressora', ip })).status, 400, String(ip));
+    }
+    const { id } = await (await eqPost(env, '/admin/equipamentos', { tipo: 'impressora', ip: ' 192.168.001.010 ' })).json();
+    let e = (await (await eqGet(env, '/admin/equipamentos')).json()).equipamentos[0];
+    assert.strictEqual(e.ip, '192.168.1.10');
+    assert.strictEqual((await eqPost(env, `/admin/equipamentos/${id}`, { ip: null })).status, 200);
+    e = (await (await eqGet(env, '/admin/equipamentos')).json()).equipamentos[0];
+    assert.strictEqual(e.ip, null);
+  });
+  await test('IP não vaza para o solicitante (GET /api/equipamentos)', async () => {
+    const env = eqEnv();
+    await eqPost(env, '/admin/equipamentos', { tipo: 'impressora', tombamento: 'F 1', ip: '10.0.0.5' });
+    await d1CreateSolicitante(env, 'Pessoa Ip', emailFor('Pessoa Ip'));
+    const reg = await worker.fetch(req('POST', '/auth/register', { headers: { ...SECRET_HEADERS, 'CF-Connecting-IP': '10.7.7.7' }, body: JSON.stringify({ email: emailFor('Pessoa Ip'), nome: 'Pessoa Ip', password: 'senhaboa123' }) }), env);
+    const r = await worker.fetch(req('GET', '/api/equipamentos', { headers: comSessao((await reg.json()).token) }), env);
+    assert.ok(!JSON.stringify(await r.json()).includes('10.0.0.5'));
+  });
+  await test('agente: sem segredo, com segredo errado ou com o Worker sem TONER_AGENT_SECRET dá 403', async () => {
+    const { env } = await agenteCenario();
+    const get = (e, h) => worker.fetch(req('GET', '/agente/impressoras', { headers: h }), e);
+    const post = (e, h) => worker.fetch(req('POST', '/agente/leituras', { headers: h, body: JSON.stringify({ leituras: [] }) }), e);
+    for (const h of [{}, { 'X-Agente-Secret': 'errado' }, ADM, { 'X-Admin-Secret': 'segredo-do-agente' }]) {
+      assert.strictEqual((await get(env, h)).status, 403);
+      assert.strictEqual((await post(env, h)).status, 403);
+    }
+    const semConfig = { ...env, TONER_AGENT_SECRET: undefined };
+    assert.strictEqual((await get(semConfig, { 'X-Agente-Secret': 'undefined' })).status, 403);
+    assert.strictEqual((await get(semConfig, {})).status, 403);
+    assert.strictEqual((await get(env, AG)).status, 200);
+  });
+  await test('agente: a lista traz só impressoras ativas com IP, e as cores que têm toner cadastrado', async () => {
+    const { env, imp } = await agenteCenario();
+    const { impressoras } = await (await worker.fetch(req('GET', '/agente/impressoras', { headers: AG }), env)).json();
+    assert.strictEqual(impressoras.length, 1);
+    assert.strictEqual(impressoras[0].id, imp);
+    assert.strictEqual(impressoras[0].ip, '192.168.0.10');
+    assert.deepStrictEqual(impressoras[0].cores.sort(), ['ciano', 'preto']);
+  });
+  await test('agente: leitura grava o nível no toner da cor certa, com a hora do servidor, e a lista de toners mostra', async () => {
+    const { env, imp } = await agenteCenario();
+    const antes = Date.now();
+    const r = await worker.fetch(req('POST', '/agente/leituras', { headers: AG, body: JSON.stringify({ leituras: [{ equipamento_id: imp, consultado_em: 1, suprimentos: [{ cor: 'preto', nivel: 18 }, { cor: 'ciano', nivel: 0 }] }] }) }), env);
+    assert.strictEqual(r.status, 200);
+    const corpo = await r.json();
+    assert.strictEqual(corpo.atualizados, 2);
+    assert.deepStrictEqual(corpo.ignorados, []);
+    const toners = (await (await eqGet(env, '/admin/toners')).json()).toners;
+    const preto = toners.find(x => x.cor === 'preto');
+    assert.strictEqual(preto.nivel_percentual, 18);
+    assert.ok(preto.nivel_lido_em >= antes, 'usa a hora do servidor, não o consultado_em do agente');
+    assert.strictEqual(toners.find(x => x.cor === 'ciano').nivel_percentual, 0);
+  });
+  await test('agente: cor sem toner cadastrado, impressora desconhecida e valores absurdos são ignorados e apontados', async () => {
+    const { env, imp } = await agenteCenario();
+    const post = (leituras) => worker.fetch(req('POST', '/agente/leituras', { headers: AG, body: JSON.stringify({ leituras }) }), env);
+    const r = await (await post([
+      { equipamento_id: imp, suprimentos: [{ cor: 'magenta', nivel: 50 }, { cor: 'preto', nivel: 101 }, { cor: 'preto', nivel: -1 }, { cor: 'preto', nivel: 12.5 }, { cor: 'verde', nivel: 10 }, { cor: 'preto', nivel: 40 }] },
+      { equipamento_id: 'fantasma', suprimentos: [{ cor: 'preto', nivel: 10 }] },
+      { suprimentos: [] },
+    ])).json();
+    assert.strictEqual(r.atualizados, 1);
+    assert.strictEqual(r.ignorados.length, 7);
+    assert.ok(r.ignorados.some(i => i.cor === 'magenta' && /sem toner/.test(i.motivo)));
+    assert.ok(r.ignorados.some(i => i.equipamento_id === 'fantasma'));
+    const preto = (await (await eqGet(env, '/admin/toners')).json()).toners.find(x => x.cor === 'preto');
+    assert.strictEqual(preto.nivel_percentual, 40);
+    // corpo inválido e lista grande demais
+    assert.strictEqual((await worker.fetch(req('POST', '/agente/leituras', { headers: AG, body: '{}' }), env)).status, 400);
+    assert.strictEqual((await post(Array.from({ length: 201 }, () => ({ equipamento_id: imp, suprimentos: [] })))).status, 400);
+  });
+  await test('migrações de equipamentos e toners acrescentam as colunas novas em bancos já migrados', async () => {
+    const raw = new DatabaseSync(':memory:');
+    raw.exec(fs.readFileSync(path.join(__dirname, '..', 'd1', 'schema.sql'), 'utf8'));
+    raw.exec('ALTER TABLE equipamentos DROP COLUMN ip; ALTER TABLE toners DROP COLUMN nivel_percentual; ALTER TABLE toners DROP COLUMN nivel_lido_em;');
+    const env = { ...hEnv, CHAMADOS_DB: makeD1FromSqlite(raw), SUBSCRIPTIONS: makeMockKV() };
+    for (const rota of ['/admin/migrate-schema-equipamentos', '/admin/migrate-schema-toners', '/admin/migrate-schema-equipamentos', '/admin/migrate-schema-toners']) {
+      assert.strictEqual((await eqPost(env, rota, {})).status, 200, rota);
+    }
+    const imp = await (await eqPost(env, '/admin/equipamentos', { tipo: 'impressora', ip: '10.1.1.1' })).json();
+    assert.strictEqual((await eqPost(env, '/admin/toners', { equipamento_id: imp.id, codigo: 'T', cor: 'preto' })).status, 201);
+    env.TONER_AGENT_SECRET = 'segredo-do-agente';
+    const r = await (await worker.fetch(req('POST', '/agente/leituras', { headers: AG, body: JSON.stringify({ leituras: [{ equipamento_id: imp.id, suprimentos: [{ cor: 'preto', nivel: 33 }] }] }) }), env)).json();
+    assert.strictEqual(r.atualizados, 1);
+  });
+
   console.log(`\n${passed} passaram, ${failed} falharam`);
   process.exit(failed > 0 ? 1 : 0);
 })();

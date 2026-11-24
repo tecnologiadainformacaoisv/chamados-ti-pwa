@@ -42,11 +42,13 @@ function fulfillJson(route: Route, body: unknown, status = 200) {
 /** Mocks padrão pro app do SOLICITANTE — lista de nomes, sessão, my-tasks, criar chamado. */
 export async function mockSolicitanteRoutes(
   page: Page,
-  opts: { tasks?: ReturnType<typeof makeTask>[]; solicitantes?: string[] } = {}
+  opts: { tasks?: ReturnType<typeof makeTask>[]; solicitantes?: string[]; equipamentos?: Record<string, unknown>[] } = {}
 ) {
   await installFloor(page)
   const tasks = opts.tasks ?? []
   const solicitantes = opts.solicitantes ?? SOLICITANTES
+  // Lista enxuta do select "Equipamento" do Novo Chamado (vazia por padrão: o campo fica escondido).
+  await on(page, "**/api/equipamentos", "GET", (route) => fulfillJson(route, { equipamentos: opts.equipamentos ?? [] }))
 
   await on(page, "**/api/solicitantes", "GET", (route) => fulfillJson(route, { names: solicitantes }))
   await on(page, "**/api/presence", "POST", (route) => fulfillJson(route, { ok: true }))
@@ -110,6 +112,8 @@ export async function mockAdminRoutes(
     metrics?: ReturnType<typeof makeMetrics>
     eventos?: unknown[]
     anexos?: { id: string; name: string; size: number | null; content_type: string | null; url: string }[]
+    equipamentos?: Record<string, unknown>[]
+    toners?: Record<string, unknown>[]
     secret?: string
   } = {}
 ) {
@@ -144,6 +148,12 @@ export async function mockAdminRoutes(
   await on(page, "**/admin/solicitantes", "GET", (route) => fulfillJson(route, { solicitantes: SOLICITANTES.map((name) => ({ name, ativo: 1, created_at: Date.now() })) }))
   await on(page, "**/admin/solicitantes", "POST", (route) => fulfillJson(route, { ok: true }))
   await on(page, /\/admin\/solicitantes\/[^/]+\/ativo/, "POST", (route) => fulfillJson(route, { ok: true }))
+  await on(page, "**/admin/equipamentos", "GET", (route) => fulfillJson(route, { equipamentos: opts.equipamentos ?? [] }))
+  await on(page, "**/admin/equipamentos", "POST", (route) => fulfillJson(route, { id: "eq-novo" }, 201))
+  await on(page, /\/admin\/equipamentos\/[^/]+$/, "POST", (route) => fulfillJson(route, { ok: true }))
+  await on(page, "**/admin/toners", "GET", (route) => fulfillJson(route, { toners: opts.toners ?? [] }))
+  await on(page, "**/admin/toners", "POST", (route) => fulfillJson(route, { id: "toner-novo" }, 201))
+  await on(page, /\/admin\/toners\/[^/]+(\/recarga(\/desfazer)?)?$/, "POST", (route) => fulfillJson(route, { ok: true }))
   await on(page, "**/admin/presenca", "GET", (route) => fulfillJson(route, { agora: Date.now(), janelaMs: 180000, presenca: [{ name: "Henrique", last_seen: Date.now() - 30000, visivel: 1 }] }))
   await on(page, "**/admin/subscribe", "POST", (route) => fulfillJson(route, { ok: true }))
   await on(page, "**/admin/subscribe/test", "POST", (route) => fulfillJson(route, { ok: true }))
@@ -175,7 +185,7 @@ export async function gotoAdminLoggedIn(page: Page, secret = ADMIN_SECRET, linha
  * mobile (<768px, ver use-mobile.ts) a sidebar vira um Sheet escondido por padrão,
  * então precisa abrir o trigger antes do item de nav ficar clicável; em desktop ela
  * já está lá (só em modo ícone, mas presente), o trigger não existe/não faz efeito. */
-export async function abrirSecaoAdmin(page: Page, nome: "Gestão" | "Dashboard" | "Usuários") {
+export async function abrirSecaoAdmin(page: Page, nome: "Gestão" | "Dashboard" | "Inventário" | "Toners" | "Usuários") {
   const item = page.getByRole("button", { name: nome })
   const eraMobile = !(await item.isVisible().catch(() => false))
   if (eraMobile) {

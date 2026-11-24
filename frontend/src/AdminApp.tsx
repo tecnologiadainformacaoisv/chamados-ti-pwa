@@ -9,6 +9,8 @@ import { GateScreen } from "@/components/gate-screen"
 import { GestaoView } from "@/components/gestao-view"
 import { DashboardView } from "@/components/dashboard-view"
 import { UsuariosView } from "@/components/usuarios-view"
+import { InventarioView } from "@/components/inventario-view"
+import { TonersView } from "@/components/toners-view"
 import { AdminNotifBanner } from "@/components/admin-notif-banner"
 import { NovoChamadoAlert } from "@/components/novo-chamado-alert"
 import { useNovosChamados } from "@/hooks/use-novos-chamados"
@@ -37,6 +39,14 @@ const SECAO_META: Record<Secao, { titulo: string; subtitulo: string }> = {
   dashboard: {
     titulo: "Dashboard",
     subtitulo: "Indicadores e relatórios — volume por tipo/setor, SLA e tempo médio de atendimento.",
+  },
+  inventario: {
+    titulo: "Inventário",
+    subtitulo: "Equipamentos da TI e onde cada um está.",
+  },
+  toners: {
+    titulo: "Toners",
+    subtitulo: "Suprimentos do parque de impressão.",
   },
   usuarios: {
     titulo: "Usuários",
@@ -131,6 +141,10 @@ function AdminShell() {
               <GestaoView />
             ) : secaoAtiva === "dashboard" ? (
               <DashboardView />
+            ) : secaoAtiva === "inventario" ? (
+              <InventarioView />
+            ) : secaoAtiva === "toners" ? (
+              <TonersView />
             ) : (
               <UsuariosView />
             )}

@@ -105,3 +105,44 @@ test.describe("Abrir chamado", () => {
     await expect(page.getByText("1000/1000")).toBeVisible()
   })
 })
+
+test.describe("Abrir chamado — equipamento (opcional)", () => {
+  const equipamentos = [
+    { id: "eq-1", tombamento: "F 0001", tipo: "impressora", marca: "Brother", modelo: "HL-1222", setor: 1, local: "Sala 3" },
+    { id: "eq-2", tombamento: "F 0002", tipo: "monitor", marca: "BPC", modelo: null, setor: 0, local: null },
+  ]
+
+  test("sem equipamento cadastrado, o campo nem aparece", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    await gotoSolicitanteLoggedIn(page)
+    await expect(page.getByRole("button", { name: "Abrir Chamado" })).toBeVisible()
+    await expect(page.getByText("Equipamento (opcional)")).toHaveCount(0)
+  })
+
+  test("escolher o equipamento manda equipamento_id; não escolher não manda nada", async ({ page }) => {
+    await mockSolicitanteRoutes(page, { equipamentos })
+    const corpos: Record<string, unknown>[] = []
+    await page.route("**/api/tasks", (route) => {
+      if (route.request().method() !== "POST") return route.fallback()
+      corpos.push(route.request().postDataJSON())
+      return route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ id: "t1", name: "x", status: { status: "aberto" }, assignees: [{ id: 170628721 }], date_created: String(Date.now()), custom_fields: [] }) })
+    })
+    await gotoSolicitanteLoggedIn(page)
+    await preencherFormBasico(page, "Notebooks")
+    await page.locator("#equipamento").click()
+    await page.getByRole("option", { name: /F 0001 · Impressora Brother HL-1222/ }).click()
+    await page.getByRole("button", { name: "Abrir Chamado" }).click()
+    await expect(page.getByRole("heading", { name: "Chamado aberto!" }).last()).toBeVisible()
+    expect(corpos[0].equipamento_id).toBe("eq-1")
+  })
+
+  test("se a lista de equipamentos falhar, o formulário continua funcionando sem o campo", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    await page.route("**/api/equipamentos", (route) => route.fulfill({ status: 500, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: "{}" }))
+    await gotoSolicitanteLoggedIn(page)
+    await preencherFormBasico(page, "Notebooks")
+    await expect(page.getByText("Equipamento (opcional)")).toHaveCount(0)
+    await page.getByRole("button", { name: "Abrir Chamado" }).click()
+    await expect(page.getByRole("heading", { name: "Chamado aberto!" }).last()).toBeVisible()
+  })
+})

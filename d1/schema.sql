@@ -39,10 +39,13 @@ CREATE TABLE IF NOT EXISTS chamados (
                                       -- POST /admin/migrate-schema-chamados-nota) numa tabela
                                       -- que já existia — este CREATE TABLE só importa pra um
                                       -- banco novo do zero.
-  numero        INTEGER             -- 2026-11-11: número sequencial legível ("#0142") pra citar o
+  numero        INTEGER,            -- 2026-11-11: número sequencial legível ("#0142") pra citar o
                                       -- chamado por telefone/WhatsApp (o id é UUID). Atribuído no
                                       -- INSERT (MAX+1). Em produção, via
                                       -- POST /admin/migrate-schema-chamados-numero.
+  equipamento_id TEXT                 -- 2026-11-23: equipamento (tabela `equipamentos`) a que o chamado
+                                      -- se refere; NULL = sem vínculo (opcional). Sem FOREIGN KEY, como
+                                      -- o resto. Em produção, via POST /admin/migrate-schema-equipamentos.
 );
 
 -- Índices nos mesmos campos que /admin/tasks já filtra hoje (status, setor, tipo,
@@ -166,3 +169,54 @@ CREATE TABLE IF NOT EXISTS presenca_abas (
   saiu      INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (name, tab_id)
 );
+
+-- Inventário de equipamentos (2026-11-23, ideia do estudo do OS800): o que a TI mantém e onde está.
+-- `ativo = 0` tira da lista sem perder o histórico dos chamados ligados a ele.
+-- Sem FOREIGN KEY (ver nota de chamado_assignees).
+CREATE TABLE IF NOT EXISTS equipamentos (
+  id           TEXT PRIMARY KEY,                 -- crypto.randomUUID()
+  tombamento   TEXT,                             -- etiqueta (ex.: "F 0123"); único quando preenchido
+  tipo         TEXT NOT NULL,                    -- impressora | computador | monitor | notebook | rede | outro
+  marca        TEXT,
+  modelo       TEXT,
+  numero_serie TEXT,
+  origem       TEXT NOT NULL DEFAULT 'patrimonio', -- patrimonio | locado
+  fornecedor   TEXT,                             -- quando locado
+  setor        INTEGER,                          -- orderindex em SETORES
+  local        TEXT,                             -- texto livre ("Sala 3, mesa 2")
+  ip           TEXT,                             -- IPv4 na rede interna (impressoras: consulta de toner pelo agente)
+  status       TEXT NOT NULL DEFAULT 'ativo',    -- ativo | manutencao | reserva | baixado
+  observacao   TEXT,
+  ativo        INTEGER NOT NULL DEFAULT 1,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_equipamentos_tombamento ON equipamentos (tombamento) WHERE tombamento IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_equipamentos_tipo   ON equipamentos (tipo);
+CREATE INDEX IF NOT EXISTS idx_chamados_equipamento ON chamados (equipamento_id);
+
+-- Toners (2026-11-23, ideia do estudo do OS800): cada toner é de UMA impressora (equipamentos.tipo =
+-- 'impressora'); cada troca/recarga vira uma linha em toner_recargas, e o ciclo médio sai da diferença
+-- entre recargas seguidas (a situação crítico/atenção/ok é calculada no cliente). Sem FOREIGN KEY.
+CREATE TABLE IF NOT EXISTS toners (
+  id                 TEXT PRIMARY KEY,
+  equipamento_id     TEXT NOT NULL,
+  codigo             TEXT NOT NULL,                 -- código do fabricante (ex.: "TN-1060")
+  cor                TEXT NOT NULL DEFAULT 'preto', -- preto | ciano | magenta | amarelo
+  capacidade_paginas INTEGER,
+  ciclo_dias_padrao  INTEGER,                       -- usado enquanto não houver 2 recargas
+  observacao         TEXT,
+  nivel_percentual   INTEGER,                       -- 0-100, lido da impressora pelo agente (NULL = nunca lido)
+  nivel_lido_em      INTEGER,                       -- epoch ms (hora do servidor) da última leitura
+  ativo              INTEGER NOT NULL DEFAULT 1,
+  created_at         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_toners_equipamento ON toners (equipamento_id);
+CREATE TABLE IF NOT EXISTS toner_recargas (
+  id         TEXT PRIMARY KEY,
+  toner_id   TEXT NOT NULL,
+  feita_em   INTEGER NOT NULL,
+  autor      TEXT,
+  observacao TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_toner_recargas_toner ON toner_recargas (toner_id, feita_em);

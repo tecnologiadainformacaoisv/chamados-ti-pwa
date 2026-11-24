@@ -1,0 +1,16 @@
+{
+  "name": "agente-toners",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lê o nível de toner das impressoras pelo IP (SNMP) e envia para o painel de Chamados de TI.",
+  "type": "module",
+  "scripts": {
+    "start": "node agente.mjs",
+    "uma-vez": "node agente.mjs --uma-vez",
+    "test": "node teste.mjs"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "net-snmp": "^3.20.0"
+  }
+}

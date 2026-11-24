@@ -111,18 +111,51 @@ function semear(db) {
   }
 }
 
+// Inventário e toners de exemplo (2026-11-23). Roda separado de semear(): num banco de teste que já
+// existia, só acrescenta isto, sem apagar nem duplicar nada.
+function semearInventario(db) {
+  const agora = Date.now()
+  const DIA = 24 * 60 * MIN
+  const equip = (tomb, tipo, marca, modelo, origem, fornecedor, setor, local, status, ip = null) => {
+    const id = crypto.randomUUID()
+    db.prepare('INSERT INTO equipamentos (id, tombamento, tipo, marca, modelo, origem, fornecedor, setor, local, status, ip, ativo, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?)')
+      .run(id, tomb, tipo, marca, modelo, origem, fornecedor, setor, local, status, ip, agora, agora)
+    return id
+  }
+  const imp1 = equip('F 0001', 'impressora', 'Brother', 'HL-L1222-V', 'locado', 'Locadora Exemplo', 0, 'Sala de reuniões', 'ativo', '192.168.0.10')
+  const imp2 = equip('F 0002', 'impressora', 'Brother', 'DCP-L2540DW', 'patrimonio', null, 1, 'Recepção', 'ativo', '192.168.0.11')
+  const imp3 = equip('F 0003', 'impressora', 'Epson', 'L3250', 'patrimonio', null, 3, 'Financeiro', 'manutencao', '192.168.0.12')
+  equip('F 0010', 'monitor', 'BPC', 'LED 20WV', 'locado', 'Locadora Exemplo', 0, 'Mesa da diretoria', 'ativo')
+  equip('F 0020', 'computador', 'Dell', 'OptiPlex 3080', 'patrimonio', null, 2, 'RH', 'reserva')
+  const toner = (equipId, codigo, cor, capacidade, ciclo, recargasHa) => {
+    const id = crypto.randomUUID()
+    db.prepare('INSERT INTO toners (id, equipamento_id, codigo, cor, capacidade_paginas, ciclo_dias_padrao, ativo, created_at) VALUES (?,?,?,?,?,?,1,?)')
+      .run(id, equipId, codigo, cor, capacidade, ciclo, agora)
+    for (const d of recargasHa) db.prepare('INSERT INTO toner_recargas (id, toner_id, feita_em, autor) VALUES (?,?,?,?)').run(crypto.randomUUID(), id, agora - d * DIA, 'Everson')
+  }
+  toner(imp1, 'TN-1060', 'preto', 1000, null, [92, 48])        // ciclo real ~44 dias, última há 48: crítico
+  toner(imp2, 'TN-2370', 'preto', 2600, null, [70, 40, 10])    // ciclo 30 dias, última há 10: ok
+  toner(imp3, 'T664-AM', 'amarelo', 4500, 40, [35])            // ciclo padrão 40, última há 35: atenção
+  toner(imp3, 'T664-CI', 'ciano', 4500, null, [])              // sem histórico
+}
+
 export async function iniciarBackend({ reset = false, silencioso = false } = {}) {
   const pasta = path.join(AQUI, '..', '.dev-data')
   fs.mkdirSync(pasta, { recursive: true })
   const arquivo = path.join(pasta, 'dev.db')
   if (reset) for (const f of [arquivo, arquivo + '-wal', arquivo + '-shm']) fs.rmSync(f, { force: true })
   const db = new DatabaseSync(arquivo)
+  // Banco de teste criado antes do Inventário não tem esta coluna, e o schema cria um índice nela.
+  for (const alter of ['ALTER TABLE chamados ADD COLUMN equipamento_id TEXT', 'ALTER TABLE equipamentos ADD COLUMN ip TEXT', 'ALTER TABLE toners ADD COLUMN nivel_percentual INTEGER', 'ALTER TABLE toners ADD COLUMN nivel_lido_em INTEGER']) {
+    try { db.exec(alter) } catch { /* já existe, ou a tabela ainda não existe */ }
+  }
   db.exec(fs.readFileSync(path.join(RAIZ, 'd1', 'schema.sql'), 'utf8'))
   const jaTem = db.prepare('SELECT COUNT(*) AS n FROM solicitantes').get().n
   if (!jaTem) semear(db)
+  if (!db.prepare('SELECT COUNT(*) AS n FROM equipamentos').get().n) semearInventario(db)
 
   const worker = (await import(pathToFileURL(path.join(RAIZ, 'push-worker.js')).href)).default
-  const env = { SUBSCRIBE_SECRET: APP_SECRET, ADMIN_SECRET, SUBSCRIPTIONS: makeKV(), CHAMADOS_DB: makeD1(db), ANEXOS: makeR2() }
+  const env = { SUBSCRIBE_SECRET: APP_SECRET, ADMIN_SECRET, TONER_AGENT_SECRET: 'agente-teste-local', SUBSCRIPTIONS: makeKV(), CHAMADOS_DB: makeD1(db), ANEXOS: makeR2() }
 
   const servidor = http.createServer(async (req, res) => {
     try {

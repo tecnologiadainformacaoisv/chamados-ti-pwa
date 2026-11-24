@@ -124,6 +124,8 @@ export type CreateTaskPayload = {
   due_date_time: true
   assignees: number[]
   custom_fields: { id: string; value: number }[]
+  /** Opcional (2026-11-23): equipamento do inventário a que o chamado se refere. */
+  equipamento_id?: string
 }
 
 export async function createTask(sessionToken: string, payload: CreateTaskPayload): Promise<Task> {

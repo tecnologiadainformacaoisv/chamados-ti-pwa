@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutDashboard, Users } from "lucide-react"
+import { ClipboardList, LayoutDashboard, Monitor, Printer, Users } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -22,11 +22,13 @@ import iconIsv from "@/assets/icon-isv.svg"
 // import permite o Rollup fazer tree-shaking do resto.
 import { version } from "../../package.json"
 
-export type Secao = "gestao" | "dashboard" | "usuarios"
+export type Secao = "gestao" | "dashboard" | "inventario" | "toners" | "usuarios"
 
 const NAV_ITEMS: { id: Secao; label: string; icon: typeof ClipboardList }[] = [
   { id: "gestao", label: "Gestão", icon: ClipboardList },
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "inventario", label: "Inventário", icon: Monitor },
+  { id: "toners", label: "Toners", icon: Printer },
   // Fase M1 (2026-08-13, migração de saída da ClickUp) — antes disso, a lista de
   // solicitantes só existia como custom field dentro da ClickUp; agora a TI gerencia
   // aqui direto.

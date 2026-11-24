@@ -86,10 +86,13 @@
       $("disp").value = localStorage.getItem("lado_disp") || "lado"
 
       async function auth(path, email) {
+        // /auth/register exige o nome completo (desde 2026-11-12); aqui é o nome do seletor.
+        const sel = $("quem")
+        const nome = sel.options[sel.selectedIndex]?.textContent
         const r = await fetch(`${API}/auth${path}`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-App-Secret": APP_SECRET },
-          body: JSON.stringify({ email, password: SENHA }),
+          body: JSON.stringify({ email, password: SENHA, nome }),
         })
         return { status: r.status, dados: await r.json().catch(() => ({})) }
       }

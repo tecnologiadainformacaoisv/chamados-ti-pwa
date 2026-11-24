@@ -180,6 +180,11 @@ async function routeRequest(request, env, ctx) {
 
     const { pathname } = new URL(request.url);
 
+    // Agente de leitura de toners (2026-11-23): programa na rede interna que consulta as impressoras
+    // pelo IP e manda o nível para cá. Segredo PRÓPRIO (TONER_AGENT_SECRET), nunca o de admin.
+    if (pathname === '/agente/impressoras' && request.method === 'GET') return handleAgenteListaImpressoras(request, env);
+    if (pathname === '/agente/leituras' && request.method === 'POST') return handleAgenteLeituras(request, env);
+
     if (request.method === 'POST') {
       if (pathname === '/auth/register') return handleRegister(request, env, ctx);
       if (pathname === '/auth/register-externo') return handleRegisterExterno(request, env, ctx);
@@ -224,6 +229,18 @@ async function routeRequest(request, env, ctx) {
       if (pathname === '/admin/migrate-schema-solicitantes-origem') return handleAdminMigrateSchemaSolicitantesOrigem(request, env);
       if (pathname === '/admin/migrate-schema-chamados-nota') return handleAdminMigrateSchemaChamadosNota(request, env);
       if (pathname === '/admin/migrate-schema-chamados-numero') return handleAdminMigrateSchemaChamadosNumero(request, env);
+      if (pathname === '/admin/migrate-schema-equipamentos') return handleAdminMigrateSchemaEquipamentos(request, env);
+      if (pathname === '/admin/migrate-schema-toners') return handleAdminMigrateSchemaToners(request, env);
+      if (pathname === '/admin/toners') return handleAdminSaveToner(request, env, null);
+      const tonerRecargaMatch = pathname.match(/^\/admin\/toners\/([^/]+)\/recarga$/);
+      if (tonerRecargaMatch) return handleAdminRegistrarRecarga(request, env, tonerRecargaMatch[1]);
+      const tonerDesfazerMatch = pathname.match(/^\/admin\/toners\/([^/]+)\/recarga\/desfazer$/);
+      if (tonerDesfazerMatch) return handleAdminDesfazerRecarga(request, env, tonerDesfazerMatch[1]);
+      const tonerSaveMatch = pathname.match(/^\/admin\/toners\/([^/]+)$/);
+      if (tonerSaveMatch) return handleAdminSaveToner(request, env, tonerSaveMatch[1]);
+      if (pathname === '/admin/equipamentos') return handleAdminSaveEquipamento(request, env, null);
+      const equipSaveMatch = pathname.match(/^\/admin\/equipamentos\/([^/]+)$/);
+      if (equipSaveMatch) return handleAdminSaveEquipamento(request, env, equipSaveMatch[1]);
       if (pathname === '/admin/solicitantes') return handleAdminCreateSolicitante(request, env);
       if (pathname === '/admin/solicitantes/emails/bulk') return handleAdminBulkSetSolicitanteEmails(request, env);
       const solAtivoMatch = pathname.match(/^\/admin\/solicitantes\/([^/]+)\/ativo$/);
@@ -255,6 +272,9 @@ async function routeRequest(request, env, ctx) {
       if (pathname === '/admin/metrics')     return handleAdminMetrics(request, env);
       if (pathname === '/admin/solicitantes') return handleAdminListSolicitantes(request, env);
       if (pathname === '/admin/presenca')    return handleAdminPresenca(request, env);
+      if (pathname === '/admin/equipamentos') return handleAdminListEquipamentos(request, env);
+      if (pathname === '/admin/toners')      return handleAdminListToners(request, env);
+      if (pathname === '/api/equipamentos')  return handleListEquipamentosSolicitante(request, env);
       const eventosGetMatch = pathname.match(/^\/admin\/tasks\/([^/]+)\/eventos$/);
       if (eventosGetMatch) return handleAdminListEventos(request, env, eventosGetMatch[1]);
       const anexoMatch = pathname.match(/^\/api\/anexos\/([^/]+)$/);
@@ -411,6 +431,9 @@ async function handleCreateTask(request, env) {
   if (assigneeIds.some(n => !Number.isInteger(n) || n <= 0)) {
     return jsonRes({ error: 'lista de atendentes inválida' }, 400);
   }
+  // Equipamento (opcional, 2026-11-23): se vier, tem que existir e estar em uso.
+  const equip = await resolveEquipamentoId(env, payload.equipamento_id);
+  if (equip.erro) return jsonRes({ error: equip.erro }, 400);
   // Marca o throttle antes de gravar (cobre o duplo-clique concorrente); desfeito se falhar.
   await env.SUBSCRIPTIONS.put(throttleKey, '1', { expirationTtl: 60 });
   let row;
@@ -429,6 +452,7 @@ async function handleCreateTask(request, env) {
       due_date: dueDate,
       assignee_id: assigneeIds[0] ?? null,
       assignee_ids: assigneeIds,
+      equipamento_id: equip.id,
     });
   } catch (err) {
     // Falha de gravação não pode travar a pessoa por 60 s: desfaz o throttle.
@@ -1029,10 +1053,14 @@ async function handleAdminCreateTask(request, env) {
   const prio     = CATEGORIA_PRIORIDADE[tipoIdx] ?? 3;
   const dueDate  = Date.now() + (PRIORITY_SLA_MS[prio] ?? PRIORITY_SLA_MS[3]);
 
+  const equip = await resolveEquipamentoId(env, body.equipamento_id);
+  if (equip.erro) return jsonRes({ error: equip.erro }, 400);
+
   let row;
   try {
     row = await d1CreateChamado(env, {
       name,
+      equipamento_id: equip.id,
       description: typeof body.description === 'string' ? body.description : null,
       status: 'aberto',
       priority: prio,
@@ -1722,6 +1750,18 @@ async function d1CreateChamado(env, data) {
   }
   // Devolve a linha COM o número que o banco atribuiu (o INSERT calcula no servidor).
   row.numero = null;
+  // Vínculo com o equipamento (2026-11-23): UPDATE à parte, best-effort. Se a coluna ainda não
+  // existir (deploy antes de POST /admin/migrate-schema-equipamentos) o chamado já foi criado,
+  // só fica sem o vínculo — nunca derruba a abertura.
+  row.equipamento_id = null;
+  if (data.equipamento_id) {
+    try {
+      await env.CHAMADOS_DB.prepare('UPDATE chamados SET equipamento_id = ? WHERE id = ?').bind(data.equipamento_id, row.id).run();
+      row.equipamento_id = data.equipamento_id;
+    } catch (err) {
+      console.error(`d1CreateChamado: vínculo com equipamento falhou (${err.message})`);
+    }
+  }
   if (!semColuna) {
     const salvo = await env.CHAMADOS_DB.prepare('SELECT numero FROM chamados WHERE id = ?').bind(row.id).first();
     row.numero = salvo?.numero ?? null;
@@ -1808,6 +1848,7 @@ function d1RowToTaskShape(row) {
     solicitante: row.solicitante || null,
     nota: row.nota ?? null,
     numero: row.numero ?? null,
+    equipamento_id: row.equipamento_id ?? null,
     due_date: row.due_date != null ? String(row.due_date) : null,
     date_created: String(row.date_created),
     date_updated: String(row.updated_at),
@@ -2769,6 +2810,407 @@ async function handleAdminMigrateSchemaChamadosNumero(request, env) {
 }
 
 // =====================================================================
+// INVENTÁRIO DE EQUIPAMENTOS (2026-11-23, ideia do estudo do OS800)
+//   GET  /admin/equipamentos          lista (ADMIN_SECRET), com nº de chamados por equipamento
+//   POST /admin/equipamentos          cria (ADMIN_SECRET)
+//   POST /admin/equipamentos/:id      edita; `ativo:false` tira da lista sem apagar histórico
+//   GET  /api/equipamentos            lista enxuta pro select do "Novo chamado" (sessão)
+//   POST /admin/migrate-schema-equipamentos   cria a tabela e a coluna chamados.equipamento_id
+// Equipamento no chamado é OPCIONAL: não trava a abertura enquanto o inventário está vazio.
+// =====================================================================
+const EQUIP_TIPOS   = ['impressora', 'computador', 'monitor', 'notebook', 'rede', 'outro'];
+const EQUIP_ORIGENS = ['patrimonio', 'locado'];
+const EQUIP_STATUS  = ['ativo', 'manutencao', 'reserva', 'baixado'];
+
+// undefined = campo ausente (não mexe); null/'' = limpar; string = valor. Lança Error se inválido.
+function equipTexto(v, max, nome) {
+  if (v === undefined) return undefined;
+  if (v === null || v === '') return null;
+  if (typeof v !== 'string') throw new Error(`${nome} inválido`);
+  const t = v.trim();
+  if (t.length > max) throw new Error(`${nome} muito longo (máximo ${max} caracteres)`);
+  return t || null;
+}
+
+// IPv4 (4 números de 0 a 255). undefined = não mexe; null/'' = limpar.
+function equipIp(v) {
+  const t = equipTexto(v, 15, 'IP');
+  if (t === undefined || t === null) return t;
+  const partes = t.split('.');
+  if (partes.length !== 4 || partes.some(p => !/^\d{1,3}$/.test(p) || Number(p) > 255)) {
+    throw new Error('IP inválido (use o formato 192.168.0.10)');
+  }
+  return partes.map(Number).join('.');
+}
+
+// Valida o equipamento de um chamado novo. Devolve { id } (ou { id: null } se não veio) ou { erro }.
+async function resolveEquipamentoId(env, valor) {
+  if (valor == null || valor === '') return { id: null };
+  if (typeof valor !== 'string' || valor.length > 64) return { erro: 'equipamento inválido' };
+  try {
+    const eq = await env.CHAMADOS_DB.prepare(`SELECT id FROM equipamentos WHERE id = ? AND ativo = 1 AND status != 'baixado'`).bind(valor).first();
+    return eq ? { id: eq.id } : { erro: 'equipamento não encontrado' };
+  } catch {
+    return { erro: 'equipamento não encontrado' };
+  }
+}
+
+async function handleAdminListEquipamentos(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  const { results } = await env.CHAMADOS_DB.prepare(`SELECT * FROM equipamentos WHERE ativo = 1 ORDER BY tipo, tombamento, modelo`).all();
+  // Chamados por equipamento. Antes da migração a coluna não existe: devolve a lista com zeros.
+  const contagem = new Map();
+  try {
+    const { results: cs } = await env.CHAMADOS_DB.prepare(
+      `SELECT equipamento_id, COUNT(*) AS total, SUM(CASE WHEN status != 'encerrado' THEN 1 ELSE 0 END) AS abertos
+         FROM chamados WHERE equipamento_id IS NOT NULL GROUP BY equipamento_id`
+    ).all();
+    for (const c of cs || []) contagem.set(c.equipamento_id, c);
+  } catch { /* coluna ainda não migrada */ }
+  return jsonRes({
+    equipamentos: (results || []).map(e => ({
+      ...e,
+      chamadosTotal: contagem.get(e.id)?.total ?? 0,
+      chamadosAbertos: contagem.get(e.id)?.abertos ?? 0,
+    })),
+  });
+}
+
+async function handleListEquipamentosSolicitante(request, env) {
+  if (!hasValidSecret(request, env)) return unauthorized();
+  const session = await requireSession(request, env);
+  if (!session) return sessionInvalid();
+  const { results } = await env.CHAMADOS_DB.prepare(
+    `SELECT id, tombamento, tipo, marca, modelo, setor, local FROM equipamentos
+      WHERE ativo = 1 AND status != 'baixado' ORDER BY tipo, tombamento, modelo`
+  ).all();
+  return jsonRes({ equipamentos: results || [] });
+}
+
+async function handleAdminSaveEquipamento(request, env, id) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  if (!body || typeof body !== 'object') return jsonRes({ error: 'corpo inválido' }, 400);
+
+  let d;
+  try {
+    d = {
+      tombamento:   equipTexto(body.tombamento, 40, 'tombamento'),
+      marca:        equipTexto(body.marca, 60, 'marca'),
+      modelo:       equipTexto(body.modelo, 80, 'modelo'),
+      numero_serie: equipTexto(body.numero_serie, 80, 'número de série'),
+      fornecedor:   equipTexto(body.fornecedor, 80, 'fornecedor'),
+      local:        equipTexto(body.local, 120, 'local'),
+      ip:           equipIp(body.ip),
+      observacao:   equipTexto(body.observacao, 500, 'observação'),
+    };
+    for (const [campo, lista, nome] of [['tipo', EQUIP_TIPOS, 'tipo'], ['origem', EQUIP_ORIGENS, 'origem'], ['status', EQUIP_STATUS, 'situação']]) {
+      if (body[campo] === undefined) continue;
+      if (!lista.includes(body[campo])) throw new Error(`${nome} inválido`);
+      d[campo] = body[campo];
+    }
+    if (body.setor !== undefined) {
+      if (body.setor !== null && (!Number.isInteger(body.setor) || body.setor < 0 || body.setor > 99)) throw new Error('setor inválido');
+      d.setor = body.setor;
+    }
+  } catch (e) {
+    return jsonRes({ error: e.message }, 400);
+  }
+
+  const agora = Date.now();
+  try {
+    if (id === null) {
+      if (!d.tipo) return jsonRes({ error: 'tipo é obrigatório' }, 400);
+      const novo = crypto.randomUUID();
+      await env.CHAMADOS_DB.prepare(
+        `INSERT INTO equipamentos (id, tombamento, tipo, marca, modelo, numero_serie, origem, fornecedor, setor, local, ip, status, observacao, ativo, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+      ).bind(novo, d.tombamento ?? null, d.tipo, d.marca ?? null, d.modelo ?? null, d.numero_serie ?? null,
+             d.origem ?? 'patrimonio', d.fornecedor ?? null, d.setor ?? null, d.local ?? null, d.ip ?? null,
+             d.status ?? 'ativo', d.observacao ?? null, agora, agora).run();
+      return jsonRes({ id: novo }, 201);
+    }
+    const sets = [];
+    const binds = [];
+    for (const [k, v] of Object.entries(d)) {
+      if (v === undefined) continue;
+      sets.push(`${k} = ?`); binds.push(v);
+    }
+    if (body.ativo !== undefined) { sets.push('ativo = ?'); binds.push(body.ativo ? 1 : 0); }
+    if (!sets.length) return jsonRes({ error: 'nada para atualizar' }, 400);
+    sets.push('updated_at = ?'); binds.push(agora);
+    const r = await env.CHAMADOS_DB.prepare(`UPDATE equipamentos SET ${sets.join(', ')} WHERE id = ?`).bind(...binds, id).run();
+    if (!r.meta?.changes) return jsonRes({ error: 'equipamento não encontrado' }, 404);
+    return jsonRes({ ok: true });
+  } catch (err) {
+    if (/UNIQUE/i.test(String(err.message))) return jsonRes({ error: 'já existe um equipamento com esse tombamento' }, 409);
+    return jsonRes({ error: `não foi possível salvar: ${err.message}` }, 400);
+  }
+}
+
+async function handleAdminMigrateSchemaEquipamentos(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  try {
+    await env.CHAMADOS_DB.batch([
+      env.CHAMADOS_DB.prepare(`CREATE TABLE IF NOT EXISTS equipamentos (
+        id TEXT PRIMARY KEY, tombamento TEXT, tipo TEXT NOT NULL, marca TEXT, modelo TEXT, numero_serie TEXT,
+        origem TEXT NOT NULL DEFAULT 'patrimonio', fornecedor TEXT, setor INTEGER, local TEXT, ip TEXT,
+        status TEXT NOT NULL DEFAULT 'ativo', observacao TEXT, ativo INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`),
+      env.CHAMADOS_DB.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_equipamentos_tombamento ON equipamentos (tombamento) WHERE tombamento IS NOT NULL`),
+      env.CHAMADOS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_equipamentos_tipo ON equipamentos (tipo)`),
+    ]);
+  } catch (err) {
+    return jsonRes({ error: `migração de schema falhou (equipamentos): ${err.message}` }, 500);
+  }
+  for (const [tabela, coluna] of [['chamados', 'equipamento_id TEXT'], ['equipamentos', 'ip TEXT']]) {
+    try {
+      await env.CHAMADOS_DB.prepare(`ALTER TABLE ${tabela} ADD COLUMN ${coluna}`).run();
+    } catch (err) {
+      if (!/duplicate column/i.test(err.message)) return jsonRes({ error: `migração de schema falhou (${tabela}.${coluna}): ${err.message}` }, 500);
+    }
+  }
+  try {
+    await env.CHAMADOS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_chamados_equipamento ON chamados (equipamento_id)`).run();
+  } catch (err) {
+    return jsonRes({ error: `migração de schema falhou (índice): ${err.message}` }, 500);
+  }
+  return jsonRes({ ok: true });
+}
+
+// =====================================================================
+// TONERS (2026-11-23, ideia do estudo do OS800)
+//   GET  /admin/toners                          lista com as datas de recarga de cada um
+//   POST /admin/toners                          cadastra (toner de uma impressora do Inventário)
+//   POST /admin/toners/:id                      edita; `ativo:false` tira da lista
+//   POST /admin/toners/:id/recarga              registra uma troca/recarga (padrão: agora)
+//   POST /admin/toners/:id/recarga/desfazer     apaga a recarga mais recente (clique errado)
+//   POST /admin/migrate-schema-toners           cria as tabelas
+// Tudo com ADMIN_SECRET. A situação (crítico/atenção/ok) é calculada no frontend.
+// =====================================================================
+const TONER_CORES = ['preto', 'ciano', 'magenta', 'amarelo'];
+
+function inteiroPositivoOuNulo(v, max, nome) {
+  if (v === undefined) return undefined;
+  if (v === null || v === '') return null;
+  if (!Number.isInteger(v) || v <= 0 || v > max) throw new Error(`${nome} precisa ser um número inteiro de 1 a ${max}`);
+  return v;
+}
+
+async function handleAdminListToners(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  const { results: toners } = await env.CHAMADOS_DB.prepare(
+    `SELECT t.*, e.tombamento, e.marca, e.modelo, e.setor, e.local, e.ip
+       FROM toners t LEFT JOIN equipamentos e ON e.id = t.equipamento_id
+      WHERE t.ativo = 1 ORDER BY t.created_at`
+  ).all();
+  const { results: recargas } = await env.CHAMADOS_DB.prepare(
+    `SELECT r.toner_id, r.feita_em FROM toner_recargas r JOIN toners t ON t.id = r.toner_id WHERE t.ativo = 1 ORDER BY r.feita_em`
+  ).all();
+  const porToner = new Map();
+  for (const r of recargas || []) {
+    if (!porToner.has(r.toner_id)) porToner.set(r.toner_id, []);
+    porToner.get(r.toner_id).push(r.feita_em);
+  }
+  return jsonRes({ toners: (toners || []).map(t => ({ ...t, recargas: porToner.get(t.id) ?? [] })) });
+}
+
+async function handleAdminSaveToner(request, env, id) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  if (!body || typeof body !== 'object') return jsonRes({ error: 'corpo inválido' }, 400);
+
+  let d;
+  try {
+    d = {
+      codigo: equipTexto(body.codigo, 40, 'código do toner'),
+      observacao: equipTexto(body.observacao, 300, 'observação'),
+      capacidade_paginas: inteiroPositivoOuNulo(body.capacidade_paginas, 1_000_000, 'capacidade'),
+      ciclo_dias_padrao: inteiroPositivoOuNulo(body.ciclo_dias_padrao, 3650, 'ciclo'),
+    };
+    if (body.cor !== undefined) {
+      if (!TONER_CORES.includes(body.cor)) throw new Error('cor inválida');
+      d.cor = body.cor;
+    }
+    if (body.equipamento_id !== undefined) {
+      if (typeof body.equipamento_id !== 'string' || body.equipamento_id.length > 64) throw new Error('impressora inválida');
+      d.equipamento_id = body.equipamento_id;
+    }
+  } catch (e) {
+    return jsonRes({ error: e.message }, 400);
+  }
+  if (d.codigo === null) return jsonRes({ error: 'o código do toner é obrigatório' }, 400);
+
+  if (d.equipamento_id !== undefined) {
+    const eq = await env.CHAMADOS_DB.prepare(`SELECT tipo FROM equipamentos WHERE id = ? AND ativo = 1`).bind(d.equipamento_id).first();
+    if (!eq) return jsonRes({ error: 'impressora não encontrada' }, 400);
+    if (eq.tipo !== 'impressora') return jsonRes({ error: 'toner só pode ser ligado a uma impressora' }, 400);
+  }
+
+  try {
+    if (id === null) {
+      if (!d.codigo) return jsonRes({ error: 'o código do toner é obrigatório' }, 400);
+      if (!d.equipamento_id) return jsonRes({ error: 'escolha a impressora' }, 400);
+      const novo = crypto.randomUUID();
+      await env.CHAMADOS_DB.prepare(
+        `INSERT INTO toners (id, equipamento_id, codigo, cor, capacidade_paginas, ciclo_dias_padrao, observacao, ativo, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`
+      ).bind(novo, d.equipamento_id, d.codigo, d.cor ?? 'preto', d.capacidade_paginas ?? null, d.ciclo_dias_padrao ?? null, d.observacao ?? null, Date.now()).run();
+      return jsonRes({ id: novo }, 201);
+    }
+    const sets = [];
+    const binds = [];
+    for (const [k, v] of Object.entries(d)) {
+      if (v === undefined) continue;
+      sets.push(`${k} = ?`); binds.push(v);
+    }
+    if (body.ativo !== undefined) { sets.push('ativo = ?'); binds.push(body.ativo ? 1 : 0); }
+    if (!sets.length) return jsonRes({ error: 'nada para atualizar' }, 400);
+    const r = await env.CHAMADOS_DB.prepare(`UPDATE toners SET ${sets.join(', ')} WHERE id = ?`).bind(...binds, id).run();
+    if (!r.meta?.changes) return jsonRes({ error: 'toner não encontrado' }, 404);
+    return jsonRes({ ok: true });
+  } catch (err) {
+    return jsonRes({ error: `não foi possível salvar: ${err.message}` }, 400);
+  }
+}
+
+async function handleAdminRegistrarRecarga(request, env, tonerId) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  let body = {};
+  try { body = (await request.json()) || {}; } catch { /* corpo vazio vale: recarga agora */ }
+  const toner = await env.CHAMADOS_DB.prepare(`SELECT id FROM toners WHERE id = ? AND ativo = 1`).bind(tonerId).first();
+  if (!toner) return jsonRes({ error: 'toner não encontrado' }, 404);
+  const agora = Date.now();
+  const feitaEm = body.feita_em == null ? agora : body.feita_em;
+  if (!Number.isFinite(feitaEm) || feitaEm > agora + 60_000 || feitaEm < 946684800000) {
+    return jsonRes({ error: 'data da recarga inválida' }, 400);
+  }
+  let autor, observacao;
+  try {
+    autor = equipTexto(body.autor, 60, 'autor');
+    observacao = equipTexto(body.observacao, 300, 'observação');
+  } catch (e) {
+    return jsonRes({ error: e.message }, 400);
+  }
+  await env.CHAMADOS_DB.prepare(
+    `INSERT INTO toner_recargas (id, toner_id, feita_em, autor, observacao) VALUES (?, ?, ?, ?, ?)`
+  ).bind(crypto.randomUUID(), tonerId, feitaEm, autor ?? null, observacao ?? null).run();
+  return jsonRes({ ok: true }, 201);
+}
+
+// Desfaz o clique errado: apaga só a recarga mais recente (a que distorceria o ciclo médio).
+async function handleAdminDesfazerRecarga(request, env, tonerId) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  const ultima = await env.CHAMADOS_DB.prepare(
+    `SELECT id FROM toner_recargas WHERE toner_id = ? ORDER BY feita_em DESC, rowid DESC LIMIT 1`
+  ).bind(tonerId).first();
+  if (!ultima) return jsonRes({ error: 'este toner não tem recarga para desfazer' }, 404);
+  await env.CHAMADOS_DB.prepare(`DELETE FROM toner_recargas WHERE id = ?`).bind(ultima.id).run();
+  return jsonRes({ ok: true });
+}
+
+async function handleAdminMigrateSchemaToners(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  try {
+    await env.CHAMADOS_DB.batch([
+      env.CHAMADOS_DB.prepare(`CREATE TABLE IF NOT EXISTS toners (
+        id TEXT PRIMARY KEY, equipamento_id TEXT NOT NULL, codigo TEXT NOT NULL, cor TEXT NOT NULL DEFAULT 'preto',
+        capacidade_paginas INTEGER, ciclo_dias_padrao INTEGER, observacao TEXT,
+        nivel_percentual INTEGER, nivel_lido_em INTEGER, ativo INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL)`),
+      env.CHAMADOS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_toners_equipamento ON toners (equipamento_id)`),
+      env.CHAMADOS_DB.prepare(`CREATE TABLE IF NOT EXISTS toner_recargas (
+        id TEXT PRIMARY KEY, toner_id TEXT NOT NULL, feita_em INTEGER NOT NULL, autor TEXT, observacao TEXT)`),
+      env.CHAMADOS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_toner_recargas_toner ON toner_recargas (toner_id, feita_em)`),
+    ]);
+  } catch (err) {
+    return jsonRes({ error: `migração de schema falhou (toners): ${err.message}` }, 500);
+  }
+  for (const coluna of ['nivel_percentual INTEGER', 'nivel_lido_em INTEGER']) {
+    try {
+      await env.CHAMADOS_DB.prepare(`ALTER TABLE toners ADD COLUMN ${coluna}`).run();
+    } catch (err) {
+      if (!/duplicate column/i.test(err.message)) return jsonRes({ error: `migração de schema falhou (toners.${coluna}): ${err.message}` }, 500);
+    }
+  }
+  return jsonRes({ ok: true });
+}
+
+// =====================================================================
+// AGENTE DE LEITURA DE TONERS (2026-11-23)
+// O Worker roda na nuvem e não alcança IPs da rede interna da empresa. Quem consulta as
+// impressoras é um programa pequeno rodando DENTRO da rede (pasta agente-toners/), que usa
+// estas duas rotas:
+//   GET  /agente/impressoras   quais impressoras consultar (as que têm IP) e as cores com toner cadastrado
+//   POST /agente/leituras      nível (0-100%) lido de cada cor; grava no toner correspondente
+// Autenticação: header X-Agente-Secret contra env.TONER_AGENT_SECRET, segredo PRÓPRIO que só
+// serve para estas duas rotas (um agente vazado não dá acesso ao painel). Falha FECHADO: sem o
+// segredo configurado no Worker, as rotas respondem 403.
+// =====================================================================
+const AGENTE_MAX_LEITURAS = 200;
+const AGENTE_MAX_SUPRIMENTOS = 8;
+
+function agenteAutorizado(request, env) {
+  if (!env.TONER_AGENT_SECRET) return false;
+  return request.headers.get('X-Agente-Secret') === env.TONER_AGENT_SECRET;
+}
+
+async function handleAgenteListaImpressoras(request, env) {
+  if (!agenteAutorizado(request, env)) return unauthorized();
+  const { results } = await env.CHAMADOS_DB.prepare(
+    `SELECT id, tombamento, marca, modelo, ip FROM equipamentos
+      WHERE ativo = 1 AND tipo = 'impressora' AND status != 'baixado' AND ip IS NOT NULL ORDER BY tombamento`
+  ).all();
+  const { results: toners } = await env.CHAMADOS_DB.prepare(`SELECT equipamento_id, cor FROM toners WHERE ativo = 1`).all();
+  const cores = new Map();
+  for (const t of toners || []) {
+    if (!cores.has(t.equipamento_id)) cores.set(t.equipamento_id, []);
+    cores.get(t.equipamento_id).push(t.cor);
+  }
+  return jsonRes({ impressoras: (results || []).map(e => ({ ...e, cores: cores.get(e.id) ?? [] })) });
+}
+
+async function handleAgenteLeituras(request, env) {
+  if (!agenteAutorizado(request, env)) return unauthorized();
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  if (!body || !Array.isArray(body.leituras) || body.leituras.length > AGENTE_MAX_LEITURAS) {
+    return jsonRes({ error: `leituras precisa ser uma lista de até ${AGENTE_MAX_LEITURAS}` }, 400);
+  }
+  const agora = Date.now();
+  const stmts = [];
+  const ignorados = [];
+  for (const l of body.leituras) {
+    if (!l || typeof l.equipamento_id !== 'string' || !Array.isArray(l.suprimentos) || l.suprimentos.length > AGENTE_MAX_SUPRIMENTOS) {
+      ignorados.push({ equipamento_id: l?.equipamento_id ?? null, motivo: 'leitura malformada' });
+      continue;
+    }
+    for (const s of l.suprimentos) {
+      if (!s || !TONER_CORES.includes(s.cor) || !Number.isInteger(s.nivel) || s.nivel < 0 || s.nivel > 100) {
+        ignorados.push({ equipamento_id: l.equipamento_id, cor: s?.cor ?? null, motivo: 'cor ou nível inválido' });
+        continue;
+      }
+      // A hora da leitura é a do servidor (não confia no relógio do agente).
+      stmts.push({ eq: l.equipamento_id, cor: s.cor, nivel: s.nivel });
+    }
+  }
+  let atualizados = 0;
+  for (let i = 0; i < stmts.length; i += 50) {
+    const lote = stmts.slice(i, i + 50);
+    const res = await env.CHAMADOS_DB.batch(lote.map(s =>
+      env.CHAMADOS_DB.prepare(`UPDATE toners SET nivel_percentual = ?, nivel_lido_em = ? WHERE equipamento_id = ? AND cor = ? AND ativo = 1`)
+        .bind(s.nivel, agora, s.eq, s.cor)));
+    res.forEach((r, j) => {
+      if (r.meta?.changes) atualizados += r.meta.changes;
+      else ignorados.push({ equipamento_id: lote[j].eq, cor: lote[j].cor, motivo: 'sem toner cadastrado para esta cor' });
+    });
+  }
+  return jsonRes({ atualizados, ignorados });
+}
+
+// =====================================================================
 // POST /admin/migrate-schema-chamado-eventos — migração de schema ÚNICA (Fase B do
 // roadmap pós-MVP-visual, 2026-08-14), cria a tabela `chamado_eventos` (histórico +
 // comentários). Mesmo padrão de sempre — CREATE TABLE/INDEX IF NOT EXISTS,
@@ -3043,6 +3485,15 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
   // "encerrado") mas continuava contando na média do dashboard.
   if (prevStatus === 'encerrado' && novoStatus !== 'encerrado') {
     patch.nota = null;
+    // Reativação (2026-11-24, pedido do gestor): o chamado deixa de ter data de encerramento.
+    // Voltando pra "aberto" ele recomeça a fase de aceitação: sem start_date e com prazo novo
+    // (senão voltaria já "atrasado", com o prazo do chamado antigo).
+    patch.dateClosed = null;
+    if (novoStatus === 'aberto') {
+      patch.startDate = null;
+      const sla = PRIORITY_SLA_MS[chamado.priority];
+      if (sla) patch.dueDate = Date.now() + sla;
+    }
   }
 
   const updated = await d1UpdateChamado(env, chamadoId, patch);

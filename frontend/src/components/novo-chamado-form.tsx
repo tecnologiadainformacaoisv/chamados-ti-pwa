@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent } from "react"
+import { useQuery } from "@tanstack/react-query"
 import { Paperclip, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
@@ -8,6 +9,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { useSessionAuth } from "@/hooks/use-session-auth"
 import { createTask, uploadAttachment } from "@/lib/app-api"
+import { fetchEquipamentosSolicitante, rotuloEquipamento } from "@/lib/equipamentos-api"
 import { filtrarAnexosValidos, imagensDoClipboard } from "@/lib/anexo-helpers"
 import { CATEGORIA_PRIORIDADE, MAX_ANEXO_MB, OPERADORES, PRIORITY, SETORES, SETOR_FIELD_ID, TIPOS, TIPOS_FULL, TIPO_FIELD_ID } from "@/lib/constants"
 import type { Task } from "@/lib/api"
@@ -30,10 +32,21 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
   const [tipo, setTipo] = useState("")
   const [operador, setOperador] = useState("")
   const [descricao, setDescricao] = useState("")
+  const [equipamento, setEquipamento] = useState("")
   const [detalhes, setDetalhes] = useState("")
   const [anexos, setAnexos] = useState<File[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Equipamento é opcional e só aparece se a TI já cadastrou algum no Inventário; se a lista
+  // falhar ou vier vazia o campo some e o formulário funciona como sempre.
+  const equipamentosQuery = useQuery({
+    queryKey: ["equipamentos-solicitante"],
+    queryFn: () => fetchEquipamentosSolicitante(sessionToken),
+    enabled: !!sessionToken,
+    retry: false,
+    staleTime: 5 * 60_000,
+  })
+  const equipamentos = equipamentosQuery.data ?? []
 
   // O aviso de "Falta preencher…" some assim que a pessoa corrige algum campo — antes
   // ficava na tela mesmo com o formulário já completo (achado de UX 2026-10-16). Só
@@ -101,6 +114,7 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
           { id: SETOR_FIELD_ID, value: Number(setor) },
           { id: TIPO_FIELD_ID, value: tipoIdx },
         ],
+        ...(equipamento ? { equipamento_id: equipamento } : {}),
       })
 
       let anexoWarning: string | undefined
@@ -116,6 +130,7 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
       setTipo("")
       setOperador("")
       setDescricao("")
+      setEquipamento("")
       setDetalhes("")
       setAnexos([])
       onCreated(task, pInfo.slaLabel, anexoWarning)
@@ -209,6 +224,24 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
         />
         <p className="text-right text-xs text-muted-foreground">{descricao.length}/{DESCRICAO_MAX}</p>
       </div>
+
+      {equipamentos.length > 0 && (
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <Label htmlFor="equipamento">Equipamento (opcional)</Label>
+          <Select value={equipamento || "nenhum"} onValueChange={(v) => setEquipamento(v === "nenhum" ? "" : v)}>
+            <SelectTrigger id="equipamento" className="w-full min-w-0">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="nenhum">Não sei / não se aplica</SelectItem>
+              {equipamentos.map((e) => (
+                <SelectItem key={e.id} value={e.id}>{rotuloEquipamento(e)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">Ajuda a TI a achar o aparelho certo mais rápido. A etiqueta fica colada nele.</p>
+        </div>
+      )}
 
       <div className="flex flex-col gap-1.5">
         <Label>Detalhes adicionais (opcional)</Label>
