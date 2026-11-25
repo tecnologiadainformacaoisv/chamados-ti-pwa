@@ -2748,7 +2748,7 @@ async function test(name, fn) {
   });
 
   // ---------------- Inventário de equipamentos (2026-11-23) ----------------
-  const eqEnv = () => ({ ...hEnv, CHAMADOS_DB: freshD1(), SUBSCRIPTIONS: makeMockKV() });
+  const eqEnv = () => ({ ...hEnv, CHAMADOS_DB: freshD1(), SUBSCRIPTIONS: makeMockKV(), SOLICITACOES_ATIVO: 'true' });
   const eqPost = (env, path, body, headers = ADM) => worker.fetch(req('POST', path, { headers, body: JSON.stringify(body) }), env);
   const eqGet = (env, path, headers = ADM) => worker.fetch(req('GET', path, { headers }), env);
 
@@ -3707,6 +3707,16 @@ async function test(name, fn) {
   const mudar = (env, id, corpo, h = ADM) => eqPost(env, `/admin/solicitacoes/${id}/status`, corpo, h);
   const listaAdmin = async (env, qs = '', h = ADM) => (await worker.fetch(req('GET', `/admin/solicitacoes${qs}`, { headers: h }), env)).json();
 
+  await test('solicitações: desligado (padrão do ISV) as quatro rotas respondem 404 e nada é criado', async () => {
+    const env = { ...eqEnv(), SOLICITACOES_ATIVO: undefined };
+    const h = await sessaoDe(env, 'Pessoa Solic Off', '10.6.0.1');
+    assert.strictEqual((await pedir(env, h, PEDIDO)).status, 404);
+    assert.strictEqual((await worker.fetch(req('GET', '/api/solicitacoes', { headers: h }), env)).status, 404);
+    assert.strictEqual((await worker.fetch(req('GET', '/admin/solicitacoes', { headers: ADM }), env)).status, 404);
+    assert.strictEqual((await eqPost(env, '/admin/solicitacoes/qualquer/status', { status: 'em_analise' })).status, 404);
+    for (const v of ['false', '0', '']) assert.strictEqual((await pedir({ ...env, SOLICITACOES_ATIVO: v }, h, PEDIDO)).status, 404);
+    assert.strictEqual((await pedir({ ...env, SOLICITACOES_ATIVO: 'true' }, h, PEDIDO)).status, 201);
+  });
   await test('solicitações: criar exige segredo do app, sessão e pessoa interna', async () => {
     const env = eqEnv();
     assert.strictEqual((await worker.fetch(req('POST', '/api/solicitacoes', { headers: {}, body: JSON.stringify(PEDIDO) }), env)).status, 403);
@@ -3869,7 +3879,7 @@ async function test(name, fn) {
     const raw = new DatabaseSync(':memory:');
     raw.exec(fs.readFileSync(path.join(__dirname, '..', 'd1', 'schema.sql'), 'utf8'));
     raw.exec('DROP TABLE solicitacao_eventos; DROP TABLE solicitacoes;');
-    const env = { ...hEnv, CHAMADOS_DB: makeD1FromSqlite(raw), SUBSCRIPTIONS: makeMockKV() };
+    const env = { ...hEnv, CHAMADOS_DB: makeD1FromSqlite(raw), SUBSCRIPTIONS: makeMockKV(), SOLICITACOES_ATIVO: 'true' };
     assert.deepStrictEqual((await listaAdmin(env)).solicitacoes, []);
     const h = await sessaoDe(env, 'Pessoa Solic Nova', '10.6.10.1');
     assert.strictEqual((await pedir(env, h, PEDIDO)).status, 201);

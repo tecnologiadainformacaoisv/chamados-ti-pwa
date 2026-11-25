@@ -3748,6 +3748,12 @@ const SOLIC_MAX_PENDENTES = 20;       // contra flood: quantos pedidos "pendente
 const SOLIC_JANELA_REPETIDO_MS = 60_000; // mesmo pedido em menos de 1 min = duplo clique
 
 const esquemaSolicitacoesGarantido = new WeakSet();
+// Interruptor do módulo Solicitações (2026-11-25): no ISV a TI é interna e o módulo não se aplica, então fica
+// DESLIGADO por padrão. Para a versão vendida a empresas: variável SOLICITACOES_ATIVO = "true" no Worker.
+// Desligado, as 4 rotas respondem 404 e as telas (que tratam o 404) escondem a aba e a seção.
+const solicitacoesAtivo = (env) => ['true', '1'].includes(String(env.SOLICITACOES_ATIVO ?? '').toLowerCase());
+const solicitacoesDesligado = () => jsonRes({ error: 'Módulo de solicitações não está ativo.' }, 404);
+
 async function garantirEsquemaSolicitacoes(env) {
   if (esquemaSolicitacoesGarantido.has(env.CHAMADOS_DB)) return;
   await env.CHAMADOS_DB.batch([
@@ -3767,6 +3773,7 @@ async function garantirEsquemaSolicitacoes(env) {
 const SOLIC_CAMPOS = 'id, numero, categoria, item, quantidade, justificativa, solicitante, setor, status, nota_ti, motivo_rejeicao, created_at, updated_at';
 
 async function handleMinhasSolicitacoes(request, env) {
+  if (!solicitacoesAtivo(env)) return solicitacoesDesligado();
   if (!hasValidSecret(request, env)) return unauthorized();
   const session = await requireSession(request, env);
   if (!session) return sessionInvalid();
@@ -3780,6 +3787,7 @@ async function handleMinhasSolicitacoes(request, env) {
 }
 
 async function handleCriarSolicitacao(request, env) {
+  if (!solicitacoesAtivo(env)) return solicitacoesDesligado();
   if (!hasValidSecret(request, env)) return unauthorized();
   const session = await requireSession(request, env);
   if (!session) return sessionInvalid();
@@ -3843,6 +3851,7 @@ async function handleCriarSolicitacao(request, env) {
 const SOLIC_ROTULO_CATEGORIA = (c) => ({ equipamento: 'equipamento', material: 'material', peca: 'peça', autorizacao: 'autorização' }[c] ?? c);
 
 async function handleAdminListSolicitacoes(request, env) {
+  if (!solicitacoesAtivo(env)) return solicitacoesDesligado();
   if (!(await isStaff(request, env))) return unauthorized();
   const { searchParams } = new URL(request.url);
   const status = searchParams.get('status');
@@ -3863,6 +3872,7 @@ async function handleAdminListSolicitacoes(request, env) {
 }
 
 async function handleAdminMudarStatusSolicitacao(request, env, id) {
+  if (!solicitacoesAtivo(env)) return solicitacoesDesligado();
   const staff = await isStaff(request, env);
   if (!staff) return unauthorized();
   let body;

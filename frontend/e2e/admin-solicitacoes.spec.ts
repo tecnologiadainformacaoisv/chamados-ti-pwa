@@ -65,4 +65,15 @@ test.describe("Solicitações (admin)", () => {
     await abrir(page)
     await expect(page.getByRole("button", { name: /Solicitações\s*,\s*1 esperando resposta/ })).toBeVisible()
   })
+
+  test("módulo desligado no Worker (404) tira Solicitações do menu", async ({ page }, info) => {
+    test.skip(info.project.name === "mobile", "no celular a barra lateral é uma gaveta fechada")
+    await mockAdminRoutes(page)
+    await page.route(/\/admin\/solicitacoes(\?.*)?$/, (route) =>
+      route.fulfill({ status: 404, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ error: "Módulo de solicitações não está ativo." }) }),
+    )
+    await gotoAdminLoggedIn(page)
+    await expect(page.getByRole("button", { name: "Toners" })).toBeVisible()
+    await expect(page.getByRole("button", { name: /Solicitações/ })).toHaveCount(0)
+  })
 })

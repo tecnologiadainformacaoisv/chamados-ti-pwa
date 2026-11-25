@@ -62,8 +62,8 @@ function SolicitanteShell() {
     refetchInterval: LISTA_POLL_MS,
     retry: false,
   })
-  // Conta externa (visitante/fornecedor) não usa Solicitações: o servidor responde 403 e a aba some.
-  const semPedidos = solicitacoesQuery.error instanceof AuthError && solicitacoesQuery.error.status === 403
+  // A aba some quando o módulo está desligado nesta instalação (404) ou a conta é externa (403).
+  const semPedidos = solicitacoesQuery.error instanceof AuthError && (solicitacoesQuery.error.status === 403 || solicitacoesQuery.error.status === 404)
   const pedidosEmAndamento = (solicitacoesQuery.data ?? []).filter(solicEmAndamento).length
   const bootedOnce = useRef(false)
   usePresenca(sessionToken)

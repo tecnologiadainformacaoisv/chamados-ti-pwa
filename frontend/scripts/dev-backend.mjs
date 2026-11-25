@@ -155,7 +155,7 @@ export async function iniciarBackend({ reset = false, silencioso = false } = {})
   if (!db.prepare('SELECT COUNT(*) AS n FROM equipamentos').get().n) semearInventario(db)
 
   const worker = (await import(pathToFileURL(path.join(RAIZ, 'push-worker.js')).href)).default
-  const env = { SUBSCRIBE_SECRET: APP_SECRET, ADMIN_SECRET, TONER_AGENT_SECRET: 'agente-teste-local', SUBSCRIPTIONS: makeKV(), CHAMADOS_DB: makeD1(db), ANEXOS: makeR2() }
+  const env = { SUBSCRIBE_SECRET: APP_SECRET, ADMIN_SECRET, TONER_AGENT_SECRET: 'agente-teste-local', SOLICITACOES_ATIVO: 'true', SUBSCRIPTIONS: makeKV(), CHAMADOS_DB: makeD1(db), ANEXOS: makeR2() }
 
   const servidor = http.createServer(async (req, res) => {
     try {

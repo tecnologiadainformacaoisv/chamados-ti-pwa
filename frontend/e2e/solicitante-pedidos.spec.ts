@@ -92,4 +92,16 @@ test.describe("Pedidos (solicitante)", () => {
     await expect(page.getByRole("tab", { name: /Meus Chamados/ })).toBeVisible()
     await expect(page.getByRole("tab", { name: /Pedidos/ })).toHaveCount(0)
   })
+
+  test("módulo desligado no Worker (404) esconde a aba Pedidos", async ({ page }) => {
+    await mockSolicitanteRoutes(page)
+    await page.route("**/api/solicitacoes", (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ status: 404, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ error: "Módulo de solicitações não está ativo." }) })
+        : route.fallback(),
+    )
+    await gotoSolicitanteLoggedIn(page)
+    await expect(page.getByRole("tab", { name: /Meus Chamados/ })).toBeVisible()
+    await expect(page.getByRole("tab", { name: /Pedidos/ })).toHaveCount(0)
+  })
 })

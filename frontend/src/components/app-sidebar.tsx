@@ -58,7 +58,7 @@ export function AppSidebar({
 }) {
   // Usuários é só do desenvolvedor (admin); o operador não vê a seção.
   const { role } = useAdminAuth()
-  const solicitacoesPendentes = useSolicitacoesPendentes()
+  const { pendentes: solicitacoesPendentes, ativo: solicitacoesAtivo } = useSolicitacoesPendentes()
   return (
     <Sidebar
       collapsible="icon"
@@ -101,7 +101,7 @@ export function AppSidebar({
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {NAV_ITEMS.filter((item) => item.id !== "usuarios" || role === "admin").map((item) => (
+              {NAV_ITEMS.filter((item) => (item.id !== "usuarios" || role === "admin") && (item.id !== "solicitacoes" || solicitacoesAtivo)).map((item) => (
                 <SidebarMenuItem key={item.id}>
                   <SidebarMenuButton
                     isActive={secaoAtiva === item.id}

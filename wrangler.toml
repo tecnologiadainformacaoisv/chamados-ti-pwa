@@ -18,6 +18,9 @@
 # existe no Worker e não está listado neste arquivo. NÃO REMOVER.
 keep_vars = true
 
+# Módulo Solicitações: desligado por padrão (ISV). Para a versão de empresas, definir a variável
+# SOLICITACOES_ATIVO = "true" no Worker (aqui em [vars] ou no painel da Cloudflare).
+
 name = "chamados-ti-push"
 main = "push-worker.js"
 compatibility_date = "2026-08-07"
