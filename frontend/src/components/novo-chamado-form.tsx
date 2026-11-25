@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { DicasAntesDoChamado } from "@/components/dicas-antes-do-chamado"
 import { useSessionAuth } from "@/hooks/use-session-auth"
 import { createTask, uploadAttachment } from "@/lib/app-api"
 import { fetchEquipamentosSolicitante, rotuloEquipamento } from "@/lib/equipamentos-api"
@@ -224,6 +225,8 @@ export function NovoChamadoForm({ onCreated }: { onCreated: (task: Task, slaLabe
         />
         <p className="text-right text-xs text-muted-foreground">{descricao.length}/{DESCRICAO_MAX}</p>
       </div>
+
+      <DicasAntesDoChamado texto={descricao} tipo={tipo ? Number(tipo) : undefined} />
 
       {equipamentos.length > 0 && (
         <div className="flex min-w-0 flex-col gap-1.5">
