@@ -2827,7 +2827,11 @@ async function test(name, fn) {
     assert.strictEqual(corpo.equipamento_id, eqId);
     assert.strictEqual((await d1GetChamado(env, corpo.id)).equipamento_id, eqId);
     const e = (await (await eqGet(env, '/admin/equipamentos')).json()).equipamentos.find(x => x.id === eqId);
-    assert.deepStrictEqual([e.chamadosTotal, e.chamadosAbertos], [1, 1]);
+    assert.deepStrictEqual([e.chamadosTotal, e.chamadosAbertos, e.chamados30d], [1, 1, 1]);
+    // chamado de 40 dias atrás conta no total, mas não na reincidência de 30 dias
+    await env.CHAMADOS_DB.prepare('UPDATE chamados SET date_created = ? WHERE id = ?').bind(Date.now() - 40 * 24 * 3600 * 1000, corpo.id).run();
+    const e2 = (await (await eqGet(env, '/admin/equipamentos')).json()).equipamentos.find(x => x.id === eqId);
+    assert.deepStrictEqual([e2.chamadosTotal, e2.chamados30d], [1, 0]);
     // sem equipamento continua funcionando (opcional)
     await env.SUBSCRIPTIONS.delete('throttle_create_Pessoa Vinculo');
     const sem = await (await abre({})).json();

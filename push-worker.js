@@ -3045,6 +3045,8 @@ async function resolveEquipamentoId(env, valor, { restrito = false, solicitante 
   }
 }
 
+const EQUIP_JANELA_REINCIDENCIA_MS = 30 * 24 * 60 * 60 * 1000;
+
 async function handleAdminListEquipamentos(request, env) {
   if (!(await isStaff(request, env))) return unauthorized();
   await garantirEsquemaInventario(env);
@@ -3053,9 +3055,10 @@ async function handleAdminListEquipamentos(request, env) {
   const contagem = new Map();
   try {
     const { results: cs } = await env.CHAMADOS_DB.prepare(
-      `SELECT equipamento_id, COUNT(*) AS total, SUM(CASE WHEN status != 'encerrado' THEN 1 ELSE 0 END) AS abertos
+      `SELECT equipamento_id, COUNT(*) AS total, SUM(CASE WHEN status != 'encerrado' THEN 1 ELSE 0 END) AS abertos,
+              SUM(CASE WHEN date_created >= ? THEN 1 ELSE 0 END) AS ult30
          FROM chamados WHERE equipamento_id IS NOT NULL GROUP BY equipamento_id`
-    ).all();
+    ).bind(Date.now() - EQUIP_JANELA_REINCIDENCIA_MS).all();
     for (const c of cs || []) contagem.set(c.equipamento_id, c);
   } catch { /* coluna ainda não migrada */ }
   return jsonRes({
@@ -3063,6 +3066,8 @@ async function handleAdminListEquipamentos(request, env) {
       ...e,
       chamadosTotal: contagem.get(e.id)?.total ?? 0,
       chamadosAbertos: contagem.get(e.id)?.abertos ?? 0,
+      // Reincidência: quantos chamados nos últimos 30 dias (o problema aqui volta rápido, decisão do usuário).
+      chamados30d: contagem.get(e.id)?.ult30 ?? 0,
     })),
   });
 }

@@ -8,7 +8,7 @@
 
 import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Monitor, Printer, Laptop, Network, Package, Search, Wrench } from "lucide-react"
+import { AlertTriangle, Monitor, Printer, Laptop, Network, Package, Search, Wrench } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -28,6 +28,9 @@ import {
 import { cn } from "@/lib/utils"
 
 const POR_PAGINA = 24
+// Reincidência: 3 ou mais chamados do mesmo equipamento nos últimos 30 dias (limiar pedido pelo usuário).
+const LIMIAR_REINCIDENCIA = 3
+const reincidente = (e: Equipamento) => (e.chamados30d ?? 0) >= LIMIAR_REINCIDENCIA
 const TODOS = "todos"
 
 const ICONE: Record<EquipTipo, typeof Printer> = {
@@ -60,6 +63,7 @@ export function InventarioView() {
   const [status, setStatus] = useState<string>(TODOS)
   const [origem, setOrigem] = useState<string>(TODOS)
   const [soComChamado, setSoComChamado] = useState(false)
+  const [soReincidentes, setSoReincidentes] = useState(false)
   const [pagina, setPagina] = useState(1)
   // null = fechado; "novo" = cadastro; objeto = edição
   const [editando, setEditando] = useState<Equipamento | "novo" | null>(null)
@@ -73,13 +77,14 @@ export function InventarioView() {
       if (status !== TODOS && e.status !== status) return false
       if (origem !== TODOS && e.origem !== origem) return false
       if (soComChamado && !e.chamadosAbertos) return false
+      if (soReincidentes && !reincidente(e)) return false
       if (!q) return true
       const alvo = [e.tombamento, e.marca, e.modelo, e.numero_serie, e.local, e.setor != null ? optionName(SETORES, e.setor) : ""]
         .filter(Boolean)
         .join(" ")
       return semAcento(alvo).includes(q)
     })
-  }, [data, busca, tipo, status, origem, soComChamado])
+  }, [data, busca, tipo, status, origem, soComChamado, soReincidentes])
 
   const paginas = Math.max(1, Math.ceil(filtrados.length / POR_PAGINA))
   const paginaAtual = Math.min(pagina, paginas)
@@ -117,6 +122,10 @@ export function InventarioView() {
           <label className="flex min-h-9 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm">
             <input type="checkbox" checked={soComChamado} onChange={(e) => mudaFiltro(setSoComChamado)(e.target.checked)} />
             Só com chamado aberto
+          </label>
+          <label className="flex min-h-9 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm">
+            <input type="checkbox" checked={soReincidentes} onChange={(e) => mudaFiltro(setSoReincidentes)(e.target.checked)} />
+            Só reincidentes ({LIMIAR_REINCIDENCIA}+ em 30 dias)
           </label>
         </div>
       </div>
@@ -221,6 +230,12 @@ function CardEquipamento({ e, onAbrir }: { e: Equipamento; onAbrir?: (e: Equipam
         {e.numero_serie && <span className="truncate text-muted-foreground">Série {e.numero_serie}</span>}
         {e.ip && <span className="font-mono text-muted-foreground">{e.ip}</span>}
       </div>
+      {reincidente(e) && (
+        <p className="flex items-center gap-1 rounded-md bg-red-50 px-2 py-1 text-xs font-medium text-red-800 dark:bg-red-950 dark:text-red-200">
+          <AlertTriangle className="size-3.5" aria-hidden />
+          Reincidente: {e.chamados30d} chamados nos últimos 30 dias. Vale trocar ou revisar.
+        </p>
+      )}
       <p className={cn("flex items-center gap-1 text-xs", e.chamadosAbertos ? "font-medium text-amber-800 dark:text-amber-300" : "text-muted-foreground")}>
         <Wrench className="size-3.5" aria-hidden />
         {e.chamadosAbertos

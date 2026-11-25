@@ -3,7 +3,7 @@ import { mockAdminRoutes, gotoAdminLoggedIn, abrirSecaoAdmin } from "./helpers/f
 
 // Inventário de equipamentos (2026-11-23, ideia do estudo do OS800).
 const equipamentos = () => [
-  { id: "e1", tombamento: "F 0001", tipo: "impressora", marca: "Brother", modelo: "HL-1222", numero_serie: "SN-1", origem: "locado", fornecedor: "Locadora X", setor: 1, local: "Sala 3", status: "ativo", observacao: null, chamadosTotal: 3, chamadosAbertos: 1 },
+  { id: "e1", tombamento: "F 0001", tipo: "impressora", marca: "Brother", modelo: "HL-1222", numero_serie: "SN-1", origem: "locado", fornecedor: "Locadora X", setor: 1, local: "Sala 3", status: "ativo", observacao: null, chamadosTotal: 3, chamadosAbertos: 1, chamados30d: 3 },
   { id: "e2", tombamento: "F 0002", tipo: "monitor", marca: "BPC", modelo: "20WV", numero_serie: null, origem: "patrimonio", fornecedor: null, setor: 0, local: "Recepção", status: "manutencao", observacao: null, chamadosTotal: 0, chamadosAbertos: 0 },
   { id: "e3", tombamento: null, tipo: "computador", marca: "Dell", modelo: null, numero_serie: null, origem: "patrimonio", fornecedor: null, setor: null, local: null, status: "reserva", observacao: null, chamadosTotal: 1, chamadosAbertos: 0 },
 ]
@@ -93,5 +93,14 @@ test.describe("Inventário", () => {
     await dialogo.getByRole("button", { name: "Remover da lista" }).click()
     await expect(dialogo).toHaveCount(0)
     expect(enviado).toMatchObject({ ativo: false })
+  })
+
+  test("equipamento com 3 chamados em 30 dias aparece como reincidente e o filtro esconde os outros", async ({ page }) => {
+    await abrir(page)
+    await expect(page.getByRole("button", { name: /F 0001/ })).toContainText("Reincidente: 3 chamados nos últimos 30 dias")
+    await expect(page.getByRole("button", { name: /F 0002/ })).not.toContainText("Reincidente")
+    await page.getByLabel(/Só reincidentes/).check()
+    await expect(page.getByText("1 de 3 equipamentos")).toBeVisible()
+    await expect(page.getByRole("button", { name: /F 0002/ })).toHaveCount(0)
   })
 })

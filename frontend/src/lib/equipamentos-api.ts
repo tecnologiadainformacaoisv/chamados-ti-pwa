@@ -26,6 +26,8 @@ export type Equipamento = {
   observacao: string | null
   chamadosTotal: number
   chamadosAbertos: number
+  /** Chamados abertos nos últimos 30 dias (reincidência). */
+  chamados30d?: number
 }
 
 /** O que o solicitante vê no select do "Novo chamado" (sem nº de série nem observação). */
