@@ -3456,6 +3456,50 @@ async function test(name, fn) {
     assert.strictEqual(adm.status, 200, 'a TI vincula qualquer tipo');
   });
 
+  console.log('--- descoberta automática de impressoras e toners (2026-11-25) ---');
+  {
+    const desc = (env, h, impressoras) => worker.fetch(req('POST', '/agente/descobertas', { headers: h, body: JSON.stringify({ impressoras }) }), env);
+    const lista = async (env) => (await (await worker.fetch(req('GET', '/admin/equipamentos', { headers: { 'X-Admin-Secret': 'admin-secret' } }), env)).json()).equipamentos;
+    const toners = async (env) => (await (await worker.fetch(req('GET', '/admin/toners', { headers: { 'X-Admin-Secret': 'admin-secret' } }), env)).json()).toners;
+    const mono = { ip: '10.10.2.103', marca: 'Lexmark', modelo: 'MX622adhe', numero_serie: 'SERIE-A', suprimentos: [{ cor: 'preto', nivel: 42, codigo: '56F4U0E' }] };
+    await test('sem segredo do agente (ou com o de admin) não cadastra nada', async () => {
+      const env = agEnv();
+      assert.strictEqual((await desc(env, {}, [mono])).status, 403);
+      assert.strictEqual((await desc(env, ADM, [mono])).status, 403);
+      assert.strictEqual((await lista(env)).length, 0);
+    });
+    await test('cadastra impressora e toner sozinho, com nível; repetir não duplica', async () => {
+      const env = agEnv();
+      const r = await (await desc(env, AG, [mono])).json();
+      assert.deepStrictEqual([r.criadas, r.atualizadas, r.toners_criados], [1, 0, 1]);
+      const r2 = await (await desc(env, AG, [{ ...mono, suprimentos: [{ cor: 'preto', nivel: 30, codigo: '56F4U0E' }] }])).json();
+      assert.deepStrictEqual([r2.criadas, r2.atualizadas, r2.toners_criados, r2.toners_atualizados], [0, 1, 0, 1]);
+      const eqs = await lista(env);
+      assert.strictEqual(eqs.length, 1);
+      assert.deepStrictEqual([eqs[0].ip, eqs[0].modelo, eqs[0].numero_serie], ['10.10.2.103', 'MX622adhe', 'SERIE-A']);
+      const ts = await toners(env);
+      assert.deepStrictEqual([ts.length, ts[0].codigo, ts[0].nivel_percentual], [1, '56F4U0E', 30]);
+    });
+    await test('impressora que mudou de IP é reconhecida pela série; o que a TI editou não é sobrescrito', async () => {
+      const env = agEnv();
+      await desc(env, AG, [mono]);
+      const id = (await lista(env))[0].id;
+      await worker.fetch(req('POST', '/admin/equipamentos/' + id, { headers: { 'X-Admin-Secret': 'admin-secret' }, body: JSON.stringify({ tipo: 'impressora', modelo: 'Nome da TI', ip: '10.10.2.103' }) }), env);
+      await desc(env, AG, [{ ...mono, ip: '10.10.2.150' }]);
+      const eqs = await lista(env);
+      assert.strictEqual(eqs.length, 1, 'não pode virar duas impressoras');
+      assert.deepStrictEqual([eqs[0].ip, eqs[0].modelo], ['10.10.2.150', 'Nome da TI']);
+    });
+    await test('dados inválidos são ignorados sem derrubar o lote', async () => {
+      const env = agEnv();
+      const r = await (await desc(env, AG, [{ ip: 'abc', suprimentos: [] }, { ...mono, suprimentos: [{ cor: 'verde', nivel: 5 }, { cor: 'preto', nivel: 300 }] }])).json();
+      assert.strictEqual(r.ignoradas.length, 1);
+      assert.strictEqual(r.criadas, 1);
+      const ts = await toners(env);
+      assert.deepStrictEqual([ts.length, ts[0].nivel_percentual], [1, null], 'nível fora de 0-100 não é gravado');
+      assert.strictEqual((await desc(env, AG, [])).status, 400);
+    });
+  }
   console.log(`\n${passed} passaram, ${failed} falharam`);
   process.exit(failed > 0 ? 1 : 0);
 })();

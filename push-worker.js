@@ -193,6 +193,7 @@ async function routeRequest(request, env, ctx) {
     // pelo IP e manda o nível para cá. Segredo PRÓPRIO (TONER_AGENT_SECRET), nunca o de admin.
     if (pathname === '/agente/impressoras' && request.method === 'GET') return handleAgenteListaImpressoras(request, env);
     if (pathname === '/agente/leituras' && request.method === 'POST') return handleAgenteLeituras(request, env);
+    if (pathname === '/agente/descobertas' && request.method === 'POST') return handleAgenteDescobertas(request, env);
 
     if (request.method === 'POST') {
       if (pathname === '/auth/register') return handleRegister(request, env, ctx);
@@ -3432,6 +3433,75 @@ async function handleAgenteListaImpressoras(request, env) {
     cores.get(t.equipamento_id).push(t.cor);
   }
   return jsonRes({ impressoras: (results || []).map(e => ({ ...e, cores: cores.get(e.id) ?? [] })) });
+}
+
+// POST /agente/descobertas (2026-11-25) — cadastro AUTOMÁTICO a partir do que o agente achou na rede.
+// Ninguém digita impressora nem toner: o agente varre a rede por SNMP e manda cada impressora com seus
+// cartuchos. Aqui cada uma vira (ou atualiza) um equipamento, e cada cor um toner, com o nível lido.
+// Regras: acha a impressora pelo nº de série (a impressora pode trocar de IP) e, sem série, pelo IP;
+// o que a TI já editou na tela NÃO é sobrescrito (só campos vazios são preenchidos; o IP acompanha a
+// impressora). Impressora baixada não é reativada. Idempotente: repetir não duplica.
+// Body: { impressoras: [{ ip, marca?, modelo?, numero_serie?, local?, suprimentos: [{ cor, nivel?, codigo? }] }] }
+const AGENTE_MAX_DESCOBERTAS = 10;
+const IPV4_RE = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+async function handleAgenteDescobertas(request, env) {
+  if (!(await agenteAutorizado(request, env))) return unauthorized();
+  await garantirEsquemaInventario(env);
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  const lista = body && body.impressoras;
+  if (!Array.isArray(lista) || lista.length === 0 || lista.length > AGENTE_MAX_DESCOBERTAS) {
+    return jsonRes({ error: `impressoras precisa ser uma lista de 1 a ${AGENTE_MAX_DESCOBERTAS}` }, 400);
+  }
+  const txt = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
+  const agora = Date.now();
+  const out = { criadas: 0, atualizadas: 0, toners_criados: 0, toners_atualizados: 0, ignoradas: [] };
+  for (const d of lista) {
+    const ip = txt(d && d.ip, 15);
+    if (!ip || !IPV4_RE.test(ip) || !Array.isArray(d.suprimentos) || d.suprimentos.length > AGENTE_MAX_SUPRIMENTOS) {
+      out.ignoradas.push({ ip: ip || null, motivo: 'dados inválidos' });
+      continue;
+    }
+    const marca = txt(d.marca, 60), modelo = txt(d.modelo, 80), serie = txt(d.numero_serie, 60), local = txt(d.local, 120);
+    let eq = null;
+    if (serie) eq = await env.CHAMADOS_DB.prepare(`SELECT * FROM equipamentos WHERE tipo = 'impressora' AND numero_serie = ? AND ativo = 1`).bind(serie).first();
+    if (!eq) eq = await env.CHAMADOS_DB.prepare(`SELECT * FROM equipamentos WHERE tipo = 'impressora' AND ip = ? AND ativo = 1`).bind(ip).first();
+    if (eq && eq.status === 'baixado') { out.ignoradas.push({ ip, motivo: 'impressora baixada no inventário' }); continue; }
+    let eqId;
+    if (eq) {
+      eqId = eq.id;
+      await env.CHAMADOS_DB.prepare(
+        'UPDATE equipamentos SET ip = ?, marca = COALESCE(marca, ?), modelo = COALESCE(modelo, ?), numero_serie = COALESCE(numero_serie, ?), local = COALESCE(local, ?), updated_at = ? WHERE id = ?'
+      ).bind(ip, marca, modelo, serie, local, agora, eqId).run();
+      out.atualizadas++;
+    } else {
+      eqId = crypto.randomUUID();
+      await env.CHAMADOS_DB.prepare(
+        `INSERT INTO equipamentos (id, tipo, marca, modelo, numero_serie, origem, local, ip, status, observacao, ativo, created_at, updated_at)
+         VALUES (?, 'impressora', ?, ?, ?, 'patrimonio', ?, ?, 'ativo', 'Cadastrada automaticamente pelo agente de rede', 1, ?, ?)`
+      ).bind(eqId, marca, modelo, serie, local, ip, agora, agora).run();
+      out.criadas++;
+    }
+    for (const s of d.suprimentos) {
+      if (!s || !TONER_CORES.includes(s.cor)) continue;
+      const nivel = Number.isInteger(s.nivel) && s.nivel >= 0 && s.nivel <= 100 ? s.nivel : null;
+      const codigo = txt(s.codigo, 60);
+      const t = await env.CHAMADOS_DB.prepare('SELECT id, codigo FROM toners WHERE equipamento_id = ? AND cor = ? AND ativo = 1').bind(eqId, s.cor).first();
+      if (t) {
+        // O código só é preenchido se ainda for o marcador automático — não sobrescreve o que a TI digitou.
+        await env.CHAMADOS_DB.prepare(
+          'UPDATE toners SET nivel_percentual = COALESCE(?, nivel_percentual), nivel_lido_em = CASE WHEN ? IS NULL THEN nivel_lido_em ELSE ? END, codigo = CASE WHEN codigo = ? AND ? IS NOT NULL THEN ? ELSE codigo END WHERE id = ?'
+        ).bind(nivel, nivel, agora, 'A identificar', codigo, codigo, t.id).run();
+        out.toners_atualizados++;
+      } else {
+        await env.CHAMADOS_DB.prepare(
+          'INSERT INTO toners (id, equipamento_id, codigo, cor, nivel_percentual, nivel_lido_em, ativo, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)'
+        ).bind(crypto.randomUUID(), eqId, codigo || 'A identificar', s.cor, nivel, nivel == null ? null : agora, agora).run();
+        out.toners_criados++;
+      }
+    }
+  }
+  return jsonRes(out);
 }
 
 async function handleAgenteLeituras(request, env) {

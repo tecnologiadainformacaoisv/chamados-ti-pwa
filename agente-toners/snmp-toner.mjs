@@ -80,3 +80,29 @@ export function separarOid(oid, base = OID_SUPRIMENTOS) {
   if (!/^\d+$/.test(coluna) || resto.length === 0) return null
   return { coluna: Number(coluna), chave: resto.join('.') }
 }
+
+/** "Lexmark MX622adhe version MXTCT.081.226 ..." -> { marca: "Lexmark", modelo: "MX622adhe" }. */
+export function parseSysDescr(texto) {
+  const t = String(texto ?? '').replace(/\0/g, '').trim()
+  const m = /^(\S+)\s+(.+?)(?:\s+(?:version|ver\.?|v\d)\b.*)?$/i.exec(t)
+  if (!m) return { marca: null, modelo: null }
+  return { marca: m[1].slice(0, 60), modelo: m[2].slice(0, 80) }
+}
+
+/** Endereços (IPv4) de uma rede "a.b.c.d/p", sem o de rede e o de broadcast. Limita a /22 (1022 hosts). */
+export function ipsDaRede(cidr) {
+  const [base, pStr] = String(cidr).split('/')
+  const partes = base.split('.').map(Number)
+  const p = Number(pStr)
+  if (partes.length !== 4 || partes.some((n) => !Number.isInteger(n) || n < 0 || n > 255) || !Number.isInteger(p) || p < 22 || p > 30) return []
+  const num = ((partes[0] << 24) | (partes[1] << 16) | (partes[2] << 8) | partes[3]) >>> 0
+  const mascara = (0xffffffff << (32 - p)) >>> 0
+  const rede = (num & mascara) >>> 0
+  const total = 2 ** (32 - p)
+  const ips = []
+  for (let i = 1; i < total - 1; i++) {
+    const n = (rede + i) >>> 0
+    ips.push(`${n >>> 24}.${(n >>> 16) & 255}.${(n >>> 8) & 255}.${n & 255}`)
+  }
+  return ips
+}

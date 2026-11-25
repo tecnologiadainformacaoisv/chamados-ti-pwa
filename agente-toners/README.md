@@ -7,13 +7,21 @@ o nível de cada cor. Os níveis aparecem na tela **Toners** do admin ("Nível 1
 Enquanto uma leitura é recente (menos de 48 h), o nível manda na situação do toner (10% ou menos é crítico,
 25% ou menos é atenção). Sem leitura, vale o ciclo das recargas registradas, como antes.
 
+## Cadastro automático (2026-11-25)
+
+O agente **descobre as impressoras sozinho**: varre a rede em que o computador está (até um /22, ex.: `10.10.0.0/22`),
+pergunta por SNMP quem é impressora e **cadastra no painel** cada impressora (modelo, número de série, IP) e cada
+cartucho (cor, código quando a impressora informa, nível). Repetir não duplica; se a impressora trocar de IP ela é
+reconhecida pelo número de série; o que a TI editar na tela não é sobrescrito. A varredura roda na partida e a cada
+~12 horas. Setor a TI preenche uma vez na tela (a rede não informa). `REDES=10.10.0.0/22` força outra rede;
+`--sem-descoberta` desliga; `--descobrir` só varre e sai; `--seco` mostra sem enviar.
+
 ## O que precisa ser feito uma vez
 
 1. **No Worker**, criar o segredo `TONER_AGENT_SECRET` (um texto longo e aleatório, só para este agente):
    `npx wrangler secret put TONER_AGENT_SECRET` na pasta do projeto, ou pelo painel da Cloudflare.
    Sem ele, as rotas do agente respondem 403 (propositalmente: falha fechado).
-2. **No painel**, em Inventário, preencher o **IP** de cada impressora, e em Toners cadastrar o toner de cada cor.
-   O agente só envia as cores que têm toner cadastrado.
+2. ~~No painel, cadastrar IP e toner~~ — **não é mais preciso**: o agente cadastra (ver acima). Só ajuste setor/local depois.
 3. **Nas impressoras**, conferir que o SNMP está ligado (a maioria vem com a comunidade `public` de leitura).
 4. **Num computador sempre ligado na rede das impressoras**, com Node 20 ou mais novo:
    ```powershell
