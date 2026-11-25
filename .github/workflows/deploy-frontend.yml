@@ -9,7 +9,7 @@ on:
     paths:
       - "frontend/**"
       - ".github/workflows/deploy-frontend.yml"
-  workflow_dispatch: {} # permite rodar manualmente em Actions → Run workflow, se precisar
+  workflow_dispatch: {} # rodar manualmente em Actions → Run workflow (exige permissão de admin no repositório)
 
 permissions:
   contents: read
