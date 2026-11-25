@@ -2230,6 +2230,8 @@ async function handleAdminDeleteTask(request, env, taskId) {
   if (!chamado) return jsonRes({ error: 'chamado não encontrado' }, 404);
 
   await d1DeleteChamado(env, taskId);
+  // A chave de pausa não tem validade: sai junto com o chamado.
+  await env.SUBSCRIPTIONS?.delete(`d1_pending_start_${taskId}`);
   return jsonRes({ ok: true });
 }
 
@@ -2250,6 +2252,32 @@ async function handleAdminDeleteTask(request, env, taskId) {
 // Filtros opcionais (2026-11-24, "Everson ama filtros"): além do período, `setor`/`tipo` (orderindex),
 // `prioridade` (1 urgente, 2 alta, 3 normal), `status`, `solicitante` (nome exato) e `operador`
 // (id; vale para QUALQUER atendente do chamado, via chamado_assignees). Todos se combinam (E).
+function ultimaEntradaEm(historico, status) {
+  for (let i = historico.length - 1; i >= 0; i--) {
+    if (historico[i].para_valor === status) return historico[i].created_at;
+  }
+  return null;
+}
+
+// Soma dos períodos em "em atendimento" (espera e reabertura ficam de fora). `null` quando o
+// histórico não cobre o chamado inteiro (anterior ao registro de eventos ou importado): todo
+// chamado nasce aberto, então um histórico que não começa em "aberto" está pela metade.
+function tempoEmAtendimento(historico) {
+  if (historico[0]?.de_valor !== 'aberto') return null;
+  let inicio = null;
+  let total = null;
+  for (const e of historico) {
+    if (e.para_valor === 'em atendimento') {
+      inicio = e.created_at;
+    } else if (e.de_valor === 'em atendimento') {
+      if (inicio == null) return null;
+      total = (total ?? 0) + (e.created_at - inicio);
+      inicio = null;
+    }
+  }
+  return inicio == null ? total : null;
+}
+
 async function d1GetMetrics(env, { desde, ate, setor, tipo, prioridade, status, solicitante, operador } = {}) {
   const { results } = await env.CHAMADOS_DB.prepare(
     'SELECT id, status, priority, solicitante, tipo, setor, due_date, date_closed, start_date, date_created, nota FROM chamados'
@@ -2273,6 +2301,17 @@ async function d1GetMetrics(env, { desde, ate, setor, tipo, prioridade, status, 
   }
   if (operador != null) rows = rows.filter(r => (atendentesDe.get(r.id) || []).includes(operador));
 
+  // Histórico de status (uma consulta só): dá o momento em que o chamado entrou em espera ou foi
+  // encerrado e o tempo realmente passado em atendimento.
+  const { results: mudancas } = await env.CHAMADOS_DB.prepare(
+    "SELECT chamado_id, de_valor, para_valor, created_at FROM chamado_eventos WHERE tipo = 'status' ORDER BY created_at ASC, rowid ASC"
+  ).all();
+  const historicoDe = new Map();
+  for (const e of mudancas || []) {
+    if (!historicoDe.has(e.chamado_id)) historicoDe.set(e.chamado_id, []);
+    historicoDe.get(e.chamado_id).push(e);
+  }
+
   const porStatus = {};
   const porTipo    = {};
   const porSetor   = {};
@@ -2295,13 +2334,24 @@ async function d1GetMetrics(env, { desde, ate, setor, tipo, prioridade, status, 
     if (r.tipo != null)  porTipo[r.tipo]   = (porTipo[r.tipo]   || 0) + 1;
     if (r.setor != null) porSetor[r.setor] = (porSetor[r.setor] || 0) + 1;
 
+    const historico = historicoDe.get(r.id) || [];
     if (r.due_date != null) {
-      const referencia = (r.status === 'encerrado' && r.date_closed != null) ? r.date_closed : agora;
-      if (referencia > r.due_date) atrasado++; else dentroDoSla++;
+      let referencia = agora;
+      if (r.status === 'pendente') {
+        // Prazo parado: vale o momento em que entrou em espera. Sem esse registro, não entra na conta.
+        referencia = ultimaEntradaEm(historico, 'pendente');
+      } else if (r.status === 'encerrado') {
+        referencia = ultimaEntradaEm(historico, 'encerrado') ?? r.date_closed ?? agora;
+      }
+      if (referencia != null) {
+        if (referencia > r.due_date) atrasado++; else dentroDoSla++;
+      }
     }
 
-    if (r.status === 'encerrado' && r.start_date != null && r.date_closed != null) {
-      encerradosComDuracao.push({ id: r.id, duracaoMs: r.date_closed - r.start_date });
+    if (r.status === 'encerrado') {
+      const duracaoMs = tempoEmAtendimento(historico)
+        ?? (r.start_date != null && r.date_closed != null ? r.date_closed - r.start_date : null);
+      if (duracaoMs != null) encerradosComDuracao.push({ id: r.id, duracaoMs });
     }
 
     if (r.nota != null) {
@@ -2311,15 +2361,12 @@ async function d1GetMetrics(env, { desde, ate, setor, tipo, prioridade, status, 
   }
 
   const atendimentoPorOperador = {}; // id -> { somaMs, count }
-  if (encerradosComDuracao.length) {
-    const assigneesMap = await d1GetAssigneesMap(env, encerradosComDuracao.map(e => e.id));
-    for (const { id, duracaoMs } of encerradosComDuracao) {
-      for (const assigneeId of (assigneesMap.get(id) || [])) {
-        const key = String(assigneeId);
-        if (!atendimentoPorOperador[key]) atendimentoPorOperador[key] = { somaMs: 0, count: 0 };
-        atendimentoPorOperador[key].somaMs += duracaoMs;
-        atendimentoPorOperador[key].count  += 1;
-      }
+  for (const { id, duracaoMs } of encerradosComDuracao) {
+    for (const assigneeId of (atendentesDe.get(id) || [])) {
+      const key = String(assigneeId);
+      if (!atendimentoPorOperador[key]) atendimentoPorOperador[key] = { somaMs: 0, count: 0 };
+      atendimentoPorOperador[key].somaMs += duracaoMs;
+      atendimentoPorOperador[key].count  += 1;
     }
   }
 
@@ -4328,6 +4375,10 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
   if (!chamado) throw new Error('chamado não encontrado no D1');
 
   const prevStatus     = chamado.status;
+  // Mesmo status = nada a fazer. O modal "Gerenciar" sempre manda o status junto, e sem isto
+  // salvar só a solução reiniciava início/prazo do atendimento, a data de encerramento ou a
+  // pausa, além de repetir o push.
+  if (prevStatus === novoStatus) return chamado;
   const saiuDePendente = prevStatus === 'pendente' && novoStatus !== 'pendente';
   // 🛡️ Achado do revisor (2026-08-13, mesmo dia do fix de saiuDePendente abaixo): o
   // painel de admin aceita QUALQUER transição de status a qualquer momento (Kanban
@@ -4343,11 +4394,17 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
   const patch = { status: novoStatus };
 
   if (novoStatus === 'pendente') {
-    await env.SUBSCRIPTIONS.put(`d1_pending_start_${chamadoId}`, String(Date.now()), { expirationTtl: 2592000 });
+    // Sem validade: com TTL de 30 dias, uma espera longa perdia o crédito do tempo parado.
+    // A chave é apagada quando o chamado sai de pendente.
+    await env.SUBSCRIPTIONS.put(`d1_pending_start_${chamadoId}`, String(Date.now()));
   } else if (saiuDePendente) {
     const pendingStartStr = await env.SUBSCRIPTIONS.get(`d1_pending_start_${chamadoId}`);
-    if (pendingStartStr && chamado.due_date != null) {
-      patch.dueDate = chamado.due_date + (Date.now() - parseInt(pendingStartStr, 10));
+    // Sem a chave (pausas antigas, gravadas com validade de 30 dias), vale o histórico.
+    const pausadoEm = pendingStartStr
+      ? parseInt(pendingStartStr, 10)
+      : ultimaEntradaEm(await d1ListEventos(env, chamadoId), 'pendente');
+    if (pausadoEm != null && chamado.due_date != null) {
+      patch.dueDate = chamado.due_date + (Date.now() - pausadoEm);
     }
     await env.SUBSCRIPTIONS.delete(`d1_pending_start_${chamadoId}`);
   }

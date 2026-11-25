@@ -332,6 +332,61 @@ async function test(name, fn) {
     assert.strictEqual(m.tempoMedioPorOperador['170628721'], undefined);
   });
 
+  async function registrarStatus(env, chamadoId, de, para, quando) {
+    await env.CHAMADOS_DB.prepare(
+      "INSERT INTO chamado_eventos (id, chamado_id, tipo, de_valor, para_valor, created_at) VALUES (?, ?, 'status', ?, ?, ?)"
+    ).bind(`${chamadoId}-${quando}`, chamadoId, de, para, quando).run();
+  }
+
+  await test('SLA: pendente é medido quando entrou em espera, não agora', async () => {
+    const env = freshEnv();
+    const antes = await d1CreateChamado(env, { ...baseChamado, status: 'pendente', due_date: 5000 });
+    await registrarStatus(env, antes.id, 'aberto', 'pendente', 4000); // parou antes do prazo
+    const depois = await d1CreateChamado(env, { ...baseChamado, status: 'pendente', due_date: 5000 });
+    await registrarStatus(env, depois.id, 'aberto', 'pendente', 6000); // já estava vencido
+    await d1CreateChamado(env, { ...baseChamado, status: 'pendente', due_date: 5000 }); // sem registro
+
+    const m = await d1GetMetrics(env);
+    assert.strictEqual(m.sla.dentroDoSla, 1);
+    assert.strictEqual(m.sla.atrasado, 1);
+  });
+
+  await test('tempo em atendimento soma os períodos e deixa a espera de fora', async () => {
+    const env = freshEnv();
+    const t = await d1CreateChamado(env, { ...baseChamado, status: 'encerrado', assignee_id: 170628721, due_date: 200000 });
+    await registrarStatus(env, t.id, 'aberto', 'em atendimento', 1000);
+    await registrarStatus(env, t.id, 'em atendimento', 'pendente', 4000);   // 3000
+    await registrarStatus(env, t.id, 'pendente', 'em atendimento', 90000);
+    await registrarStatus(env, t.id, 'em atendimento', 'encerrado', 92000); // 2000
+    // datas gravadas no chamado só cobrem o último período
+    await d1UpdateChamado(env, t.id, { startDate: 90000, dateClosed: 999999 });
+
+    const m = await d1GetMetrics(env);
+    assert.strictEqual(m.tempoMedioPorOperador['170628721'].mediaMs, 5000);
+    assert.strictEqual(m.sla.dentroDoSla, 1, 'vale a hora do encerramento no histórico');
+  });
+
+  await test('histórico incompleto cai para as datas do chamado', async () => {
+    const env = freshEnv();
+    const t = await d1CreateChamado(env, { ...baseChamado, status: 'encerrado', assignee_id: 170628721 });
+    await registrarStatus(env, t.id, 'em atendimento', 'encerrado', 9000); // entrou antes do registro de eventos
+    await d1UpdateChamado(env, t.id, { startDate: 2000, dateClosed: 9000 });
+
+    const m = await d1GetMetrics(env);
+    assert.strictEqual(m.tempoMedioPorOperador['170628721'].mediaMs, 7000);
+  });
+
+  await test('histórico que não começa em "aberto" não é somado pela metade', async () => {
+    const env = freshEnv();
+    const t = await d1CreateChamado(env, { ...baseChamado, status: 'encerrado', assignee_id: 170628721 });
+    await registrarStatus(env, t.id, 'pendente', 'em atendimento', 8000);
+    await registrarStatus(env, t.id, 'em atendimento', 'encerrado', 9000);
+    await d1UpdateChamado(env, t.id, { startDate: 2000, dateClosed: 9000 });
+
+    const m = await d1GetMetrics(env);
+    assert.strictEqual(m.tempoMedioPorOperador['170628721'].mediaMs, 7000);
+  });
+
   // B7 parte 2, fase 2: chamado com 2+ operadores encerrado — cada um recebe a duração
   // INTEIRA (não dividida entre eles), mesma regra que a versão ClickUp-based sempre teve.
   await test('tempoMedioPorOperador: chamado com 2 assignees dá a duração inteira pra cada um, não dividida', async () => {
@@ -466,6 +521,27 @@ async function test(name, fn) {
     assert.ok(updated.due_date >= 1000000 + 5 * 60000 - 1000, 'due_date devia ter sido adiado ~5min');
     const pendingDepois = await env.SUBSCRIPTIONS.get(`d1_pending_start_${created.id}`);
     assert.strictEqual(pendingDepois, null, 'chave de pausa devia ter sido apagada');
+  });
+
+  await test('repetir o mesmo status não mexe em datas, prazo nem pausa', async () => {
+    const env = freshEnvComAutomacao(vapidPrivateJwk);
+    const created = await d1CreateChamado(env, baseChamado);
+    for (const status of ['em atendimento', 'pendente', 'encerrado']) {
+      await d1TransitionStatus(env, created.id, status);
+      await d1UpdateChamado(env, created.id, { startDate: 111, dueDate: 222, dateClosed: 333 });
+      await env.SUBSCRIPTIONS.put(`d1_pending_start_${created.id}`, '444');
+      const depois = await d1TransitionStatus(env, created.id, status);
+      assert.deepStrictEqual([depois.start_date, depois.due_date, depois.date_closed], [111, 222, 333], status);
+      assert.strictEqual(await env.SUBSCRIPTIONS.get(`d1_pending_start_${created.id}`), '444', status);
+    }
+  });
+
+  await test('sair de "pendente" sem a chave no KV usa a entrada em espera do histórico', async () => {
+    const env = freshEnvComAutomacao(vapidPrivateJwk);
+    const created = await d1CreateChamado(env, { ...baseChamado, status: 'pendente', due_date: 1000000 });
+    await registrarStatus(env, created.id, 'aberto', 'pendente', Date.now() - 5 * 60000);
+    const updated = await d1TransitionStatus(env, created.id, 'aberto');
+    assert.ok(updated.due_date >= 1000000 + 5 * 60000 - 1000, 'due_date devia ter sido adiado ~5min');
   });
 
   await test('status inválido lança erro', async () => {

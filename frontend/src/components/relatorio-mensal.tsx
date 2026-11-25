@@ -163,9 +163,11 @@ function Conteudo({ m, a, rotuloAnterior, avaliacao }: { m: Metrics; a: Metrics;
         Mês anterior: {rotuloAnterior}.
       </p>
       <p className="mt-1 text-xs text-neutral-600">
-        Prazo: vale o prazo atual de cada chamado (de aceitação ou de conclusão); pendente com prazo vencido conta como fora.
-        Tempo de atendimento: da última entrada em atendimento até o encerramento, com a quantidade de chamados entre parênteses.
-        Chamado com dois atendentes conta para os dois.
+        Prazo: vale o prazo atual de cada chamado (de aceitação ou de conclusão). Chamado em espera tem o prazo parado
+        e é medido no momento em que entrou em espera.
+        Tempo de atendimento: soma do tempo em atendimento, sem contar a espera, com a quantidade de chamados entre
+        parênteses. Chamado com dois atendentes conta para os dois. Em chamados antigos, sem histórico completo, o tempo
+        pode incluir a espera, e os que estão em espera sem esse registro ficam fora da conta de prazo.
       </p>
       <Tabela
         titulo="Resumo"
@@ -184,7 +186,7 @@ function Conteudo({ m, a, rotuloAnterior, avaliacao }: { m: Metrics; a: Metrics;
       <Tabela titulo="Por prioridade" colunas={colunas} linhas={contagem(PRIORIDADES, m.porPrioridade, a.porPrioridade)} />
       <Tabela titulo="Chamados por atendente" colunas={colunas} linhas={ids.map((id) => [nomeOperador(id), m.porOperador[id] ?? 0, a.porOperador[id] ?? 0])} />
       <Tabela
-        titulo="Tempo médio até encerrar"
+        titulo="Tempo médio em atendimento"
         colunas={colunas}
         linhas={[...new Set([...Object.keys(m.tempoMedioPorOperador), ...Object.keys(a.tempoMedioPorOperador)])].map((id) => [nomeOperador(id), tempo(m, id), tempo(a, id)])}
       />
