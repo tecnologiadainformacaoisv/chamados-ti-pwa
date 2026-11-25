@@ -64,5 +64,9 @@ export const salvarToner = (secret: string, dados: TonerForm, id?: string) =>
 export const registrarRecarga = (secret: string, tonerId: string, autor?: string | null) =>
   adminPost(secret, `/toners/${tonerId}/recarga`, autor ? { autor } : {})
 
-export const desfazerUltimaRecarga = (secret: string, tonerId: string) =>
-  adminPost(secret, `/toners/${tonerId}/recarga/desfazer`, {})
+/**
+ * `feitaEm` é a data da recarga que a pessoa está vendo como a última: se a lista mudou (duplo clique, outra
+ * pessoa mexendo), o servidor recusa (409) em vez de apagar uma recarga que ela não viu.
+ */
+export const desfazerUltimaRecarga = (secret: string, tonerId: string, feitaEm?: number) =>
+  adminPost(secret, `/toners/${tonerId}/recarga/desfazer`, feitaEm !== undefined ? { feita_em: feitaEm } : {})

@@ -76,9 +76,11 @@ test.describe("Toners", () => {
     await abrir(page)
     await expect(linhas(page).filter({ hasText: "TN-NOVO" }).getByRole("button", { name: "Desfazer última" })).toHaveCount(0)
     let chamadas = 0
+    let corpo: Record<string, unknown> = {}
     await page.route(/\/admin\/toners\/t-ok\/recarga\/desfazer$/, (route) => {
       if (route.request().method() !== "POST") return route.fallback()
       chamadas++
+      corpo = route.request().postDataJSON()
       return route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ ok: true }) })
     })
     const botao = linhas(page).filter({ hasText: "TN-OK" }).getByRole("button", { name: "Desfazer última" })
@@ -88,6 +90,34 @@ test.describe("Toners", () => {
     page.once("dialog", (d) => d.accept())
     await botao.click()
     await expect.poll(() => chamadas).toBe(1)
+    // manda a data da recarga que estava vendo, para o servidor recusar se a lista mudou
+    expect(typeof corpo.feita_em).toBe("number")
+  })
+
+  test("se a lista mudou, o servidor recusa o 'Desfazer' e a tela avisa", async ({ page }) => {
+    await abrir(page)
+    await page.route(/\/admin\/toners\/t-ok\/recarga\/desfazer$/, (route) => {
+      if (route.request().method() !== "POST") return route.fallback()
+      return route.fulfill({ status: 409, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ error: "a lista mudou enquanto você olhava; atualize a tela e confira antes de desfazer" }) })
+    })
+    page.once("dialog", (d) => d.accept())
+    await linhas(page).filter({ hasText: "TN-OK" }).getByRole("button", { name: "Desfazer última" }).click()
+    await expect(page.getByRole("alert")).toContainText("a lista mudou")
+  })
+
+  test("toner repetido (mesma impressora e cor) mostra o erro do servidor no formulário", async ({ page }) => {
+    await abrir(page)
+    await page.route(/\/admin\/toners$/, (route) => {
+      if (route.request().method() !== "POST") return route.fallback()
+      return route.fulfill({ status: 409, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ error: "esta impressora já tem um toner dessa cor; edite o que já existe" }) })
+    })
+    await page.getByRole("button", { name: "Novo toner" }).click()
+    const dialogo = page.getByRole("dialog")
+    await dialogo.locator("#toner-impressora").click()
+    await page.getByRole("option", { name: /Sala 3/ }).click()
+    await dialogo.getByLabel("Código do toner").fill("TN-2000")
+    await dialogo.getByRole("button", { name: "Salvar" }).click()
+    await expect(dialogo.getByRole("alert")).toContainText("já tem um toner dessa cor")
   })
 
   test("erro do servidor na recarga aparece na tela", async ({ page }) => {

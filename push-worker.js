@@ -174,7 +174,7 @@ export default {
     } catch (err) {
       // Antes, uma exceção solta virava a página de erro 1101 da Cloudflare, SEM cabeçalho de CORS: o
       // navegador só enxergava "falha de rede" e a tela não conseguia dizer o que aconteceu.
-      console.error(`erro não tratado em ${request.method} ${new URL(request.url).pathname}: ${err && err.message}`);
+      console.error(`erro não tratado em ${request.method} ${new URL(request.url).pathname}: ${(err && (err.stack || err.message)) || err}`);
       resposta = jsonRes({ error: 'erro interno do servidor' }, 500);
     }
     return withCors(resposta, request);
@@ -220,6 +220,7 @@ async function routeRequest(request, env, ctx) {
       // single-segment, que não tem essa sub-rota). POST (não DELETE) por convenção:
       // esta API nunca usou o verbo DELETE em lugar nenhum (CORS só libera GET/POST/
       // OPTIONS, ver const CORS) — toda mutação aqui é POST num path específico.
+      if (pathname === '/admin/limpar-sem-atendente') return handleAdminLimparSemAtendente(request, env);
       const adminDeleteMatch = pathname.match(/^\/admin\/tasks\/([^/]+)\/delete$/);
       if (adminDeleteMatch) return handleAdminDeleteTask(request, env, adminDeleteMatch[1]);
       if (pathname === '/admin/migrate-schema-chamado-eventos') return handleAdminMigrateSchemaChamadoEventos(request, env);
@@ -447,7 +448,7 @@ async function handleCreateTask(request, env) {
     return jsonRes({ error: 'escolha um atendente: Everson ou Henrique' }, 400);
   }
   // Equipamento (opcional, 2026-11-23): se vier, tem que existir e estar em uso.
-  const equip = await resolveEquipamentoId(env, payload.equipamento_id);
+  const equip = await resolveEquipamentoId(env, payload.equipamento_id, { restrito: true, solicitante: session.name });
   if (equip.erro) return jsonRes({ error: equip.erro }, 400);
   // Marca o throttle antes de gravar (cobre o duplo-clique concorrente); desfeito se falhar.
   await env.SUBSCRIPTIONS.put(throttleKey, '1', { expirationTtl: 60 });
@@ -1483,7 +1484,8 @@ async function handleAdminSubscribe(request, env) {
 // ninguém ver o erro. Body: { id: string } — mesmo id de handleAdminSubscribe.
 // =====================================================================
 async function handleAdminSubscribeTest(request, env) {
-  if (!(await isStaff(request, env))) return unauthorized();
+  const staff = await isStaff(request, env);
+  if (!staff) return unauthorized();
 
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
@@ -1492,6 +1494,11 @@ async function handleAdminSubscribeTest(request, env) {
 
   const subJson = await env.SUBSCRIPTIONS.get(`adminsub_${id}`);
   if (!subJson) return jsonRes({ error: 'nenhuma inscrição salva pra esse device — clique em "Ativar" primeiro' }, 404);
+  // Operador só testa o aparelho dele (inscrição sem dono vale como do admin, igual a notifyAdminsNovoChamado).
+  if (staff.role === 'operador') {
+    const dono = JSON.parse(subJson).operadorId ?? OPERADOR_ADMIN_ID;
+    if (dono !== staff.operadorId) return unauthorized();
+  }
 
   const payload = JSON.stringify({
     title: 'Teste de notificação — Chamados de TI',
@@ -2993,12 +3000,23 @@ function equipIp(v) {
   return partes.map(Number).join('.');
 }
 
+// Tipos que uma pessoa comum abriria chamado para escolher (rede, servidores e "outro" ficam só com a TI).
+const EQUIP_TIPOS_SOLICITANTE = ['impressora', 'computador', 'monitor', 'notebook'];
+
+async function contaExterna(env, nome) {
+  const conta = await env.CHAMADOS_DB.prepare(`SELECT origem FROM solicitantes WHERE name = ?`).bind(nome).first();
+  return conta?.origem === 'externo';
+}
+
 // Valida o equipamento de um chamado novo. Devolve { id } (ou { id: null } se não veio) ou { erro }.
-async function resolveEquipamentoId(env, valor) {
+// `restrito` = quem abre é o próprio solicitante (não a TI): conta externa não vincula nada e só vale os 4 tipos.
+async function resolveEquipamentoId(env, valor, { restrito = false, solicitante = null } = {}) {
   if (valor == null || valor === '') return { id: null };
   if (typeof valor !== 'string' || valor.length > 64) return { erro: 'equipamento inválido' };
+  if (restrito && solicitante && await contaExterna(env, solicitante)) return { erro: 'equipamento não encontrado' };
   try {
-    const eq = await env.CHAMADOS_DB.prepare(`SELECT id FROM equipamentos WHERE id = ? AND ativo = 1 AND status != 'baixado'`).bind(valor).first();
+    const filtroTipo = restrito ? ` AND tipo IN (${EQUIP_TIPOS_SOLICITANTE.map(t => `'${t}'`).join(', ')})` : '';
+    const eq = await env.CHAMADOS_DB.prepare(`SELECT id FROM equipamentos WHERE id = ? AND ativo = 1 AND status != 'baixado'${filtroTipo}`).bind(valor).first();
     return eq ? { id: eq.id } : { erro: 'equipamento não encontrado' };
   } catch {
     return { erro: 'equipamento não encontrado' };
@@ -3032,9 +3050,13 @@ async function handleListEquipamentosSolicitante(request, env) {
   const session = await requireSession(request, env);
   if (!session) return sessionInvalid();
   await garantirEsquemaInventario(env);
+  // Conta de fora (autocadastro com qualquer e-mail) não vê o inventário da empresa.
+  if (await contaExterna(env, session.name)) return jsonRes({ equipamentos: [] });
+  // Só o que alguém abriria chamado para escolher (rede, servidores e "outro" ficam só com a TI).
   const { results } = await env.CHAMADOS_DB.prepare(
     `SELECT id, tombamento, tipo, marca, modelo, setor, local FROM equipamentos
-      WHERE ativo = 1 AND status != 'baixado' ORDER BY tipo, tombamento, modelo`
+      WHERE ativo = 1 AND status != 'baixado' AND tipo IN (${EQUIP_TIPOS_SOLICITANTE.map(t => `'${t}'`).join(', ')})
+      ORDER BY tipo, tombamento, modelo`
   ).all();
   return jsonRes({ equipamentos: results || [] });
 }
@@ -3045,6 +3067,7 @@ async function handleAdminSaveEquipamento(request, env, id) {
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
   if (!body || typeof body !== 'object') return jsonRes({ error: 'corpo inválido' }, 400);
+  if (body.ativo !== undefined && typeof body.ativo !== 'boolean') return jsonRes({ error: 'ativo precisa ser verdadeiro ou falso' }, 400);
 
   let d;
   try {
@@ -3131,13 +3154,28 @@ async function aplicarEsquemaInventario(env) {
   } catch (err) {
     return `criar as tabelas do inventário falhou: ${err.message}`;
   }
-  // Colunas acrescentadas depois da primeira versão das tabelas (bancos que já tinham a tabela).
-  for (const [tabela, coluna] of [['chamados', 'equipamento_id TEXT'], ['equipamentos', 'ip TEXT'], ['toners', 'nivel_percentual INTEGER'], ['toners', 'nivel_lido_em INTEGER']]) {
+  // Colunas acrescentadas depois da primeira versão das tabelas (bancos que já tinham a tabela). Confere antes
+  // de alterar, para não gerar um erro "duplicate column" no log a cada instância fria; se a conferência
+  // falhar, tenta o ALTER do mesmo jeito e tolera a duplicata.
+  for (const [tabela, coluna, definicao] of [['chamados', 'equipamento_id', 'TEXT'], ['equipamentos', 'ip', 'TEXT'], ['toners', 'nivel_percentual', 'INTEGER'], ['toners', 'nivel_lido_em', 'INTEGER']]) {
+    let existe = false;
     try {
-      await db.prepare(`ALTER TABLE ${tabela} ADD COLUMN ${coluna}`).run();
+      const { results } = await db.prepare(`SELECT name FROM pragma_table_info('${tabela}')`).all();
+      existe = (results || []).some(r => r.name === coluna);
+    } catch { /* segue para o ALTER */ }
+    if (existe) continue;
+    try {
+      await db.prepare(`ALTER TABLE ${tabela} ADD COLUMN ${coluna} ${definicao}`).run();
     } catch (err) {
       if (!/duplicate column/i.test(err.message)) return `acrescentar ${tabela}.${coluna} falhou: ${err.message}`;
     }
+  }
+  // Uma impressora não tem dois toners ativos da mesma cor. Rede de segurança contra corrida de duplo clique: a
+  // rota já checa antes (handleAdminSaveToner). Melhor esforço: se já existirem repetidos, o índice não é criado.
+  try {
+    await db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_toners_equip_cor_ativo ON toners (equipamento_id, cor) WHERE ativo = 1`).run();
+  } catch (err) {
+    console.error(`índice único de toner (impressora + cor) não criado: ${err.message}`);
   }
   try {
     await db.prepare(`CREATE INDEX IF NOT EXISTS idx_chamados_equipamento ON chamados (equipamento_id)`).run();
@@ -3187,7 +3225,7 @@ async function handleAdminListToners(request, env) {
   const { results: toners } = await env.CHAMADOS_DB.prepare(
     `SELECT t.*, e.tombamento, e.marca, e.modelo, e.setor, e.local, e.ip
        FROM toners t LEFT JOIN equipamentos e ON e.id = t.equipamento_id
-      WHERE t.ativo = 1 ORDER BY t.created_at`
+      WHERE t.ativo = 1 AND (e.id IS NULL OR (e.ativo = 1 AND e.status != 'baixado')) ORDER BY t.created_at`
   ).all();
   const { results: recargas } = await env.CHAMADOS_DB.prepare(
     `SELECT r.toner_id, r.feita_em FROM toner_recargas r JOIN toners t ON t.id = r.toner_id WHERE t.ativo = 1 ORDER BY r.feita_em`
@@ -3206,6 +3244,7 @@ async function handleAdminSaveToner(request, env, id) {
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
   if (!body || typeof body !== 'object') return jsonRes({ error: 'corpo inválido' }, 400);
+  if (body.ativo !== undefined && typeof body.ativo !== 'boolean') return jsonRes({ error: 'ativo precisa ser verdadeiro ou falso' }, 400);
 
   let d;
   try {
@@ -3229,9 +3268,32 @@ async function handleAdminSaveToner(request, env, id) {
   if (d.codigo === null) return jsonRes({ error: 'o código do toner é obrigatório' }, 400);
 
   if (d.equipamento_id !== undefined) {
-    const eq = await env.CHAMADOS_DB.prepare(`SELECT tipo FROM equipamentos WHERE id = ? AND ativo = 1`).bind(d.equipamento_id).first();
+    const eq = await env.CHAMADOS_DB.prepare(`SELECT tipo FROM equipamentos WHERE id = ? AND ativo = 1 AND status != 'baixado'`).bind(d.equipamento_id).first();
     if (!eq) return jsonRes({ error: 'impressora não encontrada' }, 400);
     if (eq.tipo !== 'impressora') return jsonRes({ error: 'toner só pode ser ligado a uma impressora' }, 400);
+  }
+
+  // Uma impressora não tem dois toners ativos da mesma cor. Checagem prévia (mensagem clara) + índice único
+  // no banco como rede de segurança (corrida de duplo clique).
+  {
+    const atual = id === null ? null : await env.CHAMADOS_DB.prepare(`SELECT equipamento_id, cor, ativo FROM toners WHERE id = ?`).bind(id).first();
+    if (id !== null && !atual) return jsonRes({ error: 'toner não encontrado' }, 404);
+    const equipamentoFinal = d.equipamento_id ?? atual?.equipamento_id;
+    const corFinal = d.cor ?? atual?.cor ?? 'preto';
+    const ficaAtivo = body.ativo !== undefined ? body.ativo : (atual ? atual.ativo === 1 : true);
+    if (equipamentoFinal && ficaAtivo) {
+      const outro = await env.CHAMADOS_DB.prepare(
+        `SELECT id FROM toners WHERE equipamento_id = ? AND cor = ? AND ativo = 1 AND id != ?`
+      ).bind(equipamentoFinal, corFinal, id ?? '').first();
+      if (outro) {
+        const reativando = atual && atual.ativo !== 1 && body.ativo === true;
+        return jsonRes({
+          error: reativando
+            ? 'não dá para reativar: esta impressora já tem outro toner dessa cor ativo'
+            : 'esta impressora já tem um toner dessa cor; edite o que já existe',
+        }, 409);
+      }
+    }
   }
 
   try {
@@ -3257,12 +3319,15 @@ async function handleAdminSaveToner(request, env, id) {
     if (!r.meta?.changes) return jsonRes({ error: 'toner não encontrado' }, 404);
     return jsonRes({ ok: true });
   } catch (err) {
+    // Índice único (impressora + cor) entre os toners ativos: duplo clique ou edição que repetiria a cor.
+    if (/UNIQUE/i.test(String(err.message))) return jsonRes({ error: 'esta impressora já tem um toner dessa cor; edite o que já existe' }, 409);
     return jsonRes({ error: `não foi possível salvar: ${err.message}` }, 400);
   }
 }
 
 async function handleAdminRegistrarRecarga(request, env, tonerId) {
-  if (!(await isStaff(request, env))) return unauthorized();
+  const staff = await isStaff(request, env);
+  if (!staff) return unauthorized();
   await garantirEsquemaInventario(env);
   let body = {};
   try { body = (await request.json()) || {}; } catch { /* corpo vazio vale: recarga agora */ }
@@ -3280,6 +3345,9 @@ async function handleAdminRegistrarRecarga(request, env, tonerId) {
   } catch (e) {
     return jsonRes({ error: e.message }, 400);
   }
+  // Operador assina sempre como ele mesmo (mesma regra das notas do chamado); o admin pode informar o autor.
+  if (staff.role === 'operador') autor = OPERADOR_NOMES[staff.operadorId] ?? null;
+  else if (!autor) autor = OPERADOR_NOMES[staff.operadorId] ?? null;
   await env.CHAMADOS_DB.prepare(
     `INSERT INTO toner_recargas (id, toner_id, feita_em, autor, observacao) VALUES (?, ?, ?, ?, ?)`
   ).bind(crypto.randomUUID(), tonerId, feitaEm, autor ?? null, observacao ?? null).run();
@@ -3290,10 +3358,16 @@ async function handleAdminRegistrarRecarga(request, env, tonerId) {
 async function handleAdminDesfazerRecarga(request, env, tonerId) {
   if (!(await isStaff(request, env))) return unauthorized();
   await garantirEsquemaInventario(env);
+  let corpo = {};
+  try { corpo = (await request.json()) || {}; } catch { /* sem corpo: comportamento antigo */ }
   const ultima = await env.CHAMADOS_DB.prepare(
-    `SELECT id FROM toner_recargas WHERE toner_id = ? ORDER BY feita_em DESC, rowid DESC LIMIT 1`
+    `SELECT id, feita_em FROM toner_recargas WHERE toner_id = ? ORDER BY feita_em DESC, rowid DESC LIMIT 1`
   ).bind(tonerId).first();
   if (!ultima) return jsonRes({ error: 'este toner não tem recarga para desfazer' }, 404);
+  // Dois cliques rápidos (ou outra pessoa mexendo) apagariam DUAS recargas. Quem sabe qual estava vendo manda a data.
+  if (corpo.feita_em !== undefined && Number(corpo.feita_em) !== ultima.feita_em) {
+    return jsonRes({ error: 'a lista mudou enquanto você olhava; atualize a tela e confira antes de desfazer' }, 409);
+  }
   await env.CHAMADOS_DB.prepare(`DELETE FROM toner_recargas WHERE id = ?`).bind(ultima.id).run();
   return jsonRes({ ok: true });
 }
@@ -3317,13 +3391,36 @@ async function handleAdminMigrateSchemaToners(request, env) {
 const AGENTE_MAX_LEITURAS = 200;
 const AGENTE_MAX_SUPRIMENTOS = 8;
 
-function agenteAutorizado(request, env) {
+// Compara em tempo constante: o tempo de resposta não revela quantos caracteres do segredo acertaram.
+function igualConstante(a, b) {
+  const enc = new TextEncoder();
+  const x = enc.encode(String(a));
+  const y = enc.encode(String(b));
+  let diff = x.length ^ y.length;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) diff |= (x[i] ?? 0) ^ (y[i] ?? 0);
+  return diff === 0;
+}
+
+// Mesmo modelo do ADMIN_SECRET (getStaff): 5 erros por IP bloqueiam por 15 min (`agentefail_<ip>`); acertar
+// zera o contador; requisição SEM o cabeçalho não conta como tentativa.
+async function agenteAutorizado(request, env) {
   if (!env.TONER_AGENT_SECRET) return false;
-  return request.headers.get('X-Agente-Secret') === env.TONER_AGENT_SECRET;
+  const provided = request.headers.get('X-Agente-Secret');
+  if (!provided) return false;
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const failKey = `agentefail_${ip}`;
+  const failCount = parseInt(await env.SUBSCRIPTIONS.get(failKey) || '0');
+  if (failCount >= MAX_ADMIN_FAILURES) return false;
+  if (igualConstante(provided, env.TONER_AGENT_SECRET)) {
+    if (failCount > 0) await env.SUBSCRIPTIONS.delete(failKey);
+    return true;
+  }
+  await env.SUBSCRIPTIONS.put(failKey, String(failCount + 1), { expirationTtl: ADMIN_LOCKOUT_SECONDS });
+  return false;
 }
 
 async function handleAgenteListaImpressoras(request, env) {
-  if (!agenteAutorizado(request, env)) return unauthorized();
+  if (!(await agenteAutorizado(request, env))) return unauthorized();
   await garantirEsquemaInventario(env);
   const { results } = await env.CHAMADOS_DB.prepare(
     `SELECT id, tombamento, marca, modelo, ip FROM equipamentos
@@ -3339,7 +3436,7 @@ async function handleAgenteListaImpressoras(request, env) {
 }
 
 async function handleAgenteLeituras(request, env) {
-  if (!agenteAutorizado(request, env)) return unauthorized();
+  if (!(await agenteAutorizado(request, env))) return unauthorized();
   await garantirEsquemaInventario(env);
   let body;
   try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
@@ -3367,7 +3464,9 @@ async function handleAgenteLeituras(request, env) {
   for (let i = 0; i < stmts.length; i += 50) {
     const lote = stmts.slice(i, i + 50);
     const res = await env.CHAMADOS_DB.batch(lote.map(s =>
-      env.CHAMADOS_DB.prepare(`UPDATE toners SET nivel_percentual = ?, nivel_lido_em = ? WHERE equipamento_id = ? AND cor = ? AND ativo = 1`)
+      env.CHAMADOS_DB.prepare(`UPDATE toners SET nivel_percentual = ?, nivel_lido_em = ?
+          WHERE equipamento_id = ? AND cor = ? AND ativo = 1
+            AND equipamento_id IN (SELECT id FROM equipamentos WHERE ativo = 1 AND status != 'baixado')`)
         .bind(s.nivel, agora, s.eq, s.cor)));
     res.forEach((r, j) => {
       if (r.meta?.changes) atualizados += r.meta.changes;
@@ -3375,6 +3474,91 @@ async function handleAgenteLeituras(request, env) {
     });
   }
   return jsonRes({ atualizados, ignorados });
+}
+
+// =====================================================================
+// POST /admin/limpar-sem-atendente — ROTA TEMPORÁRIA (2026-11-25), remover depois de usada (mesmo padrão
+// das outras rotas de uso único). Só o admin.
+// Chamados que NENHUM operador atual (OPERADOR_IDS) atende — sem atendente nenhum, ou só com um atendente
+// antigo (ex.: 112089386, da ClickUp) — ficam fora de qualquer lista da Gestão e dão 403 ao salvar (ver
+// staffCanAccessChamado). A TI pediu para apagá-los.
+// APAGAR É IRREVERSÍVEL, então:
+//   * sem `confirmar`, só LISTA o que seria apagado (dryRun) — nada é alterado;
+//   * com `confirmar: true`, exige `ids` (no máximo 5 por chamada) e só apaga os que AINDA são alvo
+//     naquele momento (reconferido id a id, logo antes de apagar); qualquer outro vai para `ignorados`
+//     e é preservado; se uma exclusão falhar, devolve o que já foi apagado e o que deu erro;
+//   * alvo = nenhuma linha de operador atual em chamado_assignees E `chamados.assignee_id` também não é de um
+//     operador atual (chamado migrado só com a coluna antiga fica protegido);
+//   * apaga pelo mesmo caminho da exclusão manual (d1DeleteChamado: D1 + anexos no R2).
+// =====================================================================
+// Lote pequeno de propósito: cada exclusão faz várias subrequests (anexos, R2, D1) e o teto real deste Worker já
+// estourou com lote de 50 em outra migração; com 5 passou. Para apagar mais, chame de novo.
+const LIMPEZA_MAX_POR_CHAMADA = 5;
+
+const SQL_SEM_OPERADOR_ATUAL = `NOT EXISTS (SELECT 1 FROM chamado_assignees a WHERE a.chamado_id = c.id AND a.assignee_id IN (${OPERADOR_IDS.map(() => '?').join(', ')}))
+      AND (c.assignee_id IS NULL OR c.assignee_id NOT IN (${OPERADOR_IDS.map(() => '?').join(', ')}))`;
+
+async function chamadosSemAtendenteValido(env) {
+  const { results } = await env.CHAMADOS_DB.prepare(
+    `SELECT c.id, c.numero, c.name, c.solicitante, c.status, c.date_created, c.assignee_id,
+            (SELECT GROUP_CONCAT(a.assignee_id) FROM chamado_assignees a WHERE a.chamado_id = c.id) AS atendentes
+       FROM chamados c
+      WHERE ${SQL_SEM_OPERADOR_ATUAL}
+      ORDER BY c.date_created`
+  ).bind(...OPERADOR_IDS, ...OPERADOR_IDS).all();
+  return results || [];
+}
+
+// Reconferência de UM chamado, logo antes de apagar (fecha a janela entre listar e apagar).
+async function aindaSemAtendenteValido(env, id) {
+  const linha = await env.CHAMADOS_DB.prepare(`SELECT c.id FROM chamados c WHERE c.id = ? AND ${SQL_SEM_OPERADOR_ATUAL}`)
+    .bind(id, ...OPERADOR_IDS, ...OPERADOR_IDS).first();
+  return !!linha;
+}
+
+async function handleAdminLimparSemAtendente(request, env) {
+  if (!(await isAdmin(request, env))) return unauthorized();
+  let body = {};
+  try { body = (await request.json()) || {}; } catch { /* corpo vazio = dryRun */ }
+
+  const alvos = await chamadosSemAtendenteValido(env);
+
+  if (body.confirmar !== true) {
+    return jsonRes({
+      dryRun: true,
+      total: alvos.length,
+      porStatus: alvos.reduce((m, c) => ({ ...m, [c.status]: (m[c.status] || 0) + 1 }), {}),
+      chamados: alvos.slice(0, 300).map(c => ({
+        id: c.id, numero: c.numero, titulo: c.name, solicitante: c.solicitante, status: c.status,
+        criado: c.date_created, atendentes: c.atendentes ? c.atendentes.split(',').map(Number) : [],
+        assigneeIdColuna: c.assignee_id ?? null,
+      })),
+    });
+  }
+
+  if (!Array.isArray(body.ids) || body.ids.length === 0 || body.ids.some(i => typeof i !== 'string')) {
+    return jsonRes({ error: 'confirmar exige a lista `ids` do que deve ser apagado' }, 400);
+  }
+  if (body.ids.length > LIMPEZA_MAX_POR_CHAMADA) {
+    return jsonRes({ error: `no máximo ${LIMPEZA_MAX_POR_CHAMADA} chamados por chamada` }, 400);
+  }
+  const permitidos = new Set(alvos.map(c => c.id));
+  const apagados = [];
+  const ignorados = [];
+  const erros = [];
+  for (const id of new Set(body.ids)) {
+    if (!permitidos.has(id) || !(await aindaSemAtendenteValido(env, id))) { ignorados.push(id); continue; }
+    try {
+      await d1DeleteChamado(env, id);
+      apagados.push(id);
+    } catch (err) {
+      // Uma falha não esconde o que já foi apagado: devolve o parcial e para por aqui.
+      erros.push({ id, erro: String(err && err.message || err) });
+      break;
+    }
+  }
+  const status = erros.length ? 500 : 200;
+  return jsonRes({ apagados: apagados.length, idsApagados: apagados, ignorados, erros, restantes: alvos.length - apagados.length }, status);
 }
 
 // =====================================================================

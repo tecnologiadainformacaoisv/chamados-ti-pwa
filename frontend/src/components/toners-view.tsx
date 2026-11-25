@@ -68,16 +68,22 @@ export function TonersView() {
     onError: aoFalhar,
   })
   const desfazer = useMutation({
-    mutationFn: (id: string) => desfazerUltimaRecarga(secret, id),
+    mutationFn: ({ id, feitaEm }: { id: string; feitaEm?: number }) => desfazerUltimaRecarga(secret, id, feitaEm),
     onMutate: () => setErroAcao(null),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["toners"] }),
-    onError: aoFalhar,
+    onError: (e) => {
+      aoFalhar(e)
+      // se a lista mudou por baixo, mostra o que está valendo agora
+      qc.invalidateQueries({ queryKey: ["toners"] })
+    },
   })
   const pedirRecarga = (t: Toner) => {
     if (window.confirm(`Registrar que o toner da impressora "${lugarDe(t)}" foi trocado agora?`)) recarga.mutate(t.id)
   }
   const pedirDesfazer = (t: Toner) => {
-    if (window.confirm(`Desfazer a última recarga registrada da impressora "${lugarDe(t)}"?`)) desfazer.mutate(t.id)
+    if (window.confirm(`Desfazer a última recarga registrada da impressora "${lugarDe(t)}"?`)) {
+      desfazer.mutate({ id: t.id, feitaEm: t.recargas[t.recargas.length - 1] })
+    }
   }
 
   const linhas = useMemo(() => {

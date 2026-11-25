@@ -220,3 +220,6 @@ CREATE TABLE IF NOT EXISTS toner_recargas (
   observacao TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_toner_recargas_toner ON toner_recargas (toner_id, feita_em);
+
+-- Uma impressora não tem dois toners ativos da mesma cor (duplo clique ou edição que repetiria a cor).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_toners_equip_cor_ativo ON toners (equipamento_id, cor) WHERE ativo = 1;
