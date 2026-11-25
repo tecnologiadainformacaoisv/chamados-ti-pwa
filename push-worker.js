@@ -203,6 +203,9 @@ async function routeRequest(request, env, ctx) {
       if (pathname === '/subscribe')     return handleSubscribe(request, env);
       if (pathname === '/api/presence')  return handlePresence(request, env);
       if (pathname === '/api/avaliacao-mensal') return handlePostAvaliacaoMensal(request, env);
+      if (pathname === '/api/solicitacoes') return handleCriarSolicitacao(request, env);
+      const solicStatusMatch = pathname.match(/^\/admin\/solicitacoes\/([^/]+)\/status$/);
+      if (solicStatusMatch) return handleAdminMudarStatusSolicitacao(request, env, solicStatusMatch[1]);
       // Fase M4 (2026-08-13): rota /webhook removida — ver comentário perto de onde
       // handleWebhook/runStatusAutomation viviam (antes de "WEB PUSH" no arquivo).
       if (pathname === '/api/tasks')     return handleCreateTask(request, env);
@@ -280,6 +283,8 @@ async function routeRequest(request, env, ctx) {
       if (pathname === '/api/solicitantes')  return handleListSolicitantes(request, env);
       if (pathname === '/api/my-tasks')      return handleGetMyTasks(request, env);
       if (pathname === '/api/avaliacao-mensal') return handleGetAvaliacaoMensal(request, env);
+      if (pathname === '/api/solicitacoes') return handleMinhasSolicitacoes(request, env);
+      if (pathname === '/admin/solicitacoes') return handleAdminListSolicitacoes(request, env);
       if (pathname === '/admin/avaliacoes-mensais') return handleAdminAvaliacoesMensais(request, env);
       if (pathname === '/admin/me')          return handleAdminMe(request, env);
       if (pathname === '/admin/users')       return handleAdminListUsers(request, env);
@@ -718,9 +723,11 @@ async function handleRegister(request, env, ctx) {
       return jsonRes({ error: 'Já existe alguém cadastrado com esse nome. Inclua mais um sobrenome ou fale com a TI.' }, 409);
     }
     try {
+      await garantirEsquemaSolicitacoes(env);
       await env.CHAMADOS_DB.batch([
         env.CHAMADOS_DB.prepare('UPDATE solicitantes SET name = ? WHERE name = ?').bind(nomeDigitado, name),
         env.CHAMADOS_DB.prepare('UPDATE chamados SET solicitante = ? WHERE solicitante = ?').bind(nomeDigitado, name),
+        env.CHAMADOS_DB.prepare('UPDATE solicitacoes SET solicitante = ? WHERE solicitante = ?').bind(nomeDigitado, name),
       ]);
     } catch (err) {
       return jsonRes({ error: /unique/i.test(err.message) ? 'Já existe alguém cadastrado com esse nome. Inclua mais um sobrenome ou fale com a TI.' : err.message }, 409);
@@ -2590,6 +2597,12 @@ async function handleAdminExcluirSolicitante(request, env, name) {
   }
 
   for (const c of chamados) await d1DeleteChamado(env, c.id);
+  // Os pedidos (solicitações) dela também saem, com o histórico: guardam o nome como texto, sem cascata automática.
+  await garantirEsquemaSolicitacoes(env);
+  await env.CHAMADOS_DB.batch([
+    env.CHAMADOS_DB.prepare('DELETE FROM solicitacao_eventos WHERE solicitacao_id IN (SELECT id FROM solicitacoes WHERE solicitante = ?)').bind(nome),
+    env.CHAMADOS_DB.prepare('DELETE FROM solicitacoes WHERE solicitante = ?').bind(nome),
+  ]);
   await env.CHAMADOS_DB.prepare('DELETE FROM solicitantes WHERE name = ?').bind(nome).run();
   await env.SUBSCRIPTIONS.delete(`auth_${nome}`);
   await env.SUBSCRIPTIONS.delete(`usub_${nome}`);
@@ -2625,8 +2638,10 @@ async function handleAdminRenomearSolicitante(request, env, name) {
       ? env.CHAMADOS_DB.prepare('UPDATE solicitantes SET name = ?, email = ? WHERE name = ?').bind(novo, email, antigo)
       : env.CHAMADOS_DB.prepare('UPDATE solicitantes SET name = ? WHERE name = ?').bind(novo, antigo),
     env.CHAMADOS_DB.prepare('UPDATE chamados SET solicitante = ? WHERE solicitante = ?').bind(novo, antigo),
+    env.CHAMADOS_DB.prepare('UPDATE solicitacoes SET solicitante = ? WHERE solicitante = ?').bind(novo, antigo),
   ];
   try {
+    await garantirEsquemaSolicitacoes(env);
     await env.CHAMADOS_DB.batch(stmts);
   } catch (err) {
     return jsonRes({ error: /unique/i.test(err.message) ? 'e-mail já usado por outro solicitante' : err.message }, 409);
@@ -2658,7 +2673,11 @@ async function handleAdminTransferirChamados(request, env, name) {
   if (!origem) return jsonRes({ error: 'solicitante de origem não encontrado' }, 404);
   const destino = await env.CHAMADOS_DB.prepare('SELECT name FROM solicitantes WHERE name = ?').bind(para).first();
   if (!destino) return jsonRes({ error: 'solicitante de destino não encontrado' }, 404);
-  const r = await env.CHAMADOS_DB.prepare('UPDATE chamados SET solicitante = ? WHERE solicitante = ?').bind(para, de).run();
+  await garantirEsquemaSolicitacoes(env);
+  const [r] = await env.CHAMADOS_DB.batch([
+    env.CHAMADOS_DB.prepare('UPDATE chamados SET solicitante = ? WHERE solicitante = ?').bind(para, de),
+    env.CHAMADOS_DB.prepare('UPDATE solicitacoes SET solicitante = ? WHERE solicitante = ?').bind(para, de),
+  ]);
   return jsonRes({ ok: true, transferidos: r?.meta?.changes ?? 0 });
 }
 
@@ -3701,6 +3720,194 @@ async function handleAdminAvaliacoesMensais(request, env) {
       : [],
     comentariosOcultos: n < AVALIACAO_MIN_ANONIMATO && validas.some(v => v.comentario),
   });
+}
+
+// =====================================================================
+// SOLICITAÇÕES (2026-11-25, ideia do estudo do OS800): pedido de equipamento, material, peça ou autorização,
+// com andamento em 5 etapas (Pendente → Em análise → Aprovado → A caminho → Entregue; ou Rejeitado).
+//   GET  /api/solicitacoes                  (sessão) as minhas
+//   POST /api/solicitacoes                  (sessão, só pessoa interna) cria
+//   GET  /admin/solicitacoes                (staff)  lista, com filtros status/categoria
+//   POST /admin/solicitacoes/:id/status     (staff)  avança/volta a etapa (transições validadas)
+// Quem pediu recebe push a cada mudança; a TI (admin) recebe um aviso quando chega pedido novo.
+// =====================================================================
+const SOLIC_CATEGORIAS = ['equipamento', 'material', 'peca', 'autorizacao'];
+const SOLIC_STATUS = ['pendente', 'em_analise', 'aprovado', 'em_transito', 'entregue', 'rejeitado'];
+// Andamento linear, de propósito (o OS800 e o app mostram as etapas em sequência; pular etapa confunde quem acompanha).
+// "Autorização" não tem entrega física, por isso aprovado pode ir direto a entregue.
+const SOLIC_TRANSICOES = {
+  pendente:    ['em_analise', 'rejeitado'],
+  em_analise:  ['aprovado', 'rejeitado', 'pendente'],
+  aprovado:    ['em_transito', 'entregue', 'rejeitado'],
+  em_transito: ['entregue'],
+  entregue:    [],
+  rejeitado:   ['pendente'],
+};
+const SOLIC_ROTULO_STATUS = { pendente: 'pendente', em_analise: 'em análise', aprovado: 'aprovado', em_transito: 'a caminho', entregue: 'entregue', rejeitado: 'rejeitado' };
+const SOLIC_MAX_PENDENTES = 20;       // contra flood: quantos pedidos "pendente" a mesma pessoa pode ter ao mesmo tempo
+const SOLIC_JANELA_REPETIDO_MS = 60_000; // mesmo pedido em menos de 1 min = duplo clique
+
+const esquemaSolicitacoesGarantido = new WeakSet();
+async function garantirEsquemaSolicitacoes(env) {
+  if (esquemaSolicitacoesGarantido.has(env.CHAMADOS_DB)) return;
+  await env.CHAMADOS_DB.batch([
+    env.CHAMADOS_DB.prepare(`CREATE TABLE IF NOT EXISTS solicitacoes (
+      id TEXT PRIMARY KEY, numero INTEGER, categoria TEXT NOT NULL, item TEXT NOT NULL, quantidade INTEGER NOT NULL DEFAULT 1,
+      justificativa TEXT NOT NULL, solicitante TEXT NOT NULL, setor INTEGER, status TEXT NOT NULL DEFAULT 'pendente',
+      nota_ti TEXT, motivo_rejeicao TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`),
+    env.CHAMADOS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_solicitacoes_status ON solicitacoes (status)`),
+    env.CHAMADOS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_solicitacoes_solicitante ON solicitacoes (solicitante, created_at)`),
+    env.CHAMADOS_DB.prepare(`CREATE TABLE IF NOT EXISTS solicitacao_eventos (
+      id TEXT PRIMARY KEY, solicitacao_id TEXT NOT NULL, de_status TEXT, para_status TEXT NOT NULL, autor TEXT, texto TEXT, created_at INTEGER NOT NULL)`),
+    env.CHAMADOS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_solicitacao_eventos ON solicitacao_eventos (solicitacao_id, created_at)`),
+  ]);
+  esquemaSolicitacoesGarantido.add(env.CHAMADOS_DB);
+}
+
+const SOLIC_CAMPOS = 'id, numero, categoria, item, quantidade, justificativa, solicitante, setor, status, nota_ti, motivo_rejeicao, created_at, updated_at';
+
+async function handleMinhasSolicitacoes(request, env) {
+  if (!hasValidSecret(request, env)) return unauthorized();
+  const session = await requireSession(request, env);
+  if (!session) return sessionInvalid();
+  // Conta externa não usa Solicitações: a tela esconde a aba quando recebe este 403.
+  if (await contaExterna(env, session.name)) return jsonRes({ error: 'Solicitações são para as pessoas da instituição.' }, 403);
+  await garantirEsquemaSolicitacoes(env);
+  const { results } = await env.CHAMADOS_DB.prepare(
+    `SELECT ${SOLIC_CAMPOS} FROM solicitacoes WHERE solicitante = ? ORDER BY created_at DESC LIMIT 200`
+  ).bind(session.name).all();
+  return jsonRes({ solicitacoes: results || [] });
+}
+
+async function handleCriarSolicitacao(request, env) {
+  if (!hasValidSecret(request, env)) return unauthorized();
+  const session = await requireSession(request, env);
+  if (!session) return sessionInvalid();
+  if (await contaExterna(env, session.name)) return jsonRes({ error: 'Solicitações são para as pessoas da instituição.' }, 403);
+
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  if (!body || typeof body !== 'object') return jsonRes({ error: 'corpo inválido' }, 400);
+
+  if (!SOLIC_CATEGORIAS.includes(body.categoria)) return jsonRes({ error: 'Escolha o que você precisa: equipamento, material, peça ou autorização.' }, 400);
+  let item, justificativa;
+  try {
+    item = equipTexto(body.item, 120, 'item');
+    justificativa = equipTexto(body.justificativa, 1000, 'justificativa');
+  } catch (e) {
+    return jsonRes({ error: e.message }, 400);
+  }
+  if (!item) return jsonRes({ error: 'Diga o que você precisa.' }, 400);
+  if (!justificativa) return jsonRes({ error: 'Explique para que você precisa.' }, 400);
+  const quantidade = body.quantidade === undefined ? 1 : body.quantidade;
+  if (!Number.isInteger(quantidade) || quantidade < 1 || quantidade > 999) return jsonRes({ error: 'A quantidade precisa ser um número de 1 a 999.' }, 400);
+  let setor = null;
+  if (body.setor != null) {
+    if (!Number.isInteger(body.setor) || body.setor < 0 || body.setor > 99) return jsonRes({ error: 'setor inválido' }, 400);
+    setor = body.setor;
+  }
+
+  await garantirEsquemaSolicitacoes(env);
+  const agora = Date.now();
+  const repetido = await env.CHAMADOS_DB.prepare(
+    `SELECT id FROM solicitacoes WHERE solicitante = ? AND categoria = ? AND item = ? AND created_at > ?`
+  ).bind(session.name, body.categoria, item, agora - SOLIC_JANELA_REPETIDO_MS).first();
+  if (repetido) return jsonRes({ error: 'Você acabou de fazer este mesmo pedido. Ele já está na sua lista.' }, 409);
+  const { n: pendentes } = await env.CHAMADOS_DB.prepare(`SELECT COUNT(*) AS n FROM solicitacoes WHERE solicitante = ? AND status = 'pendente'`).bind(session.name).first();
+  if (pendentes >= SOLIC_MAX_PENDENTES) return jsonRes({ error: `Você já tem ${SOLIC_MAX_PENDENTES} pedidos aguardando a TI. Espere alguns serem atendidos.` }, 429);
+
+  const id = crypto.randomUUID();
+  // O número sequencial é calculado dentro do próprio INSERT (o D1 serializa escritas), como em chamados.numero.
+  await env.CHAMADOS_DB.batch([
+    env.CHAMADOS_DB.prepare(
+      `INSERT INTO solicitacoes (id, numero, categoria, item, quantidade, justificativa, solicitante, setor, status, created_at, updated_at)
+       VALUES (?, (SELECT COALESCE(MAX(numero), 0) + 1 FROM solicitacoes), ?, ?, ?, ?, ?, ?, 'pendente', ?, ?)`
+    ).bind(id, body.categoria, item, quantidade, justificativa, session.name, setor, agora, agora),
+    env.CHAMADOS_DB.prepare(
+      `INSERT INTO solicitacao_eventos (id, solicitacao_id, de_status, para_status, autor, created_at) VALUES (?, ?, NULL, 'pendente', ?, ?)`
+    ).bind(crypto.randomUUID(), id, session.name, agora),
+  ]);
+  const { numero } = await env.CHAMADOS_DB.prepare(`SELECT numero FROM solicitacoes WHERE id = ?`).bind(id).first();
+
+  try {
+    await notifyAdmins(env, {
+      title: 'Chamados de TI – ISV',
+      body: `Nova solicitação de ${SOLIC_ROTULO_CATEGORIA(body.categoria)}: ${limpaTextoAviso(item, 80)} (${limpaTextoAviso(session.name, 60)})`,
+      data: { type: 'nova_solicitacao', solicitacao_id: id },
+    }, 'handleCriarSolicitacao');
+  } catch (err) {
+    console.error(`handleCriarSolicitacao: falha ao avisar a TI da solicitação ${id}: ${err.message}`);
+  }
+  return jsonRes({ id, numero }, 201);
+}
+const SOLIC_ROTULO_CATEGORIA = (c) => ({ equipamento: 'equipamento', material: 'material', peca: 'peça', autorizacao: 'autorização' }[c] ?? c);
+
+async function handleAdminListSolicitacoes(request, env) {
+  if (!(await isStaff(request, env))) return unauthorized();
+  const { searchParams } = new URL(request.url);
+  const status = searchParams.get('status');
+  const categoria = searchParams.get('categoria');
+  if (status && !SOLIC_STATUS.includes(status)) return jsonRes({ error: 'status inválido' }, 400);
+  if (categoria && !SOLIC_CATEGORIAS.includes(categoria)) return jsonRes({ error: 'categoria inválida' }, 400);
+  await garantirEsquemaSolicitacoes(env);
+  const where = [];
+  const binds = [];
+  if (status) { where.push('status = ?'); binds.push(status); }
+  if (categoria) { where.push('categoria = ?'); binds.push(categoria); }
+  const { results } = await env.CHAMADOS_DB.prepare(
+    `SELECT ${SOLIC_CAMPOS} FROM solicitacoes ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC LIMIT 500`
+  ).bind(...binds).all();
+  // Para o selo do menu: quantos pedidos esperam a primeira resposta da TI (independe dos filtros).
+  const { n: pendentes } = await env.CHAMADOS_DB.prepare(`SELECT COUNT(*) AS n FROM solicitacoes WHERE status = 'pendente'`).first();
+  return jsonRes({ solicitacoes: results || [], pendentes });
+}
+
+async function handleAdminMudarStatusSolicitacao(request, env, id) {
+  const staff = await isStaff(request, env);
+  if (!staff) return unauthorized();
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  if (!body || typeof body !== 'object') return jsonRes({ error: 'corpo inválido' }, 400);
+  await garantirEsquemaSolicitacoes(env);
+
+  const atual = await env.CHAMADOS_DB.prepare(`SELECT ${SOLIC_CAMPOS} FROM solicitacoes WHERE id = ?`).bind(id).first();
+  if (!atual) return jsonRes({ error: 'Solicitação não encontrada' }, 404);
+  const para = body.status;
+  if (!SOLIC_STATUS.includes(para)) return jsonRes({ error: 'status inválido' }, 400);
+  if (!SOLIC_TRANSICOES[atual.status].includes(para)) {
+    return jsonRes({ error: `Não dá para ir de "${SOLIC_ROTULO_STATUS[atual.status]}" para "${SOLIC_ROTULO_STATUS[para]}".` }, 400);
+  }
+  let motivo;
+  try { motivo = equipTexto(body.motivo, 500, 'recado'); } catch (e) { return jsonRes({ error: e.message }, 400); }
+  if (para === 'rejeitado' && !motivo) return jsonRes({ error: 'Explique o motivo da rejeição: quem pediu vai ler.' }, 400);
+
+  const autor = OPERADOR_NOMES[staff.operadorId] ?? null;
+  const agora = Date.now();
+  // A condição `status = ?` no WHERE protege de corrida (outro operador mexeu antes): se nada mudou, o evento não entra.
+  const [upd] = await env.CHAMADOS_DB.batch([
+    env.CHAMADOS_DB.prepare(
+      `UPDATE solicitacoes SET status = ?, nota_ti = CASE WHEN ? = 1 THEN NULL WHEN ? = 1 THEN nota_ti ELSE COALESCE(?, nota_ti) END, motivo_rejeicao = ?, updated_at = ? WHERE id = ? AND status = ?`
+    ).bind(para, para === 'pendente' ? 1 : 0, para === 'rejeitado' ? 1 : 0, motivo ?? null, para === 'rejeitado' ? motivo : null, agora, id, atual.status),
+    env.CHAMADOS_DB.prepare(
+      `INSERT INTO solicitacao_eventos (id, solicitacao_id, de_status, para_status, autor, texto, created_at)
+       SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM solicitacoes WHERE id = ? AND status = ? AND updated_at = ?)`
+    ).bind(crypto.randomUUID(), id, atual.status, para, autor, motivo ?? null, agora, id, para, agora),
+  ]);
+  if (!upd.meta?.changes) return jsonRes({ error: 'Esta solicitação mudou enquanto você olhava. Atualize a tela e confira.' }, 409);
+
+  try {
+    const subJson = await env.SUBSCRIPTIONS.get(`usub_${atual.solicitante}`);
+    if (subJson) {
+      await sendWebPush(JSON.parse(subJson), JSON.stringify({
+        title: 'Chamados de TI – ISV',
+        body: `Sua solicitação de ${SOLIC_ROTULO_CATEGORIA(atual.categoria)} (${limpaTextoAviso(atual.item, 60)}) está: ${SOLIC_ROTULO_STATUS[para]}${para === 'rejeitado' && motivo ? ` — ${limpaTextoAviso(motivo, 120)}` : ''}`,
+        data: { type: 'solicitacao', solicitacao_id: id, status: para },
+      }), env);
+    }
+  } catch (err) {
+    console.error(`handleAdminMudarStatusSolicitacao: falha ao avisar ${atual.solicitante}: ${err.message}`);
+  }
+  return jsonRes({ ok: true });
 }
 
 // =====================================================================

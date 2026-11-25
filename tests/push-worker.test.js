@@ -3700,6 +3700,210 @@ async function test(name, fn) {
     assert.strictEqual(r.mediaGeral, 4);
   });
 
+  // ---------------- Solicitações (25/11/2026) ----------------
+  const pedir = (env, h, corpo) => worker.fetch(req('POST', '/api/solicitacoes', { headers: h, body: typeof corpo === 'string' ? corpo : JSON.stringify(corpo) }), env);
+  const meusPedidos = async (env, h) => (await (await worker.fetch(req('GET', '/api/solicitacoes', { headers: h }), env)).json()).solicitacoes;
+  const PEDIDO = { categoria: 'equipamento', item: 'Mouse sem fio', quantidade: 2, justificativa: 'O meu parou de clicar.' };
+  const mudar = (env, id, corpo, h = ADM) => eqPost(env, `/admin/solicitacoes/${id}/status`, corpo, h);
+  const listaAdmin = async (env, qs = '', h = ADM) => (await worker.fetch(req('GET', `/admin/solicitacoes${qs}`, { headers: h }), env)).json();
+
+  await test('solicitações: criar exige segredo do app, sessão e pessoa interna', async () => {
+    const env = eqEnv();
+    assert.strictEqual((await worker.fetch(req('POST', '/api/solicitacoes', { headers: {}, body: JSON.stringify(PEDIDO) }), env)).status, 403);
+    assert.strictEqual((await worker.fetch(req('POST', '/api/solicitacoes', { headers: SECRET_HEADERS, body: JSON.stringify(PEDIDO) }), env)).status, 401);
+    assert.strictEqual((await worker.fetch(req('GET', '/api/solicitacoes', { headers: SECRET_HEADERS }), env)).status, 401);
+    const externo = await sessaoDe(env, 'Pessoa Solic Ext', '10.6.1.1');
+    await env.CHAMADOS_DB.prepare(`UPDATE solicitantes SET origem = 'externo' WHERE name = 'Pessoa Solic Ext'`).run();
+    assert.strictEqual((await pedir(env, externo, PEDIDO)).status, 403);
+    assert.strictEqual((await worker.fetch(req('GET', '/api/solicitacoes', { headers: externo }), env)).status, 403);
+    const interno = await sessaoDe(env, 'Pessoa Solic Int', '10.6.1.2');
+    const r = await pedir(env, interno, PEDIDO);
+    assert.strictEqual(r.status, 201);
+    const { id, numero } = await r.json();
+    assert.ok(id && numero === 1);
+    const [meu] = await meusPedidos(env, interno);
+    assert.deepStrictEqual([meu.categoria, meu.item, meu.quantidade, meu.status, meu.solicitante], ['equipamento', 'Mouse sem fio', 2, 'pendente', 'Pessoa Solic Int']);
+  });
+  await test('solicitações: o solicitante só vê os pedidos dele, e os números são sequenciais', async () => {
+    const env = eqEnv();
+    const a = await sessaoDe(env, 'Pessoa Solic A', '10.6.2.1');
+    const b = await sessaoDe(env, 'Pessoa Solic B', '10.6.2.2');
+    await pedir(env, a, { ...PEDIDO, item: 'Teclado' });
+    await pedir(env, b, { ...PEDIDO, item: 'Monitor' });
+    await pedir(env, a, { ...PEDIDO, item: 'Cabo HDMI', categoria: 'material' });
+    assert.deepStrictEqual((await meusPedidos(env, a)).map(s => s.item).sort(), ['Cabo HDMI', 'Teclado']);
+    assert.deepStrictEqual((await meusPedidos(env, b)).map(s => s.item), ['Monitor']);
+    assert.deepStrictEqual((await listaAdmin(env)).solicitacoes.map(s => s.numero).sort(), [1, 2, 3]);
+  });
+  await test('solicitações: cada campo é validado e nada é gravado se algum falhar', async () => {
+    const env = eqEnv();
+    const h = await sessaoDe(env, 'Pessoa Solic Val', '10.6.3.1');
+    const ruins = [
+      { ...PEDIDO, categoria: 'viagem' }, { ...PEDIDO, categoria: undefined }, { ...PEDIDO, item: '' }, { ...PEDIDO, item: '   ' },
+      { ...PEDIDO, item: 'x'.repeat(121) }, { ...PEDIDO, item: 5 }, { ...PEDIDO, justificativa: '' }, { ...PEDIDO, justificativa: 'x'.repeat(1001) },
+      ...[0, 1000, 1.5, '2', -1, null].map(q => ({ ...PEDIDO, quantidade: q })),
+      ...[-1, 100, 'x', 1.5].map(s => ({ ...PEDIDO, setor: s })),
+    ];
+    for (const corpo of ruins) assert.strictEqual((await pedir(env, h, corpo)).status, 400, JSON.stringify(corpo).slice(0, 80));
+    assert.strictEqual((await pedir(env, h, 'não é json')).status, 400);
+    assert.strictEqual((await meusPedidos(env, h)).length, 0);
+    // limites válidos
+    assert.strictEqual((await pedir(env, h, { ...PEDIDO, item: 'x'.repeat(120), quantidade: 999, justificativa: 'y'.repeat(1000), setor: 3 })).status, 201);
+    assert.strictEqual((await pedir(env, h, { categoria: 'autorizacao', item: 'Acesso à pasta Financeiro', justificativa: 'Preciso conferir as notas.' })).status, 201, 'quantidade padrão 1 e setor opcional');
+    assert.strictEqual((await meusPedidos(env, h)).find(s => s.categoria === 'autorizacao').quantidade, 1);
+  });
+  await test('solicitações: o mesmo pedido em menos de 1 min é duplo clique (409) e há teto de 20 pendentes por pessoa (429)', async () => {
+    const env = eqEnv();
+    const h = await sessaoDe(env, 'Pessoa Solic Dup', '10.6.4.1');
+    assert.strictEqual((await pedir(env, h, PEDIDO)).status, 201);
+    assert.strictEqual((await pedir(env, h, PEDIDO)).status, 409);
+    assert.strictEqual((await pedir(env, h, { ...PEDIDO, item: 'Outro item' })).status, 201, 'item diferente não é repetição');
+    assert.strictEqual((await pedir(env, h, { ...PEDIDO, categoria: 'material' })).status, 201, 'categoria diferente não é repetição');
+    // chega a 20 pendentes (pedidos antigos, para não cair na regra do duplo clique)
+    for (let i = 0; i < 17; i++) {
+      await env.CHAMADOS_DB.prepare(`INSERT INTO solicitacoes (id, numero, categoria, item, quantidade, justificativa, solicitante, status, created_at, updated_at) VALUES (?, ?, 'material', ?, 1, 'x', 'Pessoa Solic Dup', 'pendente', ?, ?)`)
+        .bind(`antigo-${i}`, 100 + i, `Item antigo ${i}`, Date.now() - 3_600_000, Date.now() - 3_600_000).run();
+    }
+    const cheio = await pedir(env, h, { ...PEDIDO, item: 'Item novo depois do teto' });
+    assert.strictEqual(cheio.status, 429);
+    assert.match((await cheio.json()).error, /20 pedidos/);
+    // quem já tem pedidos atendidos volta a poder pedir
+    await env.CHAMADOS_DB.prepare(`UPDATE solicitacoes SET status = 'entregue' WHERE id = 'antigo-0'`).run();
+    assert.strictEqual((await pedir(env, h, { ...PEDIDO, item: 'Item novo depois do teto' })).status, 201);
+  });
+
+  await test('solicitações (TI): lista só para staff, com filtros validados e o selo de pendentes independente do filtro', async () => {
+    const env = comOperadores(eqEnv());
+    const a = await sessaoDe(env, 'Pessoa Solic Lista A', '10.6.5.1');
+    const b = await sessaoDe(env, 'Pessoa Solic Lista B', '10.6.5.2');
+    const id1 = (await (await pedir(env, a, { ...PEDIDO, item: 'Notebook', categoria: 'equipamento' })).json()).id;
+    await pedir(env, b, { ...PEDIDO, item: 'Pasta de rede', categoria: 'autorizacao' });
+    await pedir(env, b, { ...PEDIDO, item: 'Fonte do PC', categoria: 'peca' });
+    await mudar(env, id1, { status: 'em_analise' });
+    assert.strictEqual((await worker.fetch(req('GET', '/admin/solicitacoes', { headers: {} }), env)).status, 403);
+    const tudo = await listaAdmin(env);
+    assert.strictEqual(tudo.solicitacoes.length, 3);
+    assert.strictEqual(tudo.pendentes, 2, 'só as que esperam a primeira resposta');
+    assert.deepStrictEqual((await listaAdmin(env, '?categoria=peca')).solicitacoes.map(s => s.item), ['Fonte do PC']);
+    const so = await listaAdmin(env, '?status=em_analise');
+    assert.deepStrictEqual(so.solicitacoes.map(s => s.item), ['Notebook']);
+    assert.strictEqual(so.pendentes, 2, 'o selo não muda com o filtro');
+    assert.strictEqual((await listaAdmin(env, '', EVERSON)).solicitacoes.length, 3, 'o operador também atende solicitações');
+    for (const qs of ['?status=lixo', '?categoria=viagem']) assert.strictEqual((await worker.fetch(req('GET', `/admin/solicitacoes${qs}`, { headers: ADM }), env)).status, 400, qs);
+  });
+  await test('solicitações (TI): andamento em etapas, transições inválidas recusadas, rejeitar exige motivo e reabrir limpa o motivo', async () => {
+    const env = eqEnv();
+    const h = await sessaoDe(env, 'Pessoa Solic Fluxo', '10.6.6.1');
+    const id = (await (await pedir(env, h, PEDIDO)).json()).id;
+    const estado = async () => (await meusPedidos(env, h))[0];
+    // pular etapa ou voltar do fim não pode
+    for (const [para, de] of [['aprovado', 'pendente'], ['em_transito', 'pendente'], ['entregue', 'pendente'], ['pendente', 'pendente']]) {
+      assert.strictEqual((await mudar(env, id, { status: para })).status, 400, `${de} -> ${para}`);
+    }
+    assert.strictEqual((await mudar(env, id, { status: 'lixo' })).status, 400);
+    assert.strictEqual((await mudar(env, 'nao-existe', { status: 'em_analise' })).status, 404);
+    assert.strictEqual((await mudar(env, id, { status: 'em_analise' }, {})).status, 403);
+    // rejeitar sem motivo é recusado; com motivo grava
+    assert.strictEqual((await mudar(env, id, { status: 'rejeitado' })).status, 400);
+    assert.strictEqual((await mudar(env, id, { status: 'rejeitado', motivo: 'x'.repeat(501) })).status, 400);
+    assert.strictEqual((await mudar(env, id, { status: 'rejeitado', motivo: '  Sem verba neste mês.  ' })).status, 200);
+    let s = await estado();
+    assert.deepStrictEqual([s.status, s.motivo_rejeicao, s.nota_ti], ['rejeitado', 'Sem verba neste mês.', null]);
+    // reabrir limpa o motivo da rejeição (o recado da TI continua)
+    assert.strictEqual((await mudar(env, id, { status: 'pendente' })).status, 200);
+    assert.strictEqual((await estado()).motivo_rejeicao, null);
+    // o caminho feliz até o fim, com recado que quem pediu lê
+    assert.strictEqual((await mudar(env, id, { status: 'em_analise' })).status, 200);
+    assert.strictEqual((await mudar(env, id, { status: 'aprovado', motivo: 'Compra autorizada.' })).status, 200);
+    assert.strictEqual((await mudar(env, id, { status: 'em_transito', motivo: 'Chega na sexta.' })).status, 200);
+    assert.strictEqual((await estado()).nota_ti, 'Chega na sexta.');
+    assert.strictEqual((await mudar(env, id, { status: 'entregue' })).status, 200);
+    s = await estado();
+    assert.deepStrictEqual([s.status, s.nota_ti], ['entregue', 'Chega na sexta.'], 'sem recado novo o anterior fica');
+    assert.strictEqual((await mudar(env, id, { status: 'pendente' })).status, 400, 'entregue é o fim');
+    // aprovado pode ir direto a entregue (autorização não tem entrega física)
+    const id2 = (await (await pedir(env, h, { categoria: 'autorizacao', item: 'Acesso ao sistema X', justificativa: 'Trabalho novo.' })).json()).id;
+    for (const st of ['em_analise', 'aprovado', 'entregue']) assert.strictEqual((await mudar(env, id2, { status: st })).status, 200, st);
+  });
+  await test('solicitações (TI): cada mudança entra no histórico com o nome de quem fez (o operador assina como ele mesmo)', async () => {
+    const env = comOperadores(eqEnv());
+    const h = await sessaoDe(env, 'Pessoa Solic Hist', '10.6.7.1');
+    const id = (await (await pedir(env, h, PEDIDO)).json()).id;
+    await mudar(env, id, { status: 'em_analise', motivo: 'Vou ver o estoque.' }, EVERSON);
+    await mudar(env, id, { status: 'aprovado' });
+    const ev = (await env.CHAMADOS_DB.prepare(`SELECT de_status, para_status, autor, texto FROM solicitacao_eventos WHERE solicitacao_id = ? ORDER BY rowid`).bind(id).all()).results;
+    assert.deepStrictEqual(ev.map(e => [e.de_status, e.para_status, e.autor, e.texto]), [
+      [null, 'pendente', 'Pessoa Solic Hist', null],
+      ['pendente', 'em_analise', 'Everson', 'Vou ver o estoque.'],
+      ['em_analise', 'aprovado', 'Henrique', null],
+    ]);
+  });
+  await test('solicitações (TI): se outro operador mexeu no meio, a mudança é recusada (409) e não deixa histórico falso', async () => {
+    const env = eqEnv();
+    const h = await sessaoDe(env, 'Pessoa Solic Corrida', '10.6.8.1');
+    const id = (await (await pedir(env, h, PEDIDO)).json()).id;
+    const db = env.CHAMADOS_DB;
+    let primeiro = false; // só arma depois do aquecimento (o primeiro batch de um banco novo é o que cria as tabelas)
+    // simula o outro operador: logo antes da gravação, o pedido já foi para "aprovado" por outra pessoa
+    const env2 = { ...env, CHAMADOS_DB: { prepare: (...a) => db.prepare(...a), batch: async (s) => {
+      if (primeiro) { primeiro = false; await db.prepare(`UPDATE solicitacoes SET status = 'em_analise', updated_at = ? WHERE id = ?`).bind(Date.now() + 5, id).run(); }
+      return db.batch(s);
+    } } };
+    await listaAdmin(env2); // aquece: o esquema já está garantido para este banco
+    primeiro = true;
+    const r = await mudar(env2, id, { status: 'em_analise' });
+    assert.strictEqual(r.status, 409);
+    assert.match((await r.json()).error, /mudou enquanto você olhava/);
+    const eventos = (await db.prepare(`SELECT COUNT(*) AS n FROM solicitacao_eventos WHERE solicitacao_id = ?`).bind(id).first()).n;
+    assert.strictEqual(eventos, 1, 'só o evento da criação: a mudança perdida não gravou histórico');
+  });
+  await test('solicitações: falha no push de quem pediu não derruba a mudança de etapa', async () => {
+    const env = eqEnv();
+    const h = await sessaoDe(env, 'Pessoa Solic Push', '10.6.9.1');
+    const id = (await (await pedir(env, h, PEDIDO)).json()).id;
+    await env.SUBSCRIPTIONS.put('usub_Pessoa Solic Push', JSON.stringify({ endpoint: 'https://fake-push-endpoint.test/x', keys: { p256dh: 'invalida', auth: 'invalida' } }));
+    assert.strictEqual((await mudar(env, id, { status: 'em_analise' })).status, 200);
+    assert.strictEqual((await meusPedidos(env, h))[0].status, 'em_analise');
+  });
+  await test('solicitações: banco que nunca teve as tabelas funciona (criadas no primeiro uso)', async () => {
+    const raw = new DatabaseSync(':memory:');
+    raw.exec(fs.readFileSync(path.join(__dirname, '..', 'd1', 'schema.sql'), 'utf8'));
+    raw.exec('DROP TABLE solicitacao_eventos; DROP TABLE solicitacoes;');
+    const env = { ...hEnv, CHAMADOS_DB: makeD1FromSqlite(raw), SUBSCRIPTIONS: makeMockKV() };
+    assert.deepStrictEqual((await listaAdmin(env)).solicitacoes, []);
+    const h = await sessaoDe(env, 'Pessoa Solic Nova', '10.6.10.1');
+    assert.strictEqual((await pedir(env, h, PEDIDO)).status, 201);
+    assert.strictEqual((await meusPedidos(env, h)).length, 1);
+  });
+  await test('solicitações: renomear, transferir e excluir o solicitante levam os pedidos junto', async () => {
+    const env = eqEnv();
+    const a = await sessaoDe(env, 'Pessoa Casc Um', '10.6.9.1');
+    await pedir(env, a, PEDIDO);
+    await d1CreateSolicitante(env, 'Pessoa Casc Dois', null);
+    const conta = async (nome) => (await env.CHAMADOS_DB.prepare('SELECT COUNT(*) n FROM solicitacoes WHERE solicitante = ?').bind(nome).first()).n;
+    assert.strictEqual((await eqPost(env, '/admin/solicitantes/' + encodeURIComponent('Pessoa Casc Um') + '/renomear', { novoNome: 'Pessoa Casc Renomeada' })).status, 200);
+    assert.deepStrictEqual([await conta('Pessoa Casc Um'), await conta('Pessoa Casc Renomeada')], [0, 1]);
+    assert.strictEqual((await eqPost(env, '/admin/solicitantes/' + encodeURIComponent('Pessoa Casc Renomeada') + '/transferir-chamados', { para: 'Pessoa Casc Dois' })).status, 200);
+    assert.deepStrictEqual([await conta('Pessoa Casc Renomeada'), await conta('Pessoa Casc Dois')], [0, 1]);
+    assert.strictEqual((await eqPost(env, '/admin/solicitantes/' + encodeURIComponent('Pessoa Casc Dois') + '/excluir', {})).status, 200);
+    assert.strictEqual(await conta('Pessoa Casc Dois'), 0);
+    assert.strictEqual((await env.CHAMADOS_DB.prepare('SELECT COUNT(*) n FROM solicitacao_eventos').first()).n, 0);
+  });
+  await test('solicitações: voltar a pendente ou rejeitar não deixa recado nem motivo velho aparecendo', async () => {
+    const env = eqEnv();
+    const h = await sessaoDe(env, 'Pessoa Nota Ti', '10.6.9.2');
+    const { id } = await (await pedir(env, h, PEDIDO)).json();
+    assert.strictEqual((await mudar(env, id, { status: 'em_analise' })).status, 200);
+    assert.strictEqual((await mudar(env, id, { status: 'aprovado', motivo: 'chega na sexta' })).status, 200);
+    assert.strictEqual((await mudar(env, id, { status: 'rejeitado', motivo: 'sem verba' })).status, 200);
+    let [s] = await meusPedidos(env, h);
+    assert.deepStrictEqual([s.nota_ti, s.motivo_rejeicao], ['chega na sexta', 'sem verba']);
+    assert.strictEqual((await mudar(env, id, { status: 'pendente' })).status, 200);
+    [s] = await meusPedidos(env, h);
+    assert.deepStrictEqual([s.nota_ti, s.motivo_rejeicao], [null, null]);
+  });
+
+
   console.log(`\n${passed} passaram, ${failed} falharam`);
   process.exit(failed > 0 ? 1 : 0);
 })();

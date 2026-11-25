@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutDashboard, Monitor, Printer, Users } from "lucide-react"
+import { ClipboardList, LayoutDashboard, Monitor, Package, Printer, Users } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -7,10 +7,12 @@ import {
   SidebarGroupContent,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
+import { useSolicitacoesPendentes } from "@/hooks/use-solicitacoes-pendentes"
 import { SidebarControl } from "@/components/sidebar-control"
 import type { SidebarMode } from "@/hooks/use-sidebar-mode"
 import logoIsv from "@/assets/logo-isv.svg"
@@ -23,13 +25,14 @@ import iconIsv from "@/assets/icon-isv.svg"
 // import permite o Rollup fazer tree-shaking do resto.
 import { version } from "../../package.json"
 
-export type Secao = "gestao" | "dashboard" | "inventario" | "toners" | "usuarios"
+export type Secao = "gestao" | "dashboard" | "inventario" | "toners" | "solicitacoes" | "usuarios"
 
 const NAV_ITEMS: { id: Secao; label: string; icon: typeof ClipboardList }[] = [
   { id: "gestao", label: "Gestão", icon: ClipboardList },
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "inventario", label: "Inventário", icon: Monitor },
   { id: "toners", label: "Toners", icon: Printer },
+  { id: "solicitacoes", label: "Solicitações", icon: Package },
   // Fase M1 (2026-08-13, migração de saída da ClickUp) — antes disso, a lista de
   // solicitantes só existia como custom field dentro da ClickUp; agora a TI gerencia
   // aqui direto.
@@ -55,6 +58,7 @@ export function AppSidebar({
 }) {
   // Usuários é só do desenvolvedor (admin); o operador não vê a seção.
   const { role } = useAdminAuth()
+  const solicitacoesPendentes = useSolicitacoesPendentes()
   return (
     <Sidebar
       collapsible="icon"
@@ -106,7 +110,17 @@ export function AppSidebar({
                   >
                     <item.icon />
                     <span>{item.label}</span>
+                    {item.id === "solicitacoes" && solicitacoesPendentes > 0 && (
+                      <span className="sr-only">, {solicitacoesPendentes} esperando resposta</span>
+                    )}
                   </SidebarMenuButton>
+                  {item.id === "solicitacoes" && solicitacoesPendentes > 0 && (
+                    <>
+                      <SidebarMenuBadge aria-hidden>{solicitacoesPendentes}</SidebarMenuBadge>
+                      {/* Recolhida a barra só mostra o ícone: um ponto avisa que há pedido esperando. */}
+                      <span aria-hidden data-solicitacoes-ponto className="pointer-events-none absolute top-1 right-1 hidden size-2.5 rounded-full bg-amber-500 ring-2 ring-sidebar group-data-[collapsible=icon]:block" />
+                    </>
+                  )}
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>

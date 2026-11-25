@@ -16,7 +16,10 @@ import { IosInstallHint } from "@/components/ios-install-hint"
 import { OfflineBanner } from "@/components/offline-banner"
 import { InstallBanner } from "@/components/install-banner"
 import { AvaliacaoMensalBanner } from "@/components/avaliacao-mensal-banner"
-import { fetchMyTasks, isAuthExpired } from "@/lib/app-api"
+import { SolicitacoesView } from "@/components/solicitacoes-view"
+import { CHAVE_MINHAS_SOLICITACOES, SolicitacaoForm } from "@/components/solicitacao-form"
+import { fetchMinhasSolicitacoes, solicEmAndamento } from "@/lib/solicitacoes-api"
+import { AuthError, fetchMyTasks, isAuthExpired } from "@/lib/app-api"
 import type { Task } from "@/lib/api"
 import { LISTA_POLL_MS } from "@/lib/constants"
 import logoIsv from "@/assets/logo-isv.svg"
@@ -25,7 +28,7 @@ import logoIsv from "@/assets/logo-isv.svg"
 // (ver App.tsx), cada um com seu próprio client, igual dois apps de fato separados.
 const queryClient = new QueryClient()
 
-const VALID_TABS = ["novo-chamado", "meus-chamados", "todos-chamados"]
+const VALID_TABS = ["novo-chamado", "meus-chamados", "todos-chamados", "pedidos"]
 
 // Porta highlightTask() de app.js — rola até o card e aplica o pulso (.task-highlight,
 // ver index.css) por ~2.5s. Escape hatch de DOM direto igual à versão vanilla; não há
@@ -49,6 +52,19 @@ function SolicitanteShell() {
   const queryClient = useQueryClient()
   const [tab, setTab] = useState("novo-chamado")
   const [waTask, setWaTask] = useState<{ task: Task; slaLabel: string; anexoWarning?: string } | null>(null)
+  // Solicitações (pedido de equipamento/material/peça/autorização): aba "Pedidos".
+  const [pedindo, setPedindo] = useState(false)
+  const [pedidoEnviado, setPedidoEnviado] = useState<number | null>(null)
+  const solicitacoesQuery = useQuery({
+    queryKey: CHAVE_MINHAS_SOLICITACOES,
+    queryFn: () => fetchMinhasSolicitacoes(sessionToken),
+    enabled: !!sessionToken,
+    refetchInterval: LISTA_POLL_MS,
+    retry: false,
+  })
+  // Conta externa (visitante/fornecedor) não usa Solicitações: o servidor responde 403 e a aba some.
+  const semPedidos = solicitacoesQuery.error instanceof AuthError && solicitacoesQuery.error.status === 403
+  const pedidosEmAndamento = (solicitacoesQuery.data ?? []).filter(solicEmAndamento).length
   const bootedOnce = useRef(false)
   usePresenca(sessionToken)
 
@@ -153,6 +169,11 @@ function SolicitanteShell() {
             <TabsTrigger value="todos-chamados" className={`${ABA} gap-1.5`}>
               Histórico{encerrados.length > 0 && <span className="count-pill">{encerrados.length}</span>}
             </TabsTrigger>
+            {!semPedidos && (
+              <TabsTrigger value="pedidos" className={`${ABA} gap-1.5`}>
+                Pedidos{pedidosEmAndamento > 0 && <span className="count-pill">{pedidosEmAndamento}</span>}
+              </TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value="novo-chamado" className="mt-4">
@@ -187,10 +208,26 @@ function SolicitanteShell() {
             )}
             {encerrados.map((t) => <TicketCard key={t.id} task={t} />)}
           </TabsContent>
+
+          <TabsContent value="pedidos" className="mt-4 flex flex-col gap-3">
+            {pedidoEnviado != null && (
+              <p role="status" className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-900">
+                Pedido #{String(pedidoEnviado).padStart(4, "0")} enviado. A TI vai avaliar e você acompanha por aqui.
+              </p>
+            )}
+            {solicitacoesQuery.isLoading ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">Carregando…</p>
+            ) : solicitacoesQuery.isError && !solicitacoesQuery.data ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">Não foi possível carregar seus pedidos agora.</p>
+            ) : (
+              <SolicitacoesView solicitacoes={solicitacoesQuery.data ?? []} modo="solicitante" onNova={() => { setPedidoEnviado(null); setPedindo(true) }} />
+            )}
+          </TabsContent>
         </Tabs>
       </main>
 
       <WaModal task={waTask?.task ?? null} slaLabel={waTask?.slaLabel ?? ""} anexoWarning={waTask?.anexoWarning} onClose={() => setWaTask(null)} />
+      <SolicitacaoForm aberto={pedindo} onFechar={() => setPedindo(false)} onCriada={(numero) => { setPedindo(false); setPedidoEnviado(numero); setTab("pedidos") }} />
       <InstallBanner />
     </div>
   )

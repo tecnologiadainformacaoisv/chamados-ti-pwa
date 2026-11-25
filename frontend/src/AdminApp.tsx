@@ -11,6 +11,7 @@ import { DashboardView } from "@/components/dashboard-view"
 import { UsuariosView } from "@/components/usuarios-view"
 import { InventarioView } from "@/components/inventario-view"
 import { TonersView } from "@/components/toners-view"
+import { SolicitacoesAdmin } from "@/components/solicitacoes-admin"
 import { AdminNotifBanner } from "@/components/admin-notif-banner"
 import { NovoChamadoAlert } from "@/components/novo-chamado-alert"
 import { useNovosChamados } from "@/hooks/use-novos-chamados"
@@ -47,6 +48,10 @@ const SECAO_META: Record<Secao, { titulo: string; subtitulo: string }> = {
   toners: {
     titulo: "Toners",
     subtitulo: "Suprimentos do parque de impressão.",
+  },
+  solicitacoes: {
+    titulo: "Solicitações",
+    subtitulo: "Pedidos de equipamento, material, peça e autorização.",
   },
   usuarios: {
     titulo: "Usuários",
@@ -145,6 +150,8 @@ function AdminShell() {
               <InventarioView />
             ) : secaoAtiva === "toners" ? (
               <TonersView />
+            ) : secaoAtiva === "solicitacoes" ? (
+              <SolicitacoesAdmin />
             ) : (
               <UsuariosView />
             )}

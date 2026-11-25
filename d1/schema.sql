@@ -236,3 +236,34 @@ CREATE TABLE IF NOT EXISTS avaliacoes_mensais (
   PRIMARY KEY (solicitante, competencia)
 );
 CREATE INDEX IF NOT EXISTS idx_avaliacoes_mensais_competencia ON avaliacoes_mensais (competencia);
+
+-- Solicitações (2026-11-25, ideia do estudo do OS800): pedido de equipamento, material, peça ou autorização, com
+-- andamento Pendente → Em análise → Aprovado → A caminho → Entregue (ou Rejeitado). O Worker também cria estas
+-- tabelas sozinho no primeiro uso. Sem FOREIGN KEY (ver nota de chamado_assignees).
+CREATE TABLE IF NOT EXISTS solicitacoes (
+  id              TEXT PRIMARY KEY,
+  numero          INTEGER,                         -- sequencial legível, calculado no INSERT (MAX+1)
+  categoria       TEXT NOT NULL,                   -- equipamento | material | peca | autorizacao
+  item            TEXT NOT NULL,
+  quantidade      INTEGER NOT NULL DEFAULT 1,
+  justificativa   TEXT NOT NULL,
+  solicitante     TEXT NOT NULL,                   -- nome (mesma chave de solicitantes.name), sempre da sessão
+  setor           INTEGER,                         -- orderindex em SETORES (opcional)
+  status          TEXT NOT NULL DEFAULT 'pendente',-- pendente | em_analise | aprovado | em_transito | entregue | rejeitado
+  nota_ti         TEXT,                            -- último recado da TI (quem pediu lê)
+  motivo_rejeicao TEXT,                            -- só preenchido enquanto status = rejeitado
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_solicitacoes_status ON solicitacoes (status);
+CREATE INDEX IF NOT EXISTS idx_solicitacoes_solicitante ON solicitacoes (solicitante, created_at);
+CREATE TABLE IF NOT EXISTS solicitacao_eventos (
+  id             TEXT PRIMARY KEY,
+  solicitacao_id TEXT NOT NULL,
+  de_status      TEXT,
+  para_status    TEXT NOT NULL,
+  autor          TEXT,
+  texto          TEXT,
+  created_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_solicitacao_eventos ON solicitacao_eventos (solicitacao_id, created_at);

@@ -42,7 +42,7 @@ function fulfillJson(route: Route, body: unknown, status = 200) {
 /** Mocks padrão pro app do SOLICITANTE — lista de nomes, sessão, my-tasks, criar chamado. */
 export async function mockSolicitanteRoutes(
   page: Page,
-  opts: { tasks?: ReturnType<typeof makeTask>[]; solicitantes?: string[]; equipamentos?: Record<string, unknown>[]; avaliacaoRespondida?: boolean; avaliacaoElegivel?: boolean } = {}
+  opts: { tasks?: ReturnType<typeof makeTask>[]; solicitantes?: string[]; equipamentos?: Record<string, unknown>[]; avaliacaoRespondida?: boolean; avaliacaoElegivel?: boolean; solicitacoes?: Record<string, unknown>[] } = {}
 ) {
   await installFloor(page)
   const tasks = opts.tasks ?? []
@@ -52,6 +52,9 @@ export async function mockSolicitanteRoutes(
     fulfillJson(route, { competencia: "2026-11", respondida: opts.avaliacaoRespondida ?? true, elegivel: opts.avaliacaoElegivel ?? true, respostas: null, comentario: null }),
   )
   await on(page, "**/api/avaliacao-mensal", "POST", (route) => fulfillJson(route, { ok: true, competencia: "2026-11" }))
+  // Solicitações (aba Pedidos): vazia por padrão; o POST devolve o número #0001.
+  await on(page, "**/api/solicitacoes", "GET", (route) => fulfillJson(route, { solicitacoes: opts.solicitacoes ?? [] }))
+  await on(page, "**/api/solicitacoes", "POST", (route) => fulfillJson(route, { id: "solic-nova", numero: 1 }, 201))
   // Lista enxuta do select "Equipamento" do Novo Chamado (vazia por padrão: o campo fica escondido).
   await on(page, "**/api/equipamentos", "GET", (route) => fulfillJson(route, { equipamentos: opts.equipamentos ?? [] }))
 
@@ -119,6 +122,7 @@ export async function mockAdminRoutes(
     anexos?: { id: string; name: string; size: number | null; content_type: string | null; url: string }[]
     equipamentos?: Record<string, unknown>[]
     toners?: Record<string, unknown>[]
+    solicitacoes?: Record<string, unknown>[]
     avaliacaoResumo?: Record<string, unknown>
     secret?: string
   } = {}
@@ -172,6 +176,11 @@ export async function mockAdminRoutes(
   await on(page, "**/admin/toners", "GET", (route) => fulfillJson(route, { toners: opts.toners ?? [] }))
   await on(page, "**/admin/toners", "POST", (route) => fulfillJson(route, { id: "toner-novo" }, 201))
   await on(page, /\/admin\/toners\/[^/]+(\/recarga(\/desfazer)?)?$/, "POST", (route) => fulfillJson(route, { ok: true }))
+  await on(page, /\/admin\/solicitacoes(\?.*)?$/, "GET", (route) => {
+    const todas = opts.solicitacoes ?? []
+    return fulfillJson(route, { solicitacoes: todas, pendentes: todas.filter((s) => s.status === "pendente").length })
+  })
+  await on(page, /\/admin\/solicitacoes\/[^/]+\/status$/, "POST", (route) => fulfillJson(route, { ok: true }))
   await on(page, "**/admin/presenca", "GET", (route) => fulfillJson(route, { agora: Date.now(), janelaMs: 180000, presenca: [{ name: "Henrique", last_seen: Date.now() - 30000, visivel: 1 }] }))
   await on(page, "**/admin/subscribe", "POST", (route) => fulfillJson(route, { ok: true }))
   await on(page, "**/admin/subscribe/test", "POST", (route) => fulfillJson(route, { ok: true }))
@@ -203,7 +212,7 @@ export async function gotoAdminLoggedIn(page: Page, secret = ADMIN_SECRET, linha
  * mobile (<768px, ver use-mobile.ts) a sidebar vira um Sheet escondido por padrão,
  * então precisa abrir o trigger antes do item de nav ficar clicável; em desktop ela
  * já está lá (só em modo ícone, mas presente), o trigger não existe/não faz efeito. */
-export async function abrirSecaoAdmin(page: Page, nome: "Gestão" | "Dashboard" | "Inventário" | "Toners" | "Usuários") {
+export async function abrirSecaoAdmin(page: Page, nome: "Gestão" | "Dashboard" | "Inventário" | "Toners" | "Solicitações" | "Usuários") {
   const item = page.getByRole("button", { name: nome })
   const eraMobile = !(await item.isVisible().catch(() => false))
   if (eraMobile) {
