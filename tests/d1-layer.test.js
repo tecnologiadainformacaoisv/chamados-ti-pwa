@@ -495,6 +495,22 @@ async function test(name, fn) {
     assert.ok(reaberto.due_date > antes, 'prazo novo, não o vencido de antes');
   });
 
+  await test('reativar um encerrado como "pendente" também dá prazo novo, e retomar aplica o prazo de conclusão', async () => {
+    const env = freshEnvComAutomacao(vapidPrivateJwk);
+    const created = await d1CreateChamado(env, baseChamado);
+    await d1TransitionStatus(env, created.id, 'em atendimento');
+    await d1UpdateChamado(env, created.id, { dueDate: Date.now() - 3600000 });
+    await d1TransitionStatus(env, created.id, 'encerrado');
+    const antes = Date.now();
+    const reaberto = await d1TransitionStatus(env, created.id, 'pendente');
+    assert.strictEqual(reaberto.date_closed, null);
+    assert.strictEqual(reaberto.start_date, null);
+    assert.ok(reaberto.due_date > antes, 'prazo novo, não o vencido de antes');
+    const retomado = await d1TransitionStatus(env, created.id, 'em atendimento');
+    assert.ok(retomado.start_date >= antes);
+    assert.ok(retomado.due_date > retomado.start_date, 'prazo de conclusão contado da retomada');
+  });
+
   await test('"encerrado" define date_closed mesmo sem start_date (pulou "em atendimento")', async () => {
     const env = freshEnvComAutomacao(vapidPrivateJwk);
     const created = await d1CreateChamado(env, baseChamado); // status 'aberto', nunca passou por em atendimento

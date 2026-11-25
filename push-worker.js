@@ -4441,10 +4441,11 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
   if (prevStatus === 'encerrado' && novoStatus !== 'encerrado') {
     patch.nota = null;
     // Reativação (2026-11-24, pedido do gestor): o chamado deixa de ter data de encerramento.
-    // Voltando pra "aberto" ele recomeça a fase de aceitação: sem start_date e com prazo novo
-    // (senão voltaria já "atrasado", com o prazo do chamado antigo).
+    // Voltando pra "aberto" ou "pendente" ele recomeça a fase de aceitação: sem start_date e com
+    // prazo novo (senão voltaria já "atrasado", com o prazo do chamado antigo). Em "pendente" o
+    // prazo novo fica parado e é empurrado pelo tempo de espera, como em qualquer pausa.
     patch.dateClosed = null;
-    if (novoStatus === 'aberto') {
+    if (novoStatus === 'aberto' || novoStatus === 'pendente') {
       patch.startDate = null;
       const sla = PRIORITY_SLA_MS[chamado.priority];
       if (sla) patch.dueDate = Date.now() + sla;
