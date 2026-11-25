@@ -220,7 +220,6 @@ async function routeRequest(request, env, ctx) {
       // single-segment, que não tem essa sub-rota). POST (não DELETE) por convenção:
       // esta API nunca usou o verbo DELETE em lugar nenhum (CORS só libera GET/POST/
       // OPTIONS, ver const CORS) — toda mutação aqui é POST num path específico.
-      if (pathname === '/admin/limpar-sem-atendente') return handleAdminLimparSemAtendente(request, env);
       const adminDeleteMatch = pathname.match(/^\/admin\/tasks\/([^/]+)\/delete$/);
       if (adminDeleteMatch) return handleAdminDeleteTask(request, env, adminDeleteMatch[1]);
       if (pathname === '/admin/migrate-schema-chamado-eventos') return handleAdminMigrateSchemaChamadoEventos(request, env);
@@ -3474,91 +3473,6 @@ async function handleAgenteLeituras(request, env) {
     });
   }
   return jsonRes({ atualizados, ignorados });
-}
-
-// =====================================================================
-// POST /admin/limpar-sem-atendente — ROTA TEMPORÁRIA (2026-11-25), remover depois de usada (mesmo padrão
-// das outras rotas de uso único). Só o admin.
-// Chamados que NENHUM operador atual (OPERADOR_IDS) atende — sem atendente nenhum, ou só com um atendente
-// antigo (ex.: 112089386, da ClickUp) — ficam fora de qualquer lista da Gestão e dão 403 ao salvar (ver
-// staffCanAccessChamado). A TI pediu para apagá-los.
-// APAGAR É IRREVERSÍVEL, então:
-//   * sem `confirmar`, só LISTA o que seria apagado (dryRun) — nada é alterado;
-//   * com `confirmar: true`, exige `ids` (no máximo 5 por chamada) e só apaga os que AINDA são alvo
-//     naquele momento (reconferido id a id, logo antes de apagar); qualquer outro vai para `ignorados`
-//     e é preservado; se uma exclusão falhar, devolve o que já foi apagado e o que deu erro;
-//   * alvo = nenhuma linha de operador atual em chamado_assignees E `chamados.assignee_id` também não é de um
-//     operador atual (chamado migrado só com a coluna antiga fica protegido);
-//   * apaga pelo mesmo caminho da exclusão manual (d1DeleteChamado: D1 + anexos no R2).
-// =====================================================================
-// Lote pequeno de propósito: cada exclusão faz várias subrequests (anexos, R2, D1) e o teto real deste Worker já
-// estourou com lote de 50 em outra migração; com 5 passou. Para apagar mais, chame de novo.
-const LIMPEZA_MAX_POR_CHAMADA = 5;
-
-const SQL_SEM_OPERADOR_ATUAL = `NOT EXISTS (SELECT 1 FROM chamado_assignees a WHERE a.chamado_id = c.id AND a.assignee_id IN (${OPERADOR_IDS.map(() => '?').join(', ')}))
-      AND (c.assignee_id IS NULL OR c.assignee_id NOT IN (${OPERADOR_IDS.map(() => '?').join(', ')}))`;
-
-async function chamadosSemAtendenteValido(env) {
-  const { results } = await env.CHAMADOS_DB.prepare(
-    `SELECT c.id, c.numero, c.name, c.solicitante, c.status, c.date_created, c.assignee_id,
-            (SELECT GROUP_CONCAT(a.assignee_id) FROM chamado_assignees a WHERE a.chamado_id = c.id) AS atendentes
-       FROM chamados c
-      WHERE ${SQL_SEM_OPERADOR_ATUAL}
-      ORDER BY c.date_created`
-  ).bind(...OPERADOR_IDS, ...OPERADOR_IDS).all();
-  return results || [];
-}
-
-// Reconferência de UM chamado, logo antes de apagar (fecha a janela entre listar e apagar).
-async function aindaSemAtendenteValido(env, id) {
-  const linha = await env.CHAMADOS_DB.prepare(`SELECT c.id FROM chamados c WHERE c.id = ? AND ${SQL_SEM_OPERADOR_ATUAL}`)
-    .bind(id, ...OPERADOR_IDS, ...OPERADOR_IDS).first();
-  return !!linha;
-}
-
-async function handleAdminLimparSemAtendente(request, env) {
-  if (!(await isAdmin(request, env))) return unauthorized();
-  let body = {};
-  try { body = (await request.json()) || {}; } catch { /* corpo vazio = dryRun */ }
-
-  const alvos = await chamadosSemAtendenteValido(env);
-
-  if (body.confirmar !== true) {
-    return jsonRes({
-      dryRun: true,
-      total: alvos.length,
-      porStatus: alvos.reduce((m, c) => ({ ...m, [c.status]: (m[c.status] || 0) + 1 }), {}),
-      chamados: alvos.slice(0, 300).map(c => ({
-        id: c.id, numero: c.numero, titulo: c.name, solicitante: c.solicitante, status: c.status,
-        criado: c.date_created, atendentes: c.atendentes ? c.atendentes.split(',').map(Number) : [],
-        assigneeIdColuna: c.assignee_id ?? null,
-      })),
-    });
-  }
-
-  if (!Array.isArray(body.ids) || body.ids.length === 0 || body.ids.some(i => typeof i !== 'string')) {
-    return jsonRes({ error: 'confirmar exige a lista `ids` do que deve ser apagado' }, 400);
-  }
-  if (body.ids.length > LIMPEZA_MAX_POR_CHAMADA) {
-    return jsonRes({ error: `no máximo ${LIMPEZA_MAX_POR_CHAMADA} chamados por chamada` }, 400);
-  }
-  const permitidos = new Set(alvos.map(c => c.id));
-  const apagados = [];
-  const ignorados = [];
-  const erros = [];
-  for (const id of new Set(body.ids)) {
-    if (!permitidos.has(id) || !(await aindaSemAtendenteValido(env, id))) { ignorados.push(id); continue; }
-    try {
-      await d1DeleteChamado(env, id);
-      apagados.push(id);
-    } catch (err) {
-      // Uma falha não esconde o que já foi apagado: devolve o parcial e para por aqui.
-      erros.push({ id, erro: String(err && err.message || err) });
-      break;
-    }
-  }
-  const status = erros.length ? 500 : 200;
-  return jsonRes({ apagados: apagados.length, idsApagados: apagados, ignorados, erros, restantes: alvos.length - apagados.length }, status);
 }
 
 // =====================================================================
