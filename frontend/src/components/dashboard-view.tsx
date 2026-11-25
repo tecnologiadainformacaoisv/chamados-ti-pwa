@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { AvaliacaoMensalCard } from "@/components/avaliacao-mensal-card"
+import { RelatorioMensal } from "@/components/relatorio-mensal"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 import { fetchMetrics, fetchSolicitanteNomes, fmtMs, isSessionError, type FiltrosMetricas, type OperadorTempo } from "@/lib/api"
 import { LISTA_POLL_MS, OPERADORES, PRIORITY_MAP, SETORES, STATUS_MAP, STATUS_ORDER, TIPOS, type Opcao } from "@/lib/constants"
@@ -92,6 +93,7 @@ export function DashboardView() {
     <div className="flex flex-col gap-3">
       <PeriodoFilterBar de={de} ate={ate} onDe={setDe} onAte={setAte} />
       <FiltrosDash filtros={filtros} onChange={setFiltros} solicitantes={solicitantesQuery.data ?? []} operadores={listaOperadores(metricsQuery.data?.porOperador)} />
+      <RelatorioMensal />
     </div>
   )
 

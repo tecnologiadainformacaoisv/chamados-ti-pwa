@@ -346,3 +346,18 @@ body.app-solicitante::-webkit-scrollbar {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Relatório mensal (2026-11-26): na impressão/PDF sai só a folha do relatório. */
+@media print {
+  @page { margin: 14mm; }
+  body:has(.relatorio-folha) { background: #fff; }
+  body:has(.relatorio-folha) > *:not(.relatorio-folha) { display: none !important; }
+  .relatorio-folha { position: static !important; overflow: visible !important; }
+  .relatorio-folha > div { max-width: none; padding: 0; }
+  .relatorio-acoes { display: none !important; }
+  .relatorio-bloco { break-inside: avoid; }
+  /* compacto: cabe em duas folhas A4 */
+  .relatorio-folha table { font-size: 11.5px; line-height: 1.3; }
+  .relatorio-folha th, .relatorio-folha td { padding-block: 1.5px; }
+  .relatorio-folha .relatorio-bloco { margin-top: 12px; }
+}
