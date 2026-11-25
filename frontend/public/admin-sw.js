@@ -52,7 +52,8 @@ self.addEventListener("push", (e) => {
     body: payload.body,
     icon: "./icon.svg",
     badge: "./icon.svg",
-    tag: payload.data?.type === "nova_conta" ? `admin-conta-${String(payload.data?.email ?? payload.data?.name ?? "nova").slice(0, 100)}` : `admin-${payload.data?.task_id ?? "novo-chamado"}`,
+    // Alerta de SLA tem tag própria: não apaga o aviso de "chamado novo" do mesmo chamado.
+    tag: payload.data?.type === "nova_conta" ? `admin-conta-${String(payload.data?.email ?? payload.data?.name ?? "nova").slice(0, 100)}` : `admin-${payload.data?.type === "sla" ? "sla-" : ""}${payload.data?.task_id ?? "novo-chamado"}`,
     renotify: true,
     data: payload.data ?? {},
   }

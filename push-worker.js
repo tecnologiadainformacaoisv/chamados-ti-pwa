@@ -179,6 +179,14 @@ export default {
     }
     return withCors(resposta, request);
   },
+  // Cron Trigger (wrangler.toml): alerta de SLA.
+  async scheduled(event, env, ctx) {
+    try {
+      await alertarSla(env, event?.scheduledTime ?? Date.now());
+    } catch (err) {
+      console.error(`alertarSla falhou: ${(err && (err.stack || err.message)) || err}`);
+    }
+  },
 };
 
 async function routeRequest(request, env, ctx) {
@@ -1669,6 +1677,138 @@ async function notifyAdminsNovoChamado(env, row) {
     body:  `Novo chamado: "${row.name}" — aberto por ${row.solicitante || 'alguém'}`,
     data:  { task_id: row.id, status: 'aberto', type: 'novo_chamado' },
   }, 'notifyAdminsNovoChamado', { paraOperadorId: row.assignee_id ?? null });
+}
+
+// =====================================================================
+// Alerta de SLA por push (2026-11-26) — rodado pelo Cron do wrangler.toml a cada 5 min.
+// Só no expediente (seg a sex, 07h às 18h de Fortaleza). Chamado "pendente" nunca entra
+// (SLA pausado). Quem recebe: o atendente; o admin recebe também os vencidos.
+// Marca no KV por (chamado, tipo, prazo, destinatário): não repete, e um prazo novo
+// (retomada de pausa, "em atendimento") volta a poder avisar.
+// =====================================================================
+const SLA_VENCE_LOGO_MS = 15 * 60000;
+// Vencido há mais que isso não avisa: cobre o fim de semana (sexta 18h → segunda 07h) sem
+// despejar chamados antigos parados toda vez que o alerta rodar.
+const SLA_VENCIDO_MAX_MS = 4 * 24 * 3600000;
+const SLA_MAX_AVISOS_POR_RODADA = 5;
+// Cada aparelho é um subrequest: o teto de verdade da invocação é o de envios.
+const SLA_MAX_ENVIOS_POR_RODADA = 10;
+const SLA_MARCA_TTL_SECONDS = 7 * 24 * 3600; // maior que SLA_VENCIDO_MAX_MS: depois disso nem é candidato
+const FORTALEZA_OFFSET_MS = -3 * 3600000; // UTC-3 fixo, sem horário de verão
+
+function noExpediente(agora) {
+  const local = new Date(agora + FORTALEZA_OFFSET_MS);
+  const dia = local.getUTCDay();
+  const hora = local.getUTCHours();
+  return dia >= 1 && dia <= 5 && hora >= 7 && hora < 18;
+}
+
+// "15:20" se for hoje (em Fortaleza), senão "24/11 às 15:20".
+function prazoFalado(due, agora) {
+  const d = new Date(due + FORTALEZA_OFFSET_MS).toISOString();
+  const hora = d.slice(11, 16);
+  if (d.slice(0, 10) === new Date(agora + FORTALEZA_OFFSET_MS).toISOString().slice(0, 10)) return hora;
+  return `${d.slice(8, 10)}/${d.slice(5, 7)} às ${hora}`;
+}
+
+async function listarChavesKV(env, prefix) {
+  const nomes = [];
+  let cursor;
+  do {
+    const list = await env.SUBSCRIPTIONS.list({ prefix, cursor });
+    for (const key of list.keys) nomes.push(key.name);
+    cursor = list.list_complete ? undefined : list.cursor;
+  } while (cursor);
+  return nomes;
+}
+
+async function alertarSla(env, agora = Date.now()) {
+  if (!noExpediente(agora)) return { avisos: 0 };
+
+  // Os que vencem logo primeiro (a janela deles é curta), depois os vencidos mais recentes.
+  const { results } = await env.CHAMADOS_DB.prepare(
+    `SELECT c.id, c.numero, c.due_date, COALESCE(a.assignee_id, c.assignee_id) AS atendente
+       FROM chamados c LEFT JOIN chamado_assignees a ON a.chamado_id = c.id
+      WHERE c.status IN ('aberto', 'em atendimento')
+        AND c.due_date IS NOT NULL AND c.due_date > ? AND c.due_date <= ?
+      ORDER BY (c.due_date <= ?), ABS(c.due_date - ?)`
+  ).bind(agora - SLA_VENCIDO_MAX_MS, agora + SLA_VENCE_LOGO_MS, agora, agora).all();
+  if (!results.length) return { avisos: 0 };
+
+  const aparelhos = [];
+  for (const key of await listarChavesKV(env, 'adminsub_')) {
+    const json = await env.SUBSCRIPTIONS.get(key);
+    if (!json) continue;
+    try {
+      const sub = JSON.parse(json);
+      aparelhos.push({ key, sub, operadorId: sub.operadorId ?? OPERADOR_ADMIN_ID });
+    } catch { /* inscrição corrompida: ignora */ }
+  }
+  if (!aparelhos.length) return { avisos: 0 };
+  const jaAvisados = new Set(await listarChavesKV(env, 'slaalert_'));
+
+  const porChamado = new Map();
+  for (const r of results) {
+    if (!porChamado.has(r.id)) porChamado.set(r.id, { ...r, atendentes: new Set() });
+    if (r.atendente != null) porChamado.get(r.id).atendentes.add(r.atendente);
+  }
+
+  let avisos = 0;
+  let envios = 0;
+  const semEntrega = new Set(); // quem falhou em todos os aparelhos não gasta mais vagas nesta rodada
+  for (const c of porChamado.values()) {
+    const venceu = c.due_date <= agora;
+    const tipo = venceu ? 'venceu' : 'vencelogo';
+    const destinos = new Set(c.atendentes);
+    if (venceu) destinos.add(OPERADOR_ADMIN_ID);
+
+    for (const operadorId of destinos) {
+      if (avisos >= SLA_MAX_AVISOS_POR_RODADA) return { avisos };
+      const marca = `slaalert_${c.id}_${tipo}_${c.due_date}_${operadorId}`;
+      if (jaAvisados.has(marca) || semEntrega.has(operadorId)) continue;
+      const alvos = aparelhos.filter((a) => !a.morto && a.operadorId === operadorId).slice(0, SLA_MAX_ENVIOS_POR_RODADA);
+      if (!alvos.length) continue; // sem aparelho: não marca, avisa quando a pessoa ativar
+
+      const numero = c.numero ? `#${String(c.numero).padStart(4, '0')}` : 'sem número';
+      const quando = prazoFalado(c.due_date, agora);
+      const deOutro = !c.atendentes.has(operadorId)
+        ? ` (atendente: ${[...c.atendentes].map((id) => OPERADOR_NOMES[id] ?? 'outro').join(', ') || 'ninguém'})`
+        : '';
+      const payload = JSON.stringify({
+        title: venceu ? 'Chamado com prazo vencido' : 'Chamado perto do prazo',
+        body: (venceu ? `Chamado ${numero} passou do prazo (era ${quando})` : `Chamado ${numero} vence às ${quando}`) + deOutro,
+        data: { task_id: c.id, type: 'sla' },
+      });
+
+      if (envios + alvos.length > SLA_MAX_ENVIOS_POR_RODADA) return { avisos };
+      envios += alvos.length;
+      avisos++;
+      let entregue = false;
+      for (const alvo of alvos) {
+        try {
+          await sendWebPush(alvo.sub, payload, env);
+          entregue = true;
+        } catch (err) {
+          if (/^Push endpoint (404|410):/.test(err.message)) {
+            alvo.morto = true;
+            await env.SUBSCRIPTIONS.delete(alvo.key);
+          } else {
+            console.error(`alertarSla: falha ao enviar push (${alvo.key}): ${err.message}`);
+          }
+        }
+      }
+      // Falhou em todos os aparelhos: sem marca, tenta de novo na próxima rodada.
+      if (!entregue) { semEntrega.add(operadorId); continue; }
+      try {
+        await env.SUBSCRIPTIONS.put(marca, '1', { expirationTtl: SLA_MARCA_TTL_SECONDS });
+      } catch (err) {
+        // Sem conseguir marcar, parar: continuar só geraria mais avisos repetidos.
+        console.error(`alertarSla: não gravou a marca, rodada interrompida: ${err.message}`);
+        return { avisos };
+      }
+    }
+  }
+  return { avisos };
 }
 
 // Alerta de conta nova (2026-11-16, pedido do usuário: "preciso saber quando alguém criar
@@ -4275,4 +4415,4 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
   return updated;
 }
 
-export { competenciaAtual, d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1DeleteChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees, d1ListSolicitantes, d1IsSolicitanteAtivo, d1CreateSolicitante, d1SetSolicitanteAtivo, d1GetSolicitanteByEmail, d1SetSolicitanteEmail, d1ListAnexos, d1GetAnexoRow, d1LogEvento, d1CreateEvento, d1ListEventos };
+export { alertarSla, competenciaAtual, d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1DeleteChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees, d1ListSolicitantes, d1IsSolicitanteAtivo, d1CreateSolicitante, d1SetSolicitanteAtivo, d1GetSolicitanteByEmail, d1SetSolicitanteEmail, d1ListAnexos, d1GetAnexoRow, d1LogEvento, d1CreateEvento, d1ListEventos };

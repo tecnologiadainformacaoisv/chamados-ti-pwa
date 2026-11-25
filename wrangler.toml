@@ -25,6 +25,11 @@ name = "chamados-ti-push"
 main = "push-worker.js"
 compatibility_date = "2026-08-07"
 
+# Alerta de SLA por push: roda a cada 5 min; o próprio Worker só avisa seg a sex, 07h às 18h
+# de Fortaleza (ver alertarSla em push-worker.js).
+[triggers]
+crons = ["*/5 * * * *"]
+
 # ID real do namespace SUBSCRIPTIONS já existente na Cloudflare — pega em
 # Workers & Pages → KV → (o namespace) → copiar o ID. SUBSTITUA antes do
 # primeiro deploy via Actions; sem isso o Worker perde acesso ao KV.

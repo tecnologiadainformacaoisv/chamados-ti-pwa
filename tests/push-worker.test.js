@@ -148,7 +148,7 @@ async function test(name, fn) {
 
 (async () => {
   const workerPath = pathToFileURL(path.join(__dirname, '..', 'push-worker.js')).href;
-  const { default: worker, d1GetChamado, d1SetAssignees, d1CreateSolicitante, d1ListAnexos, d1CreateChamado, d1ListEventos, competenciaAtual } = await import(workerPath);
+  const { default: worker, d1GetChamado, d1SetAssignees, d1CreateSolicitante, d1ListAnexos, d1CreateChamado, d1ListEventos, competenciaAtual, alertarSla } = await import(workerPath);
 
   // Regra de 2026-11-24: todo chamado nasce com exatamente um operador. Os testes antigos criam
   // chamado sem se importar com isso, então este adaptador completa o corpo com o Everson quando
@@ -3917,6 +3917,123 @@ async function test(name, fn) {
     assert.deepStrictEqual([s.nota_ti, s.motivo_rejeicao], [null, null]);
   });
 
+  // Alerta de SLA por push (Cron). Relógio simulado: 2026-11-25 é uma quarta-feira.
+  const SLA_EVERSON = 170628721, SLA_HENRIQUE = 200498355;
+  const emFortaleza = (iso) => Date.parse(iso + '-03:00');
+  const QUARTA_10H = emFortaleza('2026-11-25T10:00:00');
+  const MIN = 60000;
+  async function slaEnv({ aparelhos = [['eve', SLA_EVERSON], ['hen', SLA_HENRIQUE]] } = {}) {
+    const e = { ...env, SUBSCRIPTIONS: makeMockKV(), CHAMADOS_DB: freshD1() };
+    for (const [nome, operadorId] of aparelhos) {
+      await e.SUBSCRIPTIONS.put(`adminsub_sla-${nome}`, JSON.stringify({ endpoint: `https://fake-push-endpoint.test/sla-${nome}`, keys: FAKE_PUSH_KEYS, operadorId }));
+    }
+    return e;
+  }
+  const chamadoSla = (e, id, due, extra = {}) => seedChamadoComId(e, id, {
+    name: 'Título sigiloso', description: 'Descrição sigilosa', solicitante: 'Pessoa Sigilosa', priority: 1, tipo: 0, setor: 0,
+    status: 'aberto', assignee_id: SLA_EVERSON, assignee_ids: [SLA_EVERSON], due_date: due, ...extra,
+  });
+  async function rodar(e, agora) {
+    adminPushCalls.length = 0;
+    const r = await alertarSla(e, agora);
+    return { avisos: r.avisos, quem: adminPushCalls.map(c => c.url.split('/sla-')[1]).sort() };
+  }
+
+  await test('alerta de SLA: perto do prazo avisa só o atendente, e não repete', async () => {
+    const e = await slaEnv();
+    await chamadoSla(e, 'sla-1', QUARTA_10H + 10 * MIN);
+    assert.deepStrictEqual((await rodar(e, QUARTA_10H)).quem, ['eve']);
+    assert.deepStrictEqual((await rodar(e, QUARTA_10H + 5 * MIN)).quem, []);
+  });
+  await test('alerta de SLA: vencido avisa o atendente e o admin; prazo novo volta a avisar', async () => {
+    const e = await slaEnv();
+    await chamadoSla(e, 'sla-2', QUARTA_10H - MIN, { status: 'em atendimento' });
+    assert.deepStrictEqual((await rodar(e, QUARTA_10H)).quem, ['eve', 'hen']);
+    assert.deepStrictEqual((await rodar(e, QUARTA_10H + 5 * MIN)).quem, []);
+    await e.CHAMADOS_DB.prepare('UPDATE chamados SET due_date = ? WHERE id = ?').bind(QUARTA_10H + 20 * MIN, 'sla-2').run();
+    assert.deepStrictEqual((await rodar(e, QUARTA_10H + 10 * MIN)).quem, ['eve']);
+  });
+  await test('alerta de SLA: pendente, encerrado, prazo distante e atraso muito antigo não avisam', async () => {
+    const e = await slaEnv();
+    await chamadoSla(e, 'sla-p', QUARTA_10H - MIN, { status: 'pendente' });
+    await chamadoSla(e, 'sla-e', QUARTA_10H - MIN, { status: 'encerrado' });
+    await chamadoSla(e, 'sla-d', QUARTA_10H + 16 * MIN);
+    await chamadoSla(e, 'sla-v', QUARTA_10H - 5 * 24 * 60 * MIN);
+    assert.deepStrictEqual((await rodar(e, QUARTA_10H)).quem, []);
+  });
+  await test('alerta de SLA: só seg a sex das 07h às 18h de Fortaleza', async () => {
+    const e = await slaEnv();
+    for (const iso of ['2026-11-25T06:59:00', '2026-11-25T18:00:00', '2026-11-28T10:00:00', '2026-11-29T10:00:00']) {
+      const agora = emFortaleza(iso);
+      await chamadoSla(e, `sla-${iso}`, agora - MIN);
+      assert.deepStrictEqual((await rodar(e, agora)).quem, [], iso);
+    }
+  });
+  await test('alerta de SLA: o que venceu na sexta à noite sai na segunda de manhã', async () => {
+    const e = await slaEnv();
+    await chamadoSla(e, 'sla-fds', emFortaleza('2026-11-27T18:30:00'));
+    assert.deepStrictEqual((await rodar(e, emFortaleza('2026-11-30T07:00:00'))).quem, ['eve', 'hen']);
+  });
+  await test('alerta de SLA: no máximo 5 avisos por rodada, o resto vai na seguinte', async () => {
+    const e = await slaEnv();
+    for (let i = 0; i < 7; i++) await chamadoSla(e, `sla-m${i}`, QUARTA_10H + (i + 1) * MIN);
+    assert.strictEqual((await rodar(e, QUARTA_10H)).avisos, 5);
+    assert.strictEqual((await rodar(e, QUARTA_10H)).avisos, 2);
+    assert.strictEqual((await rodar(e, QUARTA_10H)).avisos, 0);
+  });
+  await test('alerta de SLA: sem aparelho ou com falha no envio não marca; inscrição morta é apagada', async () => {
+    const e = await slaEnv({ aparelhos: [] });
+    await chamadoSla(e, 'sla-s', QUARTA_10H + 10 * MIN);
+    assert.strictEqual((await rodar(e, QUARTA_10H)).avisos, 0);
+    await e.SUBSCRIPTIONS.put('adminsub_sla-eve', JSON.stringify({ endpoint: 'https://fake-push-endpoint.test/sla-eve', keys: FAKE_PUSH_KEYS, operadorId: SLA_EVERSON }));
+    failingPushEndpoints.set('https://fake-push-endpoint.test/sla-eve', 500);
+    try {
+      await rodar(e, QUARTA_10H);
+      assert.deepStrictEqual((await e.SUBSCRIPTIONS.list({ prefix: 'slaalert_' })).keys, []);
+      failingPushEndpoints.set('https://fake-push-endpoint.test/sla-eve', 410);
+      await rodar(e, QUARTA_10H);
+      assert.strictEqual(await e.SUBSCRIPTIONS.get('adminsub_sla-eve'), null);
+    } finally {
+      failingPushEndpoints.delete('https://fake-push-endpoint.test/sla-eve');
+    }
+  });
+  await test('alerta de SLA: aparelho quebrado não trava os outros, e o teto vale por envio', async () => {
+    const e = await slaEnv();
+    for (let i = 0; i < 6; i++) await chamadoSla(e, `sla-q${i}`, QUARTA_10H - (i + 1) * MIN);
+    failingPushEndpoints.set('https://fake-push-endpoint.test/sla-eve', 403);
+    try {
+      const r = await rodar(e, QUARTA_10H);
+      assert.deepStrictEqual(r.quem, ['eve', 'hen', 'hen', 'hen', 'hen']);
+    } finally {
+      failingPushEndpoints.delete('https://fake-push-endpoint.test/sla-eve');
+    }
+    const muitos = await slaEnv({ aparelhos: ['a', 'b', 'c', 'd'].map(n => [n, SLA_EVERSON]) });
+    for (let i = 0; i < 5; i++) await chamadoSla(muitos, `sla-n${i}`, QUARTA_10H + (i + 1) * MIN);
+    assert.strictEqual((await rodar(muitos, QUARTA_10H)).quem.length, 8);
+  });
+  await test('alerta de SLA: o texto leva número e prazo, nunca título, descrição ou solicitante', async () => {
+    // O corpo do push é cifrado; confere o payload montado antes de cifrar.
+    const e = await slaEnv();
+    await chamadoSla(e, 'sla-t', QUARTA_10H - MIN);
+    const vistos = [];
+    const encodeReal = TextEncoder.prototype.encode;
+    TextEncoder.prototype.encode = function (s) { if (String(s).includes('"type":"sla"')) vistos.push(String(s)); return encodeReal.call(this, s); };
+    try { await alertarSla(e, QUARTA_10H); } finally { TextEncoder.prototype.encode = encodeReal; }
+    const corpos = vistos.map(v => JSON.parse(v).body).sort();
+    assert.deepStrictEqual(corpos, [
+      'Chamado sem número passou do prazo (era 09:59)',
+      'Chamado sem número passou do prazo (era 09:59) (atendente: Everson)',
+    ]);
+    assert.ok(!vistos.some(v => /sigilos/i.test(v)));
+  });
+  await test('alerta de SLA: o handler scheduled usa o horário do evento e não lança', async () => {
+    const e = await slaEnv();
+    await chamadoSla(e, 'sla-c', QUARTA_10H + 10 * MIN);
+    adminPushCalls.length = 0;
+    await worker.scheduled({ scheduledTime: QUARTA_10H }, e, {});
+    assert.strictEqual(adminPushCalls.length, 1);
+    await worker.scheduled({ scheduledTime: QUARTA_10H }, { ...e, CHAMADOS_DB: null }, {});
+  });
 
   console.log(`\n${passed} passaram, ${failed} falharam`);
   process.exit(failed > 0 ? 1 : 0);
