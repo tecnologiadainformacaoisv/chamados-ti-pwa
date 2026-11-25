@@ -15,7 +15,7 @@ import { SETORES } from "@/lib/constants"
 import { EQUIP_TIPO_LABEL, fetchEquipamentos, type Equipamento } from "@/lib/equipamentos-api"
 import { salvarToner, TONER_COR_LABEL, type Toner, type TonerCor } from "@/lib/toners-api"
 
-// "Financeiro · Lexmark MX622adhe · 10.10.2.110": o lugar primeiro, que é o que a pessoa reconhece.
+// "Financeiro · Lexmark MX622adhe · 192.168.0.10": o lugar primeiro, que é o que a pessoa reconhece.
 const rotuloImpressora = (e: Equipamento) =>
   [e.local || (e.setor != null ? SETORES.find((s) => s.orderindex === e.setor)?.name : null), [e.marca, e.modelo].filter(Boolean).join(" ") || EQUIP_TIPO_LABEL[e.tipo], e.ip ?? e.tombamento]
     .filter(Boolean)
