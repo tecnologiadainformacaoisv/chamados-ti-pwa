@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { AvaliacaoMensalCard } from "@/components/avaliacao-mensal-card"
 import { useAdminAuth } from "@/hooks/use-admin-auth"
 import { fetchMetrics, fetchSolicitanteNomes, fmtMs, isSessionError, type FiltrosMetricas, type OperadorTempo } from "@/lib/api"
 import { LISTA_POLL_MS, OPERADORES, PRIORITY_MAP, SETORES, STATUS_MAP, STATUS_ORDER, TIPOS, type Opcao } from "@/lib/constants"
@@ -223,6 +224,8 @@ export function DashboardView() {
           </CardContent>
         </Card>
       </div>
+
+      <AvaliacaoMensalCard />
     </div>
   )
 }

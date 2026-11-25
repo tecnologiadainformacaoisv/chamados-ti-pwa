@@ -202,6 +202,7 @@ async function routeRequest(request, env, ctx) {
       if (pathname === '/auth/logout')   return handleLogout(request, env);
       if (pathname === '/subscribe')     return handleSubscribe(request, env);
       if (pathname === '/api/presence')  return handlePresence(request, env);
+      if (pathname === '/api/avaliacao-mensal') return handlePostAvaliacaoMensal(request, env);
       // Fase M4 (2026-08-13): rota /webhook removida — ver comentário perto de onde
       // handleWebhook/runStatusAutomation viviam (antes de "WEB PUSH" no arquivo).
       if (pathname === '/api/tasks')     return handleCreateTask(request, env);
@@ -278,6 +279,8 @@ async function routeRequest(request, env, ctx) {
       // login do app), e nada mais no frontend chamava /api/field.
       if (pathname === '/api/solicitantes')  return handleListSolicitantes(request, env);
       if (pathname === '/api/my-tasks')      return handleGetMyTasks(request, env);
+      if (pathname === '/api/avaliacao-mensal') return handleGetAvaliacaoMensal(request, env);
+      if (pathname === '/admin/avaliacoes-mensais') return handleAdminAvaliacoesMensais(request, env);
       if (pathname === '/admin/me')          return handleAdminMe(request, env);
       if (pathname === '/admin/users')       return handleAdminListUsers(request, env);
       if (pathname === '/admin/tasks')       return handleAdminListTasks(request, env);
@@ -3546,6 +3549,161 @@ async function handleAgenteLeituras(request, env) {
 }
 
 // =====================================================================
+// AVALIAÇÃO MENSAL DA TI (2026-11-25, ideia do estudo do OS800)
+//   GET  /api/avaliacao-mensal        (sessão) a avaliação do mês atual de quem está logado
+//   POST /api/avaliacao-mensal        (sessão) grava/sobrescreve a do mês atual
+//   GET  /admin/avaliacoes-mensais    (staff)  resumo do mês: participação, médias, NPS, comentários SEM nome
+// Competência = mês de Fortaleza ('AAAA-MM'). Comentários são devolvidos sem identificar quem escreveu.
+// =====================================================================
+const AVALIACAO_PERGUNTAS = ['tempo_resposta', 'primeiro_atendimento', 'conhecimento', 'cordialidade', 'equipamentos', 'comunicacao'];
+const COMPETENCIA_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+const AVALIACAO_MIN_ANONIMATO = 3;
+
+function competenciaAtual(agora = Date.now()) {
+  // America/Fortaleza é UTC-3 fixo (sem horário de verão), mesma conta usada no resto do projeto.
+  const d = new Date(agora - 3 * 60 * 60 * 1000);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+const esquemaAvaliacaoGarantido = new WeakSet();
+async function garantirEsquemaAvaliacao(env) {
+  if (esquemaAvaliacaoGarantido.has(env.CHAMADOS_DB)) return;
+  await env.CHAMADOS_DB.batch([
+    env.CHAMADOS_DB.prepare(`CREATE TABLE IF NOT EXISTS avaliacoes_mensais (
+      solicitante TEXT NOT NULL, competencia TEXT NOT NULL, respostas TEXT NOT NULL, comentario TEXT,
+      created_at INTEGER NOT NULL, PRIMARY KEY (solicitante, competencia))`),
+    env.CHAMADOS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_avaliacoes_mensais_competencia ON avaliacoes_mensais (competencia)`),
+  ]);
+  esquemaAvaliacaoGarantido.add(env.CHAMADOS_DB);
+}
+
+async function handleGetAvaliacaoMensal(request, env) {
+  if (!hasValidSecret(request, env)) return unauthorized();
+  const session = await requireSession(request, env);
+  if (!session) return sessionInvalid();
+  await garantirEsquemaAvaliacao(env);
+  const competencia = competenciaAtual();
+  const row = await env.CHAMADOS_DB.prepare(
+    `SELECT respostas, comentario FROM avaliacoes_mensais WHERE solicitante = ? AND competencia = ?`
+  ).bind(session.name, competencia).first();
+  let respostas = null;
+  try { respostas = row ? JSON.parse(row.respostas) : null; } catch { respostas = null; }
+  // Conta de fora (autocadastro) não avalia a TI da instituição: a faixa não aparece e o POST recusa.
+  return jsonRes({ competencia, respondida: !!row, elegivel: !(await contaExterna(env, session.name)), respostas, comentario: row?.comentario ?? null });
+}
+
+async function handlePostAvaliacaoMensal(request, env) {
+  if (!hasValidSecret(request, env)) return unauthorized();
+  const session = await requireSession(request, env);
+  if (!session) return sessionInvalid();
+  let body;
+  try { body = await request.json(); } catch { return jsonRes({ error: 'corpo inválido' }, 400); }
+  if (await contaExterna(env, session.name)) return jsonRes({ error: 'A avaliação mensal é para as pessoas da instituição.' }, 403);
+  // Quem abriu o formulário no último dia e enviou depois da meia-noite não grava no mês errado em silêncio.
+  if (body && body.competencia !== undefined && body.competencia !== competenciaAtual()) {
+    return jsonRes({ error: 'O mês virou enquanto você respondia. Abra a avaliação de novo para avaliar o mês atual.' }, 409);
+  }
+  const r = body && body.respostas;
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return jsonRes({ error: 'respostas é obrigatório' }, 400);
+
+  const respostas = {};
+  for (const chave of AVALIACAO_PERGUNTAS) {
+    const n = r[chave];
+    if (!Number.isInteger(n) || n < 1 || n > 5) return jsonRes({ error: `Responda "${chave}" com uma nota de 1 a 5` }, 400);
+    respostas[chave] = n;
+  }
+  if (!Number.isInteger(r.recomendacao) || r.recomendacao < 0 || r.recomendacao > 10) {
+    return jsonRes({ error: 'A recomendação vai de 0 a 10' }, 400);
+  }
+  respostas.recomendacao = r.recomendacao;
+
+  let comentario = null;
+  if (body.comentario != null && body.comentario !== '') {
+    if (typeof body.comentario !== 'string') return jsonRes({ error: 'comentário inválido' }, 400);
+    if (body.comentario.trim().length > 1000) return jsonRes({ error: 'comentário muito longo (máximo 1000 caracteres)' }, 400);
+    comentario = body.comentario.trim() || null;
+  }
+
+  await garantirEsquemaAvaliacao(env);
+  const competencia = competenciaAtual();
+  await env.CHAMADOS_DB.prepare(
+    `INSERT INTO avaliacoes_mensais (solicitante, competencia, respostas, comentario, created_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(solicitante, competencia) DO UPDATE SET respostas = excluded.respostas,
+       comentario = excluded.comentario, created_at = excluded.created_at`
+  ).bind(session.name, competencia, JSON.stringify(respostas), comentario, Date.now()).run();
+  return jsonRes({ ok: true, competencia });
+}
+
+async function handleAdminAvaliacoesMensais(request, env) {
+  if (!(await isStaff(request, env))) return unauthorized();
+  await garantirEsquemaAvaliacao(env);
+  const { searchParams } = new URL(request.url);
+  const pedida = searchParams.get('competencia');
+  if (pedida && !COMPETENCIA_RE.test(pedida)) return jsonRes({ error: 'competencia inválida (use AAAA-MM)' }, 400);
+
+  const atual = competenciaAtual();
+  // Só contam respostas de pessoas internas e ativas (conta de fora ou desativada depois de responder não entra,
+  // senão a participação passaria de 100% e a média teria gente de fora).
+  const SO_INTERNOS = `JOIN solicitantes s ON s.name = a.solicitante AND s.ativo = 1 AND s.origem = 'interno'`;
+  const { results: meses } = await env.CHAMADOS_DB.prepare(
+    `SELECT a.competencia AS competencia, COUNT(*) AS respondentes FROM avaliacoes_mensais a ${SO_INTERNOS}
+      GROUP BY a.competencia ORDER BY a.competencia DESC LIMIT 24`
+  ).all();
+  const lista = meses || [];
+  if (!lista.some(m => m.competencia === atual)) lista.unshift({ competencia: atual, respondentes: 0 });
+  // O mês pedido sempre existe no seletor (mesmo sem respostas ou fora dos 24 mais recentes).
+  if (pedida && !lista.some(m => m.competencia === pedida)) lista.push({ competencia: pedida, respondentes: 0 });
+  // Padrão: o mês atual se já tiver respostas; senão o mais recente que tenha.
+  const competencia = pedida || (lista.find(m => m.respondentes > 0)?.competencia ?? atual);
+
+  const { results: linhas } = await env.CHAMADOS_DB.prepare(
+    `SELECT a.respostas AS respostas, a.comentario AS comentario FROM avaliacoes_mensais a ${SO_INTERNOS} WHERE a.competencia = ?`
+  ).bind(competencia).all();
+  // Linha com JSON inválido, que não é objeto ou com nota fora da faixa é ignorada (nunca derruba o resumo).
+  const notaOk = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
+  const validas = [];
+  for (const l of linhas || []) {
+    let r;
+    try { r = JSON.parse(l.respostas); } catch { continue; }
+    if (!r || typeof r !== 'object' || !AVALIACAO_PERGUNTAS.every(q => notaOk(r[q], 1, 5)) || !notaOk(r.recomendacao, 0, 10)) continue;
+    validas.push({ r, comentario: l.comentario });
+  }
+  const n = validas.length;
+
+  let elegiveis = null;
+  try {
+    elegiveis = (await env.CHAMADOS_DB.prepare(`SELECT COUNT(*) AS n FROM solicitantes WHERE ativo = 1 AND origem = 'interno'`).first())?.n ?? null;
+  } catch { /* coluna origem ausente: sem taxa de participação */ }
+
+  const um = x => Math.round(x * 10) / 10;
+  const mediaBruta = q => validas.reduce((s, v) => s + v.r[q], 0) / n;
+  const medias = {};
+  for (const q of AVALIACAO_PERGUNTAS) medias[q] = n ? um(mediaBruta(q)) : null;
+  // Média geral sobre as médias SEM arredondar (arredondar duas vezes acumula erro).
+  const mediaGeral = n ? um(AVALIACAO_PERGUNTAS.reduce((s, q) => s + mediaBruta(q), 0) / AVALIACAO_PERGUNTAS.length) : null;
+  const promotores = validas.filter(v => v.r.recomendacao >= 9).length;
+  const detratores = validas.filter(v => v.r.recomendacao <= 6).length;
+
+  return jsonRes({
+    competencia,
+    meses: lista,
+    respondentes: n,
+    elegiveis,
+    participacaoPercent: n && elegiveis ? Math.round((n / elegiveis) * 100) : null,
+    medias,
+    mediaGeral,
+    nps: n ? { valor: Math.round(((promotores - detratores) / n) * 100), promotores, neutros: n - promotores - detratores, detratores } : null,
+    // Anonimato: com menos de 3 respondentes um comentário é praticamente identificável, então não é mostrado;
+    // e a ordem é alfabética (nada de ordem por horário, que permitiria ligar o comentário a quem respondeu).
+    comentarios: n >= AVALIACAO_MIN_ANONIMATO
+      ? validas.filter(v => v.comentario).map(v => v.comentario).sort((a, b) => a.localeCompare(b, 'pt-BR')).slice(0, 50)
+      : [],
+    comentariosOcultos: n < AVALIACAO_MIN_ANONIMATO && validas.some(v => v.comentario),
+  });
+}
+
+// =====================================================================
 // POST /admin/migrate-schema-chamado-eventos — migração de schema ÚNICA (Fase B do
 // roadmap pós-MVP-visual, 2026-08-14), cria a tabela `chamado_eventos` (histórico +
 // comentários). Mesmo padrão de sempre — CREATE TABLE/INDEX IF NOT EXISTS,
@@ -3895,4 +4053,4 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
   return updated;
 }
 
-export { d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1DeleteChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees, d1ListSolicitantes, d1IsSolicitanteAtivo, d1CreateSolicitante, d1SetSolicitanteAtivo, d1GetSolicitanteByEmail, d1SetSolicitanteEmail, d1ListAnexos, d1GetAnexoRow, d1LogEvento, d1CreateEvento, d1ListEventos };
+export { competenciaAtual, d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1DeleteChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees, d1ListSolicitantes, d1IsSolicitanteAtivo, d1CreateSolicitante, d1SetSolicitanteAtivo, d1GetSolicitanteByEmail, d1SetSolicitanteEmail, d1ListAnexos, d1GetAnexoRow, d1LogEvento, d1CreateEvento, d1ListEventos };

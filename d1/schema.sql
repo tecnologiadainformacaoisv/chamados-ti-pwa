@@ -223,3 +223,16 @@ CREATE INDEX IF NOT EXISTS idx_toner_recargas_toner ON toner_recargas (toner_id,
 
 -- Uma impressora não tem dois toners ativos da mesma cor (duplo clique ou edição que repetiria a cor).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_toners_equip_cor_ativo ON toners (equipamento_id, cor) WHERE ativo = 1;
+
+-- Avaliação mensal da TI (2026-11-25, ideia do estudo do OS800): cada solicitante avalia a TI uma vez por mês
+-- (6 notas de 1 a 5 e uma recomendação de 0 a 10). Reenviar no mesmo mês sobrescreve. Complementa a nota por
+-- chamado (chamados.nota). O Worker também cria esta tabela sozinho no primeiro uso.
+CREATE TABLE IF NOT EXISTS avaliacoes_mensais (
+  solicitante TEXT NOT NULL,
+  competencia TEXT NOT NULL,          -- 'AAAA-MM' (mês de Fortaleza)
+  respostas   TEXT NOT NULL,          -- JSON: { tempo_resposta, primeiro_atendimento, conhecimento, cordialidade, equipamentos, comunicacao, recomendacao }
+  comentario  TEXT,
+  created_at  INTEGER NOT NULL,
+  PRIMARY KEY (solicitante, competencia)
+);
+CREATE INDEX IF NOT EXISTS idx_avaliacoes_mensais_competencia ON avaliacoes_mensais (competencia);

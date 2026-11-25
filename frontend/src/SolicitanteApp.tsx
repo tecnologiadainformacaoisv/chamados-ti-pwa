@@ -15,6 +15,7 @@ import { NotifBanner } from "@/components/notif-banner"
 import { IosInstallHint } from "@/components/ios-install-hint"
 import { OfflineBanner } from "@/components/offline-banner"
 import { InstallBanner } from "@/components/install-banner"
+import { AvaliacaoMensalBanner } from "@/components/avaliacao-mensal-banner"
 import { fetchMyTasks, isAuthExpired } from "@/lib/app-api"
 import type { Task } from "@/lib/api"
 import { LISTA_POLL_MS } from "@/lib/constants"
@@ -125,6 +126,7 @@ function SolicitanteShell() {
       <main className="mx-auto max-w-2xl p-4">
         <IosInstallHint />
         <NotifBanner sessionToken={sessionToken} />
+        <AvaliacaoMensalBanner sessionToken={sessionToken} />
         <div className="mb-4 flex items-center gap-3 px-1">
           <span className="bg-brand-gradient grid h-12 w-12 shrink-0 place-items-center rounded-full text-lg font-bold text-white shadow-md" aria-hidden="true">
             {userName.trim().charAt(0).toUpperCase()}

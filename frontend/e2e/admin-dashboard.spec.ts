@@ -204,4 +204,66 @@ test.describe("Dashboard", () => {
     await expect(page.getByText("Volume por atendente")).toBeVisible()
     await expect(page.getByRole("button", { name: /Filtrar só por "Everson"/ })).toContainText("9")
   })
+
+  // ---- Avaliação mensal da TI (2026-11-25) ----
+  const resumo = (extra: Record<string, unknown> = {}) => ({
+    competencia: "2026-11",
+    meses: [{ competencia: "2026-11", respondentes: 12 }, { competencia: "2026-10", respondentes: 9 }],
+    respondentes: 12, elegiveis: 40, participacaoPercent: 30,
+    medias: { tempo_resposta: 4.5, primeiro_atendimento: 3.8, conhecimento: 4.7, cordialidade: 4.9, equipamentos: 3.2, comunicacao: 4.1 },
+    mediaGeral: 4.2,
+    nps: { valor: 58, promotores: 9, neutros: 2, detratores: 1 },
+    comentarios: ["Atendimento rápido", "A impressora do setor trava toda semana"],
+    ...extra,
+  })
+
+  test("cartão da avaliação mensal mostra NPS, média, participação, perguntas e comentários sem nome", async ({ page }) => {
+    await mockAdminRoutes(page, { metrics: makeMetrics({ total: 18 }), avaliacaoResumo: resumo() })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Dashboard")
+    const cartao = page.locator("[data-slot='card']").filter({ hasText: "Avaliação mensal da TI" })
+    await expect(cartao).toContainText("58")
+    await expect(cartao).toContainText("9 promotores · 2 neutros · 1 detrator")
+    await expect(cartao).toContainText("4.2 ★")
+    await expect(cartao).toContainText("de 40 (30%)")
+    await expect(cartao).toContainText("Cordialidade")
+    await expect(cartao).toContainText("4.9")
+    await expect(cartao).toContainText("A impressora do setor trava toda semana")
+    await expect(cartao).toContainText("Comentários (sem nome)")
+  })
+
+  test("cartão da avaliação mensal: trocar o mês pede aquele mês ao servidor", async ({ page }) => {
+    await mockAdminRoutes(page, { metrics: makeMetrics({ total: 18 }), avaliacaoResumo: resumo() })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Dashboard")
+    const pedido = page.waitForRequest((r) => /\/admin\/avaliacoes-mensais\?competencia=2026-10/.test(r.url()))
+    await page.getByLabel("Mês da avaliação").click()
+    await page.getByRole("option", { name: /outubro de 2026/ }).click()
+    await pedido
+  })
+
+  test("cartão da avaliação mensal: mês sem respostas explica em vez de mostrar zeros", async ({ page }) => {
+    await mockAdminRoutes(page, { metrics: makeMetrics({ total: 18 }) })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Dashboard")
+    await expect(page.getByText("Ninguém avaliou novembro de 2026 ainda.")).toBeVisible()
+  })
+
+  test("NPS negativo aparece em vermelho e sem comentários não mostra a lista", async ({ page }) => {
+    await mockAdminRoutes(page, { metrics: makeMetrics({ total: 18 }), avaliacaoResumo: resumo({ nps: { valor: -40, promotores: 1, neutros: 2, detratores: 7 }, comentarios: [] }) })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Dashboard")
+    const cartao = page.locator("[data-slot='card']").filter({ hasText: "Avaliação mensal da TI" })
+    await expect(cartao.getByText("-40")).toHaveClass(/text-red-600/)
+    await expect(cartao).not.toContainText("Comentários (sem nome)")
+  })
+
+  test("poucos respondentes: avisa que os comentários ficam ocultos para não identificar ninguém", async ({ page }) => {
+    await mockAdminRoutes(page, { metrics: makeMetrics({ total: 18 }), avaliacaoResumo: resumo({ respondentes: 2, comentarios: [], comentariosOcultos: true }) })
+    await gotoAdminLoggedIn(page)
+    await abrirSecaoAdmin(page, "Dashboard")
+    const cartao = page.locator("[data-slot='card']").filter({ hasText: "Avaliação mensal da TI" })
+    await expect(cartao).toContainText("só aparecem quando pelo menos 3 pessoas respondem")
+    await expect(cartao).not.toContainText("Comentários (sem nome)")
+  })
 })

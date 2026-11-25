@@ -148,7 +148,7 @@ async function test(name, fn) {
 
 (async () => {
   const workerPath = pathToFileURL(path.join(__dirname, '..', 'push-worker.js')).href;
-  const { default: worker, d1GetChamado, d1SetAssignees, d1CreateSolicitante, d1ListAnexos, d1CreateChamado, d1ListEventos } = await import(workerPath);
+  const { default: worker, d1GetChamado, d1SetAssignees, d1CreateSolicitante, d1ListAnexos, d1CreateChamado, d1ListEventos, competenciaAtual } = await import(workerPath);
 
   // Regra de 2026-11-24: todo chamado nasce com exatamente um operador. Os testes antigos criam
   // chamado sem se importar com isso, então este adaptador completa o corpo com o Everson quando
@@ -3456,6 +3456,132 @@ async function test(name, fn) {
     assert.strictEqual(adm.status, 200, 'a TI vincula qualquer tipo');
   });
 
+  // ---------------- Avaliação mensal da TI (25/11/2026) ----------------
+  const RESP_OK = { tempo_resposta: 5, primeiro_atendimento: 4, conhecimento: 5, cordialidade: 5, equipamentos: 3, comunicacao: 4, recomendacao: 9 };
+  const sessaoDe = async (env, nome, ip) => {
+    await d1CreateSolicitante(env, nome, emailFor(nome));
+    const reg = await worker.fetch(req('POST', '/auth/register', { headers: { ...SECRET_HEADERS, 'CF-Connecting-IP': ip }, body: JSON.stringify({ email: emailFor(nome), nome, password: 'senhaboa123' }) }), env);
+    return comSessao((await reg.json()).token);
+  };
+  const avaliar = (env, h, corpo) => worker.fetch(req('POST', '/api/avaliacao-mensal', { headers: h, body: JSON.stringify(corpo) }), env);
+  const minha = async (env, h) => (await worker.fetch(req('GET', '/api/avaliacao-mensal', { headers: h }), env)).json();
+
+  await test('competência é o mês de Fortaleza (UTC-3): virada de mês e de ano', async () => {
+    assert.strictEqual(competenciaAtual(Date.UTC(2026, 10, 1, 2, 59, 59)), '2026-10', '31/10 23:59:59 em Fortaleza ainda é outubro');
+    assert.strictEqual(competenciaAtual(Date.UTC(2026, 10, 1, 3, 0, 0)), '2026-11');
+    assert.strictEqual(competenciaAtual(Date.UTC(2027, 0, 1, 2, 59, 0)), '2026-12', 'virada de ano');
+    assert.strictEqual(competenciaAtual(Date.UTC(2027, 0, 1, 3, 0, 0)), '2027-01');
+    assert.match(competenciaAtual(), /^\d{4}-(0[1-9]|1[0-2])$/);
+  });
+  await test('avaliação mensal: exige o segredo do app e a sessão; começa como "não respondida"', async () => {
+    const env = eqEnv();
+    assert.strictEqual((await worker.fetch(req('GET', '/api/avaliacao-mensal', { headers: {} }), env)).status, 403);
+    assert.strictEqual((await worker.fetch(req('GET', '/api/avaliacao-mensal', { headers: SECRET_HEADERS }), env)).status, 401);
+    assert.strictEqual((await worker.fetch(req('POST', '/api/avaliacao-mensal', { headers: SECRET_HEADERS, body: JSON.stringify({ respostas: RESP_OK }) }), env)).status, 401);
+    const h = await sessaoDe(env, 'Pessoa Avalia A', '10.3.3.1');
+    const r = await minha(env, h);
+    assert.deepStrictEqual([r.competencia, r.respondida, r.respostas, r.comentario], [competenciaAtual(), false, null, null]);
+  });
+  await test('avaliação mensal: grava, aparece de volta e reenviar no mesmo mês SOBRESCREVE (uma linha só)', async () => {
+    const env = eqEnv();
+    const h = await sessaoDe(env, 'Pessoa Avalia B', '10.3.3.2');
+    assert.strictEqual((await avaliar(env, h, { respostas: RESP_OK, comentario: '  muito bom  ' })).status, 200);
+    let r = await minha(env, h);
+    assert.strictEqual(r.respondida, true);
+    assert.deepStrictEqual(r.respostas, RESP_OK);
+    assert.strictEqual(r.comentario, 'muito bom', 'comentário sem espaços nas pontas');
+    assert.strictEqual((await avaliar(env, h, { respostas: { ...RESP_OK, recomendacao: 2 } })).status, 200);
+    r = await minha(env, h);
+    assert.strictEqual(r.respostas.recomendacao, 2);
+    assert.strictEqual(r.comentario, null, 'reenviar sem comentário limpa o anterior');
+    assert.strictEqual((await env.CHAMADOS_DB.prepare('SELECT COUNT(*) AS n FROM avaliacoes_mensais').first()).n, 1);
+    // outra pessoa não enxerga a avaliação dela
+    const outra = await sessaoDe(env, 'Pessoa Avalia C', '10.3.3.3');
+    assert.strictEqual((await minha(env, outra)).respondida, false);
+  });
+  await test('avaliação mensal: cada nota é validada (1-5, recomendação 0-10, inteiros) e nada é gravado se alguma falhar', async () => {
+    const env = eqEnv();
+    const h = await sessaoDe(env, 'Pessoa Avalia D', '10.3.3.4');
+    const ruins = [
+      undefined, null, 'texto', [], {},
+      ...['tempo_resposta', 'primeiro_atendimento', 'conhecimento', 'cordialidade', 'equipamentos', 'comunicacao'].flatMap(k => [0, 6, 1.5, '3', null].map(v => ({ ...RESP_OK, [k]: v }))),
+      ...[-1, 11, 5.5, '9', null].map(v => ({ ...RESP_OK, recomendacao: v })),
+    ];
+    for (const respostas of ruins) assert.strictEqual((await avaliar(env, h, { respostas })).status, 400, JSON.stringify(respostas));
+    assert.strictEqual((await avaliar(env, h, { respostas: RESP_OK, comentario: 'x'.repeat(1001) })).status, 400);
+    assert.strictEqual((await avaliar(env, h, { respostas: RESP_OK, comentario: 123 })).status, 400);
+    assert.strictEqual((await worker.fetch(req('POST', '/api/avaliacao-mensal', { headers: h, body: 'não é json' }), env)).status, 400);
+    assert.strictEqual((await env.CHAMADOS_DB.prepare('SELECT COUNT(*) AS n FROM avaliacoes_mensais').first()).n, 0);
+    // limites válidos: 1, 5, 0 e 10, comentário de 1000
+    assert.strictEqual((await avaliar(env, h, { respostas: { ...RESP_OK, tempo_resposta: 1, conhecimento: 5, recomendacao: 0 }, comentario: 'x'.repeat(1000) })).status, 200);
+    assert.strictEqual((await avaliar(env, h, { respostas: { ...RESP_OK, recomendacao: 10 } })).status, 200);
+  });
+  await test('avaliação mensal: banco que nunca teve a tabela funciona (criada no primeiro uso)', async () => {
+    const raw = new DatabaseSync(':memory:');
+    raw.exec(fs.readFileSync(path.join(__dirname, '..', 'd1', 'schema.sql'), 'utf8'));
+    raw.exec('DROP TABLE avaliacoes_mensais;');
+    const env = { ...hEnv, CHAMADOS_DB: makeD1FromSqlite(raw), SUBSCRIPTIONS: makeMockKV() };
+    const h = await sessaoDe(env, 'Pessoa Avalia E', '10.3.3.5');
+    assert.strictEqual((await minha(env, h)).respondida, false);
+    assert.strictEqual((await avaliar(env, h, { respostas: RESP_OK })).status, 200);
+    assert.strictEqual((await eqGet(env, '/admin/avaliacoes-mensais')).status, 200);
+  });
+
+  await test('resumo da TI: participação, médias, NPS e comentários SEM nome; só quem é da TI vê', async () => {
+    const env = comOperadores(eqEnv());
+    const a = await sessaoDe(env, 'Pessoa Resumo A', '10.4.4.1');
+    const b = await sessaoDe(env, 'Pessoa Resumo B', '10.4.4.2');
+    const c = await sessaoDe(env, 'Pessoa Resumo C', '10.4.4.3');
+    await sessaoDe(env, 'Pessoa Resumo D', '10.4.4.4'); // interna, não respondeu
+    await sessaoDe(env, 'Pessoa Resumo Ext', '10.4.4.5');
+    await env.CHAMADOS_DB.prepare(`UPDATE solicitantes SET origem = 'externo' WHERE name = 'Pessoa Resumo Ext'`).run();
+    const todas = (n) => ({ tempo_resposta: n, primeiro_atendimento: n, conhecimento: n, cordialidade: n, equipamentos: n, comunicacao: n });
+    await avaliar(env, a, { respostas: { ...todas(5), recomendacao: 10 } });
+    await avaliar(env, b, { respostas: { ...todas(4), recomendacao: 8 } });
+    await avaliar(env, c, { respostas: { ...todas(2), recomendacao: 3 }, comentario: 'demora para responder' });
+
+    const r = await (await eqGet(env, '/admin/avaliacoes-mensais')).json();
+    assert.strictEqual(r.competencia, competenciaAtual());
+    assert.strictEqual(r.respondentes, 3);
+    assert.strictEqual(r.elegiveis, 4, 'só internos ativos contam (o externo fica de fora)');
+    assert.strictEqual(r.participacaoPercent, 75);
+    assert.ok(Object.values(r.medias).every(m => m === 3.7), JSON.stringify(r.medias));
+    assert.strictEqual(r.mediaGeral, 3.7);
+    assert.deepStrictEqual(r.nps, { valor: 0, promotores: 1, neutros: 1, detratores: 1 });
+    assert.deepStrictEqual(r.comentarios, ['demora para responder']);
+    assert.ok(!JSON.stringify(r).includes('Pessoa Resumo'), 'nenhum nome aparece no resumo');
+    assert.deepStrictEqual(r.meses[0], { competencia: competenciaAtual(), respondentes: 3 });
+    // o operador (Everson) também vê; sem chave não
+    assert.strictEqual((await worker.fetch(req('GET', '/admin/avaliacoes-mensais', { headers: EVERSON }), env)).status, 200);
+    assert.strictEqual((await eqGet(env, '/admin/avaliacoes-mensais', {})).status, 403);
+  });
+  await test('resumo da TI: mês pedido, mês sem respostas, competência inválida e escolha do mês padrão', async () => {
+    const env = eqEnv();
+    const h = await sessaoDe(env, 'Pessoa Resumo F', '10.4.5.1');
+    await avaliar(env, h, { respostas: RESP_OK });
+    // um mês antigo com resposta de outra pessoa
+    await d1CreateSolicitante(env, 'Pessoa Antiga', emailFor('Pessoa Antiga'));
+    await env.CHAMADOS_DB.prepare(`INSERT INTO avaliacoes_mensais (solicitante, competencia, respostas, comentario, created_at) VALUES (?, ?, ?, ?, ?)`)
+      .bind('Pessoa Antiga', '2026-09', JSON.stringify({ ...RESP_OK, recomendacao: 0 }), null, Date.now()).run();
+    const vazio = await (await eqGet(env, '/admin/avaliacoes-mensais?competencia=2026-08')).json();
+    assert.deepStrictEqual([vazio.respondentes, vazio.medias.tempo_resposta, vazio.mediaGeral, vazio.nps, vazio.comentarios], [0, null, null, null, []]);
+    assert.ok(vazio.meses.some(m => m.competencia === '2026-08'), 'o mês pedido aparece no seletor mesmo sem respostas');
+    const setembro = await (await eqGet(env, '/admin/avaliacoes-mensais?competencia=2026-09')).json();
+    assert.deepStrictEqual([setembro.respondentes, setembro.nps.valor], [1, -100]);
+    for (const ruim of ['2026-13', '2026-00', '26-09', 'setembro', '2026-9', '2026-09-01']) {
+      assert.strictEqual((await eqGet(env, `/admin/avaliacoes-mensais?competencia=${ruim}`)).status, 400, ruim);
+    }
+    // padrão: o mês atual (tem resposta) vem antes do antigo; a lista traz os dois
+    const padrao = await (await eqGet(env, '/admin/avaliacoes-mensais')).json();
+    assert.strictEqual(padrao.competencia, competenciaAtual());
+    assert.ok(padrao.meses.some(m => m.competencia === '2026-09'));
+    // sem nenhuma resposta no mês atual, o padrão cai no mais recente que tenha
+    await env.CHAMADOS_DB.prepare(`DELETE FROM avaliacoes_mensais WHERE competencia = ?`).bind(competenciaAtual()).run();
+    const cai = await (await eqGet(env, '/admin/avaliacoes-mensais')).json();
+    assert.strictEqual(cai.competencia, '2026-09');
+    assert.strictEqual(cai.meses[0].competencia, competenciaAtual(), 'o mês atual continua na lista, mesmo vazio');
+  });
+
   console.log('--- descoberta automática de impressoras e toners (2026-11-25) ---');
   {
     const desc = (env, h, impressoras) => worker.fetch(req('POST', '/agente/descobertas', { headers: h, body: JSON.stringify({ impressoras }) }), env);
@@ -3500,6 +3626,80 @@ async function test(name, fn) {
       assert.strictEqual((await desc(env, AG, [])).status, 400);
     });
   }
+  await test('avaliação mensal: conta externa não avalia (403), não vê a faixa e as respostas dela não entram no resumo', async () => {
+    const env = eqEnv();
+    const interno = await sessaoDe(env, 'Pessoa Int Aval', '10.5.5.1');
+    const externo = await sessaoDe(env, 'Pessoa Ext Aval', '10.5.5.2');
+    await env.CHAMADOS_DB.prepare(`UPDATE solicitantes SET origem = 'externo' WHERE name = 'Pessoa Ext Aval'`).run();
+    assert.strictEqual((await minha(env, externo)).elegivel, false);
+    assert.strictEqual((await minha(env, interno)).elegivel, true);
+    assert.strictEqual((await avaliar(env, externo, { respostas: RESP_OK })).status, 403);
+    assert.strictEqual((await avaliar(env, interno, { respostas: RESP_OK })).status, 200);
+    // mesmo que uma resposta de externo/desativado já exista no banco, ela não entra no resumo
+    const antes = await sessaoDe(env, 'Pessoa Virou Ext', '10.5.5.3');
+    const desat = await sessaoDe(env, 'Pessoa Desativada', '10.5.5.4');
+    await avaliar(env, antes, { respostas: { ...RESP_OK, recomendacao: 0 } });
+    await avaliar(env, desat, { respostas: { ...RESP_OK, recomendacao: 0 } });
+    await env.CHAMADOS_DB.prepare(`UPDATE solicitantes SET origem = 'externo' WHERE name = 'Pessoa Virou Ext'`).run();
+    await env.CHAMADOS_DB.prepare(`UPDATE solicitantes SET ativo = 0 WHERE name = 'Pessoa Desativada'`).run();
+    const r = await (await eqGet(env, '/admin/avaliacoes-mensais')).json();
+    assert.strictEqual(r.respondentes, 1);
+    assert.strictEqual(r.nps.valor, 100, 'só a resposta da pessoa interna e ativa (recomendação 9)');
+    assert.ok(r.participacaoPercent <= 100);
+    assert.deepStrictEqual(r.meses[0], { competencia: competenciaAtual(), respondentes: 1 });
+  });
+  await test('avaliação mensal: se o mês virou com o formulário aberto, o envio é recusado (409) em vez de gravar no mês errado', async () => {
+    const env = eqEnv();
+    const h = await sessaoDe(env, 'Pessoa Mes Virou', '10.5.6.1');
+    assert.strictEqual((await avaliar(env, h, { respostas: RESP_OK, competencia: '2020-01' })).status, 409);
+    assert.strictEqual((await env.CHAMADOS_DB.prepare('SELECT COUNT(*) AS n FROM avaliacoes_mensais').first()).n, 0);
+    assert.strictEqual((await avaliar(env, h, { respostas: RESP_OK, competencia: competenciaAtual() })).status, 200);
+    assert.strictEqual((await avaliar(env, h, { respostas: RESP_OK })).status, 200, 'sem a competência continua valendo o mês atual');
+  });
+  await test('resumo da TI: comentários só com 3+ respondentes, em ordem alfabética (sem pista de quem/quando); linha corrompida é ignorada', async () => {
+    const env = eqEnv();
+    const pessoas = [];
+    for (const [i, nome] of ['Pessoa Anon A', 'Pessoa Anon B', 'Pessoa Anon C'].entries()) pessoas.push(await sessaoDe(env, nome, `10.5.7.${i + 1}`));
+    await avaliar(env, pessoas[0], { respostas: RESP_OK, comentario: 'zebra: tudo certo' });
+    await avaliar(env, pessoas[1], { respostas: RESP_OK, comentario: 'abacaxi: demorou' });
+    // com 2 respondentes o comentário é praticamente identificável: fica oculto
+    let r = await (await eqGet(env, '/admin/avaliacoes-mensais')).json();
+    assert.deepStrictEqual([r.respondentes, r.comentarios, r.comentariosOcultos], [2, [], true]);
+    await avaliar(env, pessoas[2], { respostas: RESP_OK, comentario: 'mamão: bom' });
+    r = await (await eqGet(env, '/admin/avaliacoes-mensais')).json();
+    assert.deepStrictEqual(r.comentarios, ['abacaxi: demorou', 'mamão: bom', 'zebra: tudo certo'], 'ordem alfabética, não por horário');
+    assert.strictEqual(r.comentariosOcultos, false);
+    // linhas corrompidas (JSON inválido, null, faltando nota, nota fora da faixa) não derrubam nem entram na conta
+    for (const [i, lixo] of ['não é json', 'null', '{"tempo_resposta":5}', JSON.stringify({ ...RESP_OK, conhecimento: 9 })].entries()) {
+      const nome = `Pessoa Lixo ${'ABCD'[i]}`;
+      await d1CreateSolicitante(env, nome, emailFor(nome));
+      await env.CHAMADOS_DB.prepare(`INSERT INTO avaliacoes_mensais (solicitante, competencia, respostas, comentario, created_at) VALUES (?, ?, ?, ?, ?)`).bind(nome, competenciaAtual(), lixo, 'não deveria aparecer', Date.now()).run();
+    }
+    // as 4 linhas ruins EXISTEM e pertencem a pessoas internas ativas (sem a validação do resumo entrariam na conta)
+    const visiveisAoJoin = (await env.CHAMADOS_DB.prepare(
+      `SELECT COUNT(*) AS n FROM avaliacoes_mensais a JOIN solicitantes s ON s.name = a.solicitante AND s.ativo = 1 AND s.origem = 'interno' WHERE a.competencia = ?`
+    ).bind(competenciaAtual()).first()).n;
+    assert.strictEqual(visiveisAoJoin, 7);
+    const depois = await eqGet(env, '/admin/avaliacoes-mensais');
+    assert.strictEqual(depois.status, 200);
+    const corpo = await depois.json();
+    assert.strictEqual(corpo.respondentes, 3, 'só as 3 respostas válidas contam');
+    assert.ok(!corpo.comentarios.includes('não deveria aparecer'));
+    assert.strictEqual(corpo.medias.tempo_resposta, 5);
+  });
+  await test('resumo da TI: as médias por pergunta e a média geral conferem com a conta feita à mão', async () => {
+    const env = eqEnv();
+    // 3 pessoas: médias por pergunta 4,3333 (mostra 4,3) e 3,6667 (mostra 3,7); a geral é (4,3333*3 + 3,6667*3)/6 = 4,0
+    const vals = [[5, 4], [4, 4], [4, 3]]; // [notas das 3 primeiras perguntas, notas das 3 últimas] por pessoa
+    for (const [i, [a, b]] of vals.entries()) {
+      const h = await sessaoDe(env, `Pessoa Media ${'ABC'[i]}`, `10.5.8.${i + 1}`);
+      await avaliar(env, h, { respostas: { tempo_resposta: a, primeiro_atendimento: a, conhecimento: a, cordialidade: b, equipamentos: b, comunicacao: b, recomendacao: 9 } });
+    }
+    const r = await (await eqGet(env, '/admin/avaliacoes-mensais')).json();
+    assert.deepStrictEqual([r.medias.tempo_resposta, r.medias.cordialidade], [4.3, 3.7]);
+    assert.strictEqual(r.mediaGeral, 4);
+  });
+
   console.log(`\n${passed} passaram, ${failed} falharam`);
   process.exit(failed > 0 ? 1 : 0);
 })();

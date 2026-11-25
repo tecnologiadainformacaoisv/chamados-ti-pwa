@@ -42,11 +42,16 @@ function fulfillJson(route: Route, body: unknown, status = 200) {
 /** Mocks padrão pro app do SOLICITANTE — lista de nomes, sessão, my-tasks, criar chamado. */
 export async function mockSolicitanteRoutes(
   page: Page,
-  opts: { tasks?: ReturnType<typeof makeTask>[]; solicitantes?: string[]; equipamentos?: Record<string, unknown>[] } = {}
+  opts: { tasks?: ReturnType<typeof makeTask>[]; solicitantes?: string[]; equipamentos?: Record<string, unknown>[]; avaliacaoRespondida?: boolean; avaliacaoElegivel?: boolean } = {}
 ) {
   await installFloor(page)
   const tasks = opts.tasks ?? []
   const solicitantes = opts.solicitantes ?? SOLICITANTES
+  // Avaliação mensal da TI: por padrão já respondida (a faixa não aparece e não atrapalha os outros testes).
+  await on(page, "**/api/avaliacao-mensal", "GET", (route) =>
+    fulfillJson(route, { competencia: "2026-11", respondida: opts.avaliacaoRespondida ?? true, elegivel: opts.avaliacaoElegivel ?? true, respostas: null, comentario: null }),
+  )
+  await on(page, "**/api/avaliacao-mensal", "POST", (route) => fulfillJson(route, { ok: true, competencia: "2026-11" }))
   // Lista enxuta do select "Equipamento" do Novo Chamado (vazia por padrão: o campo fica escondido).
   await on(page, "**/api/equipamentos", "GET", (route) => fulfillJson(route, { equipamentos: opts.equipamentos ?? [] }))
 
@@ -114,6 +119,7 @@ export async function mockAdminRoutes(
     anexos?: { id: string; name: string; size: number | null; content_type: string | null; url: string }[]
     equipamentos?: Record<string, unknown>[]
     toners?: Record<string, unknown>[]
+    avaliacaoResumo?: Record<string, unknown>
     secret?: string
   } = {}
 ) {
@@ -156,6 +162,13 @@ export async function mockAdminRoutes(
   await on(page, "**/admin/equipamentos", "GET", (route) => fulfillJson(route, { equipamentos: opts.equipamentos ?? [] }))
   await on(page, "**/admin/equipamentos", "POST", (route) => fulfillJson(route, { id: "eq-novo" }, 201))
   await on(page, /\/admin\/equipamentos\/[^/]+$/, "POST", (route) => fulfillJson(route, { ok: true }))
+  await on(page, /\/admin\/avaliacoes-mensais(\?.*)?$/, "GET", (route) =>
+    fulfillJson(route, opts.avaliacaoResumo ?? {
+      competencia: "2026-11", meses: [{ competencia: "2026-11", respondentes: 0 }], respondentes: 0, elegiveis: 40, participacaoPercent: null,
+      medias: { tempo_resposta: null, primeiro_atendimento: null, conhecimento: null, cordialidade: null, equipamentos: null, comunicacao: null },
+      mediaGeral: null, nps: null, comentarios: [],
+    }),
+  )
   await on(page, "**/admin/toners", "GET", (route) => fulfillJson(route, { toners: opts.toners ?? [] }))
   await on(page, "**/admin/toners", "POST", (route) => fulfillJson(route, { id: "toner-novo" }, 201))
   await on(page, /\/admin\/toners\/[^/]+(\/recarga(\/desfazer)?)?$/, "POST", (route) => fulfillJson(route, { ok: true }))
