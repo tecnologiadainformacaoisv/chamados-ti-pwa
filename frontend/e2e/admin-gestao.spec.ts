@@ -1,5 +1,5 @@
 import { test, expect } from "./helpers/fixtures"
-import { mockAdminRoutes, gotoAdminLoggedIn, abrirSecaoAdmin } from "./helpers/fixtures"
+import { mockAdminRoutes, gotoAdminLoggedIn, abrirSecaoAdmin, abrirFiltros } from "./helpers/fixtures"
 import { makeTask } from "./helpers/mock-data"
 
 test.describe("Gestão — Quadro (Kanban)", () => {
@@ -170,9 +170,12 @@ test.describe("Gestão — Filtros", () => {
     await mockAdminRoutes(page, { tasks: [] })
     await gotoAdminLoggedIn(page)
     await expect(page.getByText(/\d+ filtros?/)).not.toBeVisible()
+    await abrirFiltros(page)
     await page.locator('[data-slot="select-trigger"]').first().click()
     await page.getByRole("option").nth(1).click()
-    await expect(page.getByText("1 filtro")).toBeVisible()
+    // no computador é o selo "1 filtro"; no celular, a contagem no próprio botão
+    if ((page.viewportSize()?.width ?? 1280) >= 768) await expect(page.getByText("1 filtro")).toBeVisible()
+    else await expect(page.getByRole("button", { name: "Filtros (1)" })).toBeVisible()
   })
 
   test("truncated:true mostra o aviso de teto de páginas", async ({ page }) => {
@@ -255,6 +258,7 @@ test.describe("Gestão — Exportar CSV", () => {
     await mockAdminRoutes(page, { tasks })
     await gotoAdminLoggedIn(page)
     await expect(page.getByText("Notebook não liga")).toBeVisible()
+    await abrirFiltros(page)
 
     const [download] = await Promise.all([
       page.waitForEvent("download"),
@@ -279,6 +283,7 @@ test.describe("Gestão — Exportar CSV", () => {
     await mockAdminRoutes(page, { tasks })
     await gotoAdminLoggedIn(page)
     await page.getByPlaceholder("Buscar por título ou solicitante...").fill("Impressora")
+    await abrirFiltros(page)
     const [download] = await Promise.all([
       page.waitForEvent("download"),
       page.getByRole("button", { name: "Exportar CSV" }).click(),
@@ -433,6 +438,8 @@ test.describe("Gestão — ordem de atendimento, erro/vazio honestos e celular",
     await gotoAdminLoggedIn(page, undefined, false, "fila")
     const modos = page.getByRole("group", { name: "Modo de visualização" })
     await expect(page.getByRole("region", { name: "Fila de atendimento" })).toBeVisible()
+    await expect(modos).toHaveCount(0) // recolhido atrás de "Filtros"
+    await page.getByRole("button", { name: "Filtros", exact: true }).click()
     await expect(modos.getByRole("button", { name: "Tabela" })).toBeHidden()
     await modos.getByRole("button", { name: "Quadro" }).click()
     await expect(page.locator('[data-status="aberto"]')).toContainText("Chamado celular")

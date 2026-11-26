@@ -59,7 +59,7 @@ test.describe("Notificação push do admin — diagnóstico visível (2026-09-15
     await mockAdminRoutes(page, { tasks: [] })
     await stubPushApi(page, { permission: "granted" })
     await gotoAdminLoggedIn(page)
-    await expect(page.getByRole("heading", { name: "Linha do dia" })).toBeVisible()
+    await expect(page.locator("#busca-chamados")).toBeVisible() // a tela da Gestão carregou
     await expect(page.getByText("Notificações push ativas neste navegador.")).toHaveCount(0)
     await expect(page.getByRole("button", { name: "Testar notificação" })).toHaveCount(0)
   })

@@ -83,6 +83,24 @@ test.describe("Tela inicial (celular)", () => {
     await expect(page.getByRole("region", { name: "Fila de atendimento" })).toBeVisible()
   })
 
+  test("a lista começa limpa: sem linha do dia, filtros atrás de um botão", async ({ page }) => {
+    await abrir(page)
+    await page.getByRole("button", { name: "Ver chamados" }).click()
+    await expect(page.locator("#busca-chamados")).toBeVisible()
+    await expect(page.getByText("Linha do dia")).toHaveCount(0)
+    await expect(page.getByRole("combobox")).toHaveCount(0)
+    const botao = page.getByRole("button", { name: "Filtros", exact: true })
+    await expect(botao).toHaveAttribute("aria-expanded", "false")
+    await botao.click()
+    await page.getByRole("combobox").filter({ hasText: "Operador: Todos" }).click()
+    await page.getByRole("option").nth(1).click()
+    await expect(page.getByRole("button", { name: "Filtros (1)" })).toBeVisible()
+    await expect(page.getByRole("button", { name: "Exportar CSV" })).toBeVisible()
+    // a primeira linha da fila aparece sem precisar rolar
+    await page.getByRole("button", { name: "Filtros (1)" }).click()
+    await expect(page.locator('[data-task-id]').first()).toBeInViewport()
+  })
+
   test("sem nada esperando, diz que está tudo em dia", async ({ page }) => {
     await abrir(page, [makeTask({ id: "f", name: "Fechado", status: { status: "encerrado" }, date_closed: Date.now() - MIN })])
     await expect(page.getByText("Tudo em dia")).toBeVisible()
@@ -103,7 +121,7 @@ test.describe("Computador não muda e o título aparece", () => {
     await abrir(page)
     await expect(page.getByRole("region", { name: "Fila de atendimento" })).toBeVisible()
     await page.setViewportSize({ width: 600, height: 800 })
-    await expect(page.getByRole("group", { name: "Modo de visualização" })).toBeVisible()
+    await expect(page.getByRole("button", { name: "Filtros", exact: true })).toBeVisible()
     await expect(page.getByRole("region", { name: "Tela inicial" })).toHaveCount(0)
   })
 

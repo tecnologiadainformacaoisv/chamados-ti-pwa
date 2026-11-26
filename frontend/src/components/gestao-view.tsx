@@ -427,6 +427,35 @@ export function GestaoView() {
     )
   }
 
+  // Exportar e modo de visualização: no computador ficam na barra; no celular, dentro de "Filtros".
+  const acoesDaLista = (
+    <div className="flex items-center gap-2">
+    <Button
+      size="sm"
+      variant="outline"
+      onClick={() => downloadTasksCsv(lastVisible)}
+      disabled={lastVisible.length === 0}
+      title="Baixa em CSV os chamados que estão na tela (com os filtros e a busca aplicados)"
+      aria-label="Exportar CSV"
+    >
+      <Download className="h-4 w-4" />
+      <span className="hidden sm:inline">Exportar CSV</span>
+      <span className="sm:hidden">CSV</span>
+    </Button>
+    <div className="flex gap-1 rounded-md border border-border p-1" role="group" aria-label="Modo de visualização">
+      <Button size="sm" aria-pressed={modoVisao === "fila"} variant={modoVisao === "fila" ? "default" : "ghost"} onClick={() => changeViewMode("fila")}>
+        <ListOrdered className="h-4 w-4" /> Fila
+      </Button>
+      <Button size="sm" aria-pressed={modoVisao === "quadro"} variant={modoVisao === "quadro" ? "default" : "ghost"} onClick={() => changeViewMode("quadro")}>
+        <LayoutGrid className="h-4 w-4" /> Quadro
+      </Button>
+      <Button size="sm" className="hidden md:inline-flex" aria-pressed={modoVisao === "tabela"} variant={modoVisao === "tabela" ? "default" : "ghost"} onClick={() => changeViewMode("tabela")}>
+        <List className="h-4 w-4" /> Tabela
+      </Button>
+    </div>
+    </div>
+  )
+
   return (
     <div className="flex flex-col gap-4">
       {/* Bloco fixo (2026-09-15, pedido do usuário: "a parte de cima fixa e
@@ -443,7 +472,8 @@ export function GestaoView() {
           era na real esse truque de margem). */}
       {/* Gestão à vista (pedido do usuário, 2026-10-19): a linha do dia é a PRIMEIRA coisa da tela, acima
           dos filtros, e mostra todos os chamados em andamento (não muda com filtro/busca). */}
-      {!tasksQuery.isLoading && !!tasksQuery.data && (
+      {/* No celular a linha do dia não aparece (pedido do usuário): precisa de largura pra fazer sentido. */}
+      {!isMobile && !tasksQuery.isLoading && !!tasksQuery.data && (
         <LinhaDoDia tasks={tasks} focoId={focoId} onOpenTask={(t) => { setFocoId(t.id); setSelectedTask(t) }} />
       )}
 
@@ -460,6 +490,8 @@ export function GestaoView() {
           busca={busca}
           onBuscaChange={setBusca}
           mostrarStatus={modoVisao === "tabela"}
+          compacto={isMobile}
+          extras={acoesDaLista}
         />
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-3">
@@ -479,31 +511,7 @@ export function GestaoView() {
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => downloadTasksCsv(lastVisible)}
-            disabled={lastVisible.length === 0}
-            title="Baixa em CSV os chamados que estão na tela (com os filtros e a busca aplicados)"
-            aria-label="Exportar CSV"
-          >
-            <Download className="h-4 w-4" />
-            <span className="hidden sm:inline">Exportar CSV</span>
-            <span className="sm:hidden">CSV</span>
-          </Button>
-          <div className="flex gap-1 rounded-md border border-border p-1" role="group" aria-label="Modo de visualização">
-            <Button size="sm" aria-pressed={modoVisao === "fila"} variant={modoVisao === "fila" ? "default" : "ghost"} onClick={() => changeViewMode("fila")}>
-              <ListOrdered className="h-4 w-4" /> Fila
-            </Button>
-            <Button size="sm" aria-pressed={modoVisao === "quadro"} variant={modoVisao === "quadro" ? "default" : "ghost"} onClick={() => changeViewMode("quadro")}>
-              <LayoutGrid className="h-4 w-4" /> Quadro
-            </Button>
-            <Button size="sm" className="hidden md:inline-flex" aria-pressed={modoVisao === "tabela"} variant={modoVisao === "tabela" ? "default" : "ghost"} onClick={() => changeViewMode("tabela")}>
-              <List className="h-4 w-4" /> Tabela
-            </Button>
-          </div>
-          </div>
+          {!isMobile && acoesDaLista}
         </div>
       </div>
 

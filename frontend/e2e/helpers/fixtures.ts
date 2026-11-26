@@ -227,5 +227,11 @@ export async function abrirSecaoAdmin(page: Page, nome: "Gestão" | "Dashboard" 
   if (eraMobile) await page.keyboard.press("Escape")
 }
 
+/** No celular os filtros, o CSV e o modo de visualização ficam atrás de "Filtros"; no computador não faz nada. */
+export async function abrirFiltros(page: Page) {
+  if ((page.viewportSize()?.width ?? 1280) >= 768) return
+  await page.getByRole("button", { name: /^Filtros( \(\d+\))?$/ }).click()
+}
+
 export { ADMIN_SECRET }
 export { test, expect }

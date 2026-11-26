@@ -1,5 +1,5 @@
-import type { CSSProperties } from "react"
-import { Search, X } from "lucide-react"
+import { useState, type CSSProperties, type ReactNode } from "react"
+import { Search, SlidersHorizontal, X } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -19,6 +19,8 @@ export function FiltersBar({
   busca,
   onBuscaChange,
   mostrarStatus,
+  compacto = false,
+  extras,
 }: {
   filtros: Filtros
   onChange: (f: Filtros) => void
@@ -26,7 +28,12 @@ export function FiltersBar({
   busca: string
   onBuscaChange: (v: string) => void
   mostrarStatus: boolean
+  /** Celular: só a busca fica à vista; o resto abre pelo botão "Filtros". */
+  compacto?: boolean
+  /** Controles que, no celular, moram junto dos filtros (modo de visualização e CSV). */
+  extras?: ReactNode
 }) {
+  const [aberto, setAberto] = useState(false)
   function set(field: keyof Filtros, value: string) {
     onChange({ ...filtros, [field]: value === TODOS ? undefined : value })
   }
@@ -38,8 +45,8 @@ export function FiltersBar({
 
   const filtrosAtivos = Object.values(filtros).filter(Boolean).length
 
-  return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-2.5 shadow-sm">
+  const selects = (
+    <>
       {mostrarStatus && (
         <CompactSelect value={filtros.status ?? TODOS} onChange={(v) => set("status", v)} placeholder="Status: Todos">
           {STATUS_ORDER.map((s) => (
@@ -71,14 +78,10 @@ export function FiltersBar({
           <SelectItem key={nome} value={nome}>{nome}</SelectItem>
         ))}
       </CompactSelect>
-
-      {filtrosAtivos > 0 && (
-        <Badge variant="secondary" className="font-semibold">
-          {filtrosAtivos} {filtrosAtivos === 1 ? "filtro" : "filtros"}
-        </Badge>
-      )}
-
-      <div className="flex min-w-48 flex-1 items-center gap-1.5 rounded-md border border-input bg-transparent px-2.5 py-1.5">
+    </>
+  )
+  const campoBusca = (
+    <div className="flex min-w-0 flex-1 sm:min-w-48 items-center gap-1.5 rounded-md border border-input bg-transparent px-2.5 py-1.5">
         <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <input
           id="busca-chamados"
@@ -89,12 +92,48 @@ export function FiltersBar({
           onChange={(e) => onBuscaChange(e.target.value)}
         />
       </div>
-
-      {(filtrosAtivos > 0 || busca) && (
+  )
+  const botaoLimpar = (filtrosAtivos > 0 || busca) && (
         <Button variant="ghost" size="sm" onClick={limpar} className="gap-1 text-muted-foreground">
           <X className="h-3.5 w-3.5" /> Limpar
         </Button>
+      )
+
+  if (compacto) {
+    return (
+      <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-2.5 shadow-sm">
+        <div className="flex items-center gap-2">
+          {campoBusca}
+          <Button variant="outline" className="min-h-11 shrink-0 gap-1.5" aria-expanded={aberto} aria-controls="painel-filtros" onClick={() => setAberto((v) => !v)}>
+            <SlidersHorizontal className="h-4 w-4" aria-hidden /> Filtros{filtrosAtivos > 0 ? ` (${filtrosAtivos})` : ""}
+          </Button>
+        </div>
+        {aberto && (
+          <div id="painel-filtros" className="flex flex-col gap-2.5 border-t border-border pt-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              {selects}
+              {botaoLimpar}
+            </div>
+            {extras}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-2.5 shadow-sm">
+      {selects}
+
+      {filtrosAtivos > 0 && (
+        <Badge variant="secondary" className="font-semibold">
+          {filtrosAtivos} {filtrosAtivos === 1 ? "filtro" : "filtros"}
+        </Badge>
       )}
+
+      {campoBusca}
+
+      {botaoLimpar}
     </div>
   )
 }
