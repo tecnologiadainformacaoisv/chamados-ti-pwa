@@ -466,7 +466,7 @@ export function GestaoView() {
             <p className="whitespace-nowrap text-sm font-medium text-foreground">
               Chamados {busca || rapido !== "todos" ? `(${lastVisible.length} de ${tasks.length})` : `(${tasks.length})`}
             </p>
-            <div className="flex items-center gap-1.5" role="group" aria-label="Filtros rápidos">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5" role="group" aria-label="Filtros rápidos">
               {([["todos", "Todos"], ["atrasados", "Atrasados"], ["hora", "Atrasados e até 1 h"]] as const).map(([k, rotulo]) => (
                 <Button key={k} size="sm" variant={rapido === k ? "default" : "outline"} aria-pressed={rapido === k} onClick={() => setRapido(k)}>
                   {rotulo}

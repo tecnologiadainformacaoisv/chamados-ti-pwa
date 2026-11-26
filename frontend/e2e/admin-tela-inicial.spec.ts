@@ -36,6 +36,28 @@ test.describe("Tela inicial (celular)", () => {
     await expect(page.getByRole("region", { name: "Ações pendentes" })).toHaveCount(0)
   })
 
+  test("com cada filtro aplicado, nada passa da lateral da tela", async ({ page }) => {
+    // 360px: celular estreito, onde a etiqueta do filtro saía pela direita
+    await page.setViewportSize({ width: 360, height: 800 })
+    await abrir(page)
+    for (const [botao, etiqueta] of [
+      ["2 aguardando aceite", "Aguardando aceite"],
+      ["1 passaram do prazo", "Atrasados"],
+      ["1 em atendimento", "Em atendimento"],
+      ["1 em espera", "Em espera"],
+    ]) {
+      await page.evaluate(() => sessionStorage.removeItem("admin_inicio_visto"))
+      await page.reload()
+      await page.getByRole("button", { name: botao }).click()
+      await expect(page.getByRole("region", { name: "Fila de atendimento" })).toBeVisible()
+      if (etiqueta !== "Atrasados") await expect(page.getByRole("button", { name: `Remover filtro: ${etiqueta}` })).toBeInViewport({ ratio: 1 })
+      const sobra = await page.evaluate(() =>
+        Math.max(...[...document.querySelectorAll('main button, main [role="group"]')].filter((e) => (e as HTMLElement).offsetParent).map((e) => e.getBoundingClientRect().right)) - window.innerWidth,
+      )
+      expect(sobra, etiqueta).toBeLessThanOrEqual(0)
+    }
+  })
+
   test("aparece uma vez por entrada: recarregar não mostra de novo", async ({ page }) => {
     await abrir(page)
     await page.getByRole("button", { name: "Ver chamados" }).click()
