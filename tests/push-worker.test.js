@@ -4064,6 +4064,19 @@ async function test(name, fn) {
     await worker.scheduled({ scheduledTime: QUARTA_10H }, e, {});
     assert.strictEqual(adminPushCalls.length, 8, '2 avisos de SLA x 4 aparelhos; o lembrete não cabe nos 10 envios');
   });
+  await test('lembrete: leva a descrição do problema e quem abriu, cortados, sem os detalhes', async () => {
+    const e = await slaEnv();
+    await chamadoParado(e, 'lem-txt', 20);
+    await e.CHAMADOS_DB.prepare('UPDATE chamados SET name = ? WHERE id = ?').bind('Impressora' + String.fromCharCode(10) + 'não imprime ' + 'x'.repeat(200), 'lem-txt').run();
+    const vistos = [];
+    const encodeReal = TextEncoder.prototype.encode;
+    TextEncoder.prototype.encode = function (s) { if (String(s).includes('"type":"lembrete"')) vistos.push(String(s)); return encodeReal.call(this, s); };
+    try { await lembrarNaoAceitos(e, QUARTA_10H); } finally { TextEncoder.prototype.encode = encodeReal; }
+    const { body } = JSON.parse(vistos[0]);
+    assert.ok(body.startsWith('Chamado sem número está há mais de 15 minutos sem ser aceito: "Impressora não imprime xxx'), body);
+    assert.ok(body.endsWith('— Pessoa Sigilosa') && body.length < 220, body);
+    assert.ok(!/Descrição sigilosa/.test(body));
+  });
   await test('lembrete: respeita o teto de avisos da rodada', async () => {
     const e = await slaEnv();
     for (let i = 0; i < 4; i++) await chamadoParado(e, `lem-t${i}`, 20 + i);
@@ -4152,7 +4165,7 @@ async function test(name, fn) {
     for (let i = 0; i < 5; i++) await chamadoSla(muitos, `sla-n${i}`, QUARTA_10H + (i + 1) * MIN);
     assert.strictEqual((await rodar(muitos, QUARTA_10H)).quem.length, 8);
   });
-  await test('alerta de SLA: o texto leva número e prazo, nunca título, descrição ou solicitante', async () => {
+  await test('alerta de SLA: o atendente vê descrição e solicitante; o admin, em chamado alheio, só o atendente', async () => {
     // O corpo do push é cifrado; confere o payload montado antes de cifrar.
     const e = await slaEnv();
     await chamadoSla(e, 'sla-t', QUARTA_10H - MIN);
@@ -4162,10 +4175,10 @@ async function test(name, fn) {
     try { await alertarSla(e, QUARTA_10H); } finally { TextEncoder.prototype.encode = encodeReal; }
     const corpos = vistos.map(v => JSON.parse(v).body).sort();
     assert.deepStrictEqual(corpos, [
-      'Chamado sem número passou do prazo (era 09:59)',
       'Chamado sem número passou do prazo (era 09:59) (atendente: Everson)',
+      'Chamado sem número passou do prazo (era 09:59): "Título sigiloso" — Pessoa Sigilosa',
     ]);
-    assert.ok(!vistos.some(v => /sigilos/i.test(v)));
+    assert.ok(!vistos.some(v => /Descrição sigilosa/.test(v)), 'os detalhes adicionais nunca vão no aviso');
   });
   await test('alerta de SLA: o handler scheduled usa o horário do evento e não lança', async () => {
     const e = await slaEnv();

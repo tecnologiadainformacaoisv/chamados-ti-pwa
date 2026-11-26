@@ -1738,6 +1738,14 @@ function prazoFalado(due, agora) {
   return `${d.slice(8, 10)}/${d.slice(5, 7)} às ${hora}`;
 }
 
+// ': "Impressora não imprime" — Fulano' (descrição do problema e quem abriu; o push vai cifrado até
+// o aparelho). Os "detalhes adicionais" ficam de fora.
+function resumoDoChamado(c) {
+  const titulo = limpaTextoAviso(c.name, 80);
+  const quem = limpaTextoAviso(c.solicitante, 40);
+  return (titulo ? `: "${titulo}"` : '') + (quem ? ` — ${quem}` : '');
+}
+
 async function listarChavesKV(env, prefix) {
   const nomes = [];
   let cursor;
@@ -1773,7 +1781,7 @@ async function alertarSla(env, agora = Date.now(), rodada = novaRodada()) {
 
   // Os que vencem logo primeiro (a janela deles é curta), depois os vencidos mais recentes.
   const { results } = await env.CHAMADOS_DB.prepare(
-    `SELECT c.id, c.numero, c.due_date, COALESCE(a.assignee_id, c.assignee_id) AS atendente
+    `SELECT c.id, c.numero, c.name, c.solicitante, c.due_date, COALESCE(a.assignee_id, c.assignee_id) AS atendente
        FROM chamados c LEFT JOIN chamado_assignees a ON a.chamado_id = c.id
       WHERE c.status IN ('aberto', 'em atendimento')
         AND c.due_date IS NOT NULL AND c.due_date > ? AND c.due_date <= ?
@@ -1813,7 +1821,8 @@ async function alertarSla(env, agora = Date.now(), rodada = novaRodada()) {
         : '';
       const payload = JSON.stringify({
         title: venceu ? 'Chamado com prazo vencido' : 'Chamado perto do prazo',
-        body: (venceu ? `Chamado ${numero} passou do prazo (era ${quando})` : `Chamado ${numero} vence às ${quando}`) + deOutro,
+        // Quem recebe aviso de chamado alheio (o admin) vê só número, prazo e atendente, como no painel.
+        body: (venceu ? `Chamado ${numero} passou do prazo (era ${quando})` : `Chamado ${numero} vence às ${quando}`) + (deOutro || resumoDoChamado(c)),
         data: { task_id: c.id, type: 'sla' },
       });
 
@@ -1860,8 +1869,8 @@ async function lembrarNaoAceitos(env, agora = Date.now(), rodada = novaRodada())
   const menorMarco = Math.min(...LEMBRETE_MARCOS_MIN) * 60000;
   const { results } = await env.CHAMADOS_DB.prepare(
     // `desde`: quando passou a esperar aceite (a criação, ou a última volta para "aberto").
-    `SELECT id, numero, desde, atendente FROM (
-       SELECT c.id, c.numero, c.due_date, COALESCE(a.assignee_id, c.assignee_id) AS atendente,
+    `SELECT id, numero, name, solicitante, desde, atendente FROM (
+       SELECT c.id, c.numero, c.name, c.solicitante, c.due_date, COALESCE(a.assignee_id, c.assignee_id) AS atendente,
               COALESCE((SELECT MAX(e.created_at) FROM chamado_eventos e
                          WHERE e.chamado_id = c.id AND e.tipo = 'status' AND e.para_valor = 'aberto'), c.date_created) AS desde
          FROM chamados c LEFT JOIN chamado_assignees a ON a.chamado_id = c.id
@@ -1894,7 +1903,7 @@ async function lembrarNaoAceitos(env, agora = Date.now(), rodada = novaRodada())
     const numero = r.numero ? `#${String(r.numero).padStart(4, '0')}` : 'sem número';
     const payload = JSON.stringify({
       title: 'Chamado aguardando aceite',
-      body: `Chamado ${numero} está há mais de ${marco} minutos sem ser aceito`,
+      body: `Chamado ${numero} está há mais de ${marco} minutos sem ser aceito${resumoDoChamado(r)}`,
       data: { task_id: r.id, type: 'lembrete' },
     });
     rodada.avisos++;
