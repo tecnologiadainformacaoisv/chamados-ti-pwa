@@ -179,12 +179,19 @@ export default {
     }
     return withCors(resposta, request);
   },
-  // Cron Trigger (wrangler.toml): alerta de SLA.
+  // Cron Trigger (wrangler.toml): alerta de SLA e lembrete de chamado não aceito.
   async scheduled(event, env, ctx) {
+    const agora = event?.scheduledTime ?? Date.now();
+    const rodada = novaRodada(); // um teto só para os dois
     try {
-      await alertarSla(env, event?.scheduledTime ?? Date.now());
+      await alertarSla(env, agora, rodada);
     } catch (err) {
       console.error(`alertarSla falhou: ${(err && (err.stack || err.message)) || err}`);
+    }
+    try {
+      await lembrarNaoAceitos(env, agora, rodada);
+    } catch (err) {
+      console.error(`lembrarNaoAceitos falhou: ${(err && (err.stack || err.message)) || err}`);
     }
   },
 };
@@ -1742,7 +1749,26 @@ async function listarChavesKV(env, prefix) {
   return nomes;
 }
 
-async function alertarSla(env, agora = Date.now()) {
+async function aparelhosDaEquipe(env) {
+  const aparelhos = [];
+  for (const key of await listarChavesKV(env, 'adminsub_')) {
+    const json = await env.SUBSCRIPTIONS.get(key);
+    if (!json) continue;
+    try {
+      const sub = JSON.parse(json);
+      aparelhos.push({ key, sub, operadorId: sub.operadorId ?? OPERADOR_ADMIN_ID });
+    } catch { /* inscrição corrompida: ignora */ }
+  }
+  return aparelhos;
+}
+
+// Orçamento de uma rodada do Cron, dividido entre o alerta de SLA e o lembrete (limite de chamadas
+// do Worker): avisos, envios, quem não recebeu e os aparelhos (lidos uma vez só).
+function novaRodada() {
+  return { avisos: 0, envios: 0, semEntrega: new Set(), aparelhos: null };
+}
+
+async function alertarSla(env, agora = Date.now(), rodada = novaRodada()) {
   if (!noExpediente(agora)) return { avisos: 0 };
 
   // Os que vencem logo primeiro (a janela deles é curta), depois os vencidos mais recentes.
@@ -1755,15 +1781,7 @@ async function alertarSla(env, agora = Date.now()) {
   ).bind(agora - SLA_VENCIDO_MAX_MS, agora + SLA_VENCE_LOGO_MS, agora, agora).all();
   if (!results.length) return { avisos: 0 };
 
-  const aparelhos = [];
-  for (const key of await listarChavesKV(env, 'adminsub_')) {
-    const json = await env.SUBSCRIPTIONS.get(key);
-    if (!json) continue;
-    try {
-      const sub = JSON.parse(json);
-      aparelhos.push({ key, sub, operadorId: sub.operadorId ?? OPERADOR_ADMIN_ID });
-    } catch { /* inscrição corrompida: ignora */ }
-  }
+  const aparelhos = (rodada.aparelhos ??= await aparelhosDaEquipe(env));
   if (!aparelhos.length) return { avisos: 0 };
   const jaAvisados = new Set(await listarChavesKV(env, 'slaalert_'));
 
@@ -1774,8 +1792,7 @@ async function alertarSla(env, agora = Date.now()) {
   }
 
   let avisos = 0;
-  let envios = 0;
-  const semEntrega = new Set(); // quem falhou em todos os aparelhos não gasta mais vagas nesta rodada
+  const { semEntrega } = rodada; // quem falhou em todos os aparelhos não gasta mais vagas nesta rodada
   for (const c of porChamado.values()) {
     const venceu = c.due_date <= agora;
     const tipo = venceu ? 'venceu' : 'vencelogo';
@@ -1783,7 +1800,7 @@ async function alertarSla(env, agora = Date.now()) {
     if (venceu) destinos.add(OPERADOR_ADMIN_ID);
 
     for (const operadorId of destinos) {
-      if (avisos >= SLA_MAX_AVISOS_POR_RODADA) return { avisos };
+      if (rodada.avisos >= SLA_MAX_AVISOS_POR_RODADA) return { avisos };
       const marca = `slaalert_${c.id}_${tipo}_${c.due_date}_${operadorId}`;
       if (jaAvisados.has(marca) || semEntrega.has(operadorId)) continue;
       const alvos = aparelhos.filter((a) => !a.morto && a.operadorId === operadorId).slice(0, SLA_MAX_ENVIOS_POR_RODADA);
@@ -1800,8 +1817,9 @@ async function alertarSla(env, agora = Date.now()) {
         data: { task_id: c.id, type: 'sla' },
       });
 
-      if (envios + alvos.length > SLA_MAX_ENVIOS_POR_RODADA) return { avisos };
-      envios += alvos.length;
+      if (rodada.envios + alvos.length > SLA_MAX_ENVIOS_POR_RODADA) return { avisos };
+      rodada.envios += alvos.length;
+      rodada.avisos++;
       avisos++;
       let entregue = false;
       for (const alvo of alvos) {
@@ -1826,6 +1844,81 @@ async function alertarSla(env, agora = Date.now()) {
         console.error(`alertarSla: não gravou a marca, rodada interrompida: ${err.message}`);
         return { avisos };
       }
+    }
+  }
+  return { avisos };
+}
+
+// Lembrete de chamado não aceito (pedido do usuário: o aviso de chamado novo saía uma vez só e
+// passava despercebido). Aos 15 e aos 45 min ainda em "aberto", só para o atendente, no mesmo
+// expediente do alerta de SLA. Perto do prazo ou vencido fica com o alerta de SLA, para não duplicar.
+// Quem passou dos dois marcos (ex.: aberto no fim de semana) recebe só o último.
+const LEMBRETE_MARCOS_MIN = [45, 15];
+
+async function lembrarNaoAceitos(env, agora = Date.now(), rodada = novaRodada()) {
+  if (!noExpediente(agora) || rodada.avisos >= SLA_MAX_AVISOS_POR_RODADA) return { avisos: 0 };
+  const menorMarco = Math.min(...LEMBRETE_MARCOS_MIN) * 60000;
+  const { results } = await env.CHAMADOS_DB.prepare(
+    // `desde`: quando passou a esperar aceite (a criação, ou a última volta para "aberto").
+    `SELECT id, numero, desde, atendente FROM (
+       SELECT c.id, c.numero, c.due_date, COALESCE(a.assignee_id, c.assignee_id) AS atendente,
+              COALESCE((SELECT MAX(e.created_at) FROM chamado_eventos e
+                         WHERE e.chamado_id = c.id AND e.tipo = 'status' AND e.para_valor = 'aberto'), c.date_created) AS desde
+         FROM chamados c LEFT JOIN chamado_assignees a ON a.chamado_id = c.id
+        WHERE c.status = 'aberto'
+     )
+      WHERE desde <= ? AND desde > ? AND (due_date IS NULL OR due_date > ?)
+      ORDER BY desde`
+  ).bind(agora - menorMarco, agora - SLA_VENCIDO_MAX_MS, agora + SLA_VENCE_LOGO_MS).all();
+  if (!results.length) return { avisos: 0 };
+
+  const aparelhos = (rodada.aparelhos ??= await aparelhosDaEquipe(env));
+  if (!aparelhos.length) return { avisos: 0 };
+  const jaAvisados = new Set(await listarChavesKV(env, 'lembrete_'));
+
+  let avisos = 0;
+  const { semEntrega } = rodada;
+  for (const r of results) {
+    if (rodada.avisos >= SLA_MAX_AVISOS_POR_RODADA) return { avisos };
+    const operadorId = r.atendente;
+    if (operadorId == null || semEntrega.has(operadorId)) continue;
+    const marco = LEMBRETE_MARCOS_MIN.find((m) => agora - r.desde >= m * 60000);
+    // `desde` na marca: um chamado reaberto volta a avisar.
+    const marca = `lembrete_${r.id}_${r.desde}_${marco}_${operadorId}`;
+    if (jaAvisados.has(marca)) continue;
+    const alvos = aparelhos.filter((a) => !a.morto && a.operadorId === operadorId).slice(0, SLA_MAX_ENVIOS_POR_RODADA);
+    if (!alvos.length) continue;
+    if (rodada.envios + alvos.length > SLA_MAX_ENVIOS_POR_RODADA) return { avisos };
+    rodada.envios += alvos.length;
+
+    const numero = r.numero ? `#${String(r.numero).padStart(4, '0')}` : 'sem número';
+    const payload = JSON.stringify({
+      title: 'Chamado aguardando aceite',
+      body: `Chamado ${numero} está há mais de ${marco} minutos sem ser aceito`,
+      data: { task_id: r.id, type: 'lembrete' },
+    });
+    rodada.avisos++;
+    avisos++;
+    let entregue = false;
+    for (const alvo of alvos) {
+      try {
+        await sendWebPush(alvo.sub, payload, env);
+        entregue = true;
+      } catch (err) {
+        if (/^Push endpoint (404|410):/.test(err.message)) {
+          alvo.morto = true;
+          await env.SUBSCRIPTIONS.delete(alvo.key);
+        } else {
+          console.error(`lembrarNaoAceitos: falha ao enviar push (${alvo.key}): ${err.message}`);
+        }
+      }
+    }
+    if (!entregue) { semEntrega.add(operadorId); continue; }
+    try {
+      await env.SUBSCRIPTIONS.put(marca, '1', { expirationTtl: SLA_MARCA_TTL_SECONDS });
+    } catch (err) {
+      console.error(`lembrarNaoAceitos: não gravou a marca, rodada interrompida: ${err.message}`);
+      return { avisos };
     }
   }
   return { avisos };
@@ -4507,4 +4600,4 @@ async function d1TransitionStatus(env, chamadoId, novoStatus) {
   return updated;
 }
 
-export { alertarSla, competenciaAtual, d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1DeleteChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees, d1ListSolicitantes, d1IsSolicitanteAtivo, d1CreateSolicitante, d1SetSolicitanteAtivo, d1GetSolicitanteByEmail, d1SetSolicitanteEmail, d1ListAnexos, d1GetAnexoRow, d1LogEvento, d1CreateEvento, d1ListEventos };
+export { alertarSla, lembrarNaoAceitos, competenciaAtual, d1CreateChamado, d1GetChamado, d1ListChamados, d1UpdateChamado, d1DeleteChamado, d1GetMetrics, r2UploadAnexo, r2GetAnexo, r2DeleteAnexo, d1TransitionStatus, d1SetAssignees, d1ListSolicitantes, d1IsSolicitanteAtivo, d1CreateSolicitante, d1SetSolicitanteAtivo, d1GetSolicitanteByEmail, d1SetSolicitanteEmail, d1ListAnexos, d1GetAnexoRow, d1LogEvento, d1CreateEvento, d1ListEventos };

@@ -148,7 +148,7 @@ async function test(name, fn) {
 
 (async () => {
   const workerPath = pathToFileURL(path.join(__dirname, '..', 'push-worker.js')).href;
-  const { default: worker, d1GetChamado, d1SetAssignees, d1CreateSolicitante, d1ListAnexos, d1CreateChamado, d1ListEventos, competenciaAtual, alertarSla } = await import(workerPath);
+  const { default: worker, d1GetChamado, d1SetAssignees, d1CreateSolicitante, d1ListAnexos, d1CreateChamado, d1ListEventos, competenciaAtual, alertarSla, lembrarNaoAceitos } = await import(workerPath);
 
   // Regra de 2026-11-24: todo chamado nasce com exatamente um operador. Os testes antigos criam
   // chamado sem se importar com isso, então este adaptador completa o corpo com o Everson quando
@@ -4006,6 +4006,79 @@ async function test(name, fn) {
     const r = await alertarSla(e, agora);
     return { avisos: r.avisos, quem: adminPushCalls.map(c => c.url.split('/sla-')[1]).sort() };
   }
+
+  // Lembrete de chamado não aceito: a idade é ajustada direto no banco.
+  async function chamadoParado(e, id, minutos, extra = {}, agora = QUARTA_10H) {
+    await chamadoSla(e, id, agora + 600 * MIN, extra);
+    await e.CHAMADOS_DB.prepare('UPDATE chamados SET date_created = ? WHERE id = ?').bind(agora - minutos * MIN, id).run();
+  }
+  async function lembrar(e, agora, max) {
+    adminPushCalls.length = 0;
+    const r = await lembrarNaoAceitos(e, agora, max === undefined ? undefined : { avisos: 5 - max, envios: 0, semEntrega: new Set(), aparelhos: null });
+    return { avisos: r.avisos, quem: adminPushCalls.map(c => c.url.split('/sla-')[1]).sort() };
+  }
+
+  await test('lembrete: aos 15 e aos 45 minutos sem aceite, só para o atendente, uma vez cada', async () => {
+    const e = await slaEnv();
+    await chamadoParado(e, 'lem-1', 14);
+    assert.deepStrictEqual((await lembrar(e, QUARTA_10H)).quem, []);
+    assert.deepStrictEqual((await lembrar(e, QUARTA_10H + 2 * MIN)).quem, ['eve']);
+    assert.deepStrictEqual((await lembrar(e, QUARTA_10H + 7 * MIN)).quem, []);
+    assert.deepStrictEqual((await lembrar(e, QUARTA_10H + 32 * MIN)).quem, ['eve']);
+    assert.deepStrictEqual((await lembrar(e, QUARTA_10H + 120 * MIN)).quem, []);
+  });
+  await test('lembrete: aceito, pendente, antigo demais ou perto do prazo não geram lembrete', async () => {
+    const e = await slaEnv();
+    await chamadoParado(e, 'lem-a', 20, { status: 'em atendimento' });
+    await chamadoParado(e, 'lem-p', 20, { status: 'pendente' });
+    await chamadoParado(e, 'lem-v', 5 * 24 * 60);
+    await chamadoParado(e, 'lem-d', 50);
+    await e.CHAMADOS_DB.prepare('UPDATE chamados SET due_date = ? WHERE id = ?').bind(QUARTA_10H + 10 * MIN, 'lem-d').run();
+    assert.deepStrictEqual((await lembrar(e, QUARTA_10H)).quem, []);
+  });
+  await test('lembrete: fora do expediente não sai, e quem passou dos dois marcos recebe um só', async () => {
+    const e = await slaEnv();
+    const sabado = emFortaleza('2026-11-28T10:00:00');
+    await chamadoParado(e, 'lem-f', 60, {}, sabado);
+    assert.deepStrictEqual((await lembrar(e, sabado)).quem, []);
+    const segunda = emFortaleza('2026-11-30T07:00:00');
+    await e.CHAMADOS_DB.prepare('UPDATE chamados SET due_date = ? WHERE id = ?').bind(segunda + 600 * MIN, 'lem-f').run();
+    assert.deepStrictEqual((await lembrar(e, segunda)).quem, ['eve']);
+    assert.deepStrictEqual((await lembrar(e, segunda + 5 * MIN)).quem, []);
+  });
+  await test('lembrete: chamado reaberto conta a partir da volta para aberto, e avisa de novo', async () => {
+    const e = await slaEnv();
+    await chamadoParado(e, 'lem-r', 20);
+    assert.deepStrictEqual((await lembrar(e, QUARTA_10H)).quem, ['eve']);
+    const volta = QUARTA_10H + 60 * MIN;
+    await e.CHAMADOS_DB.prepare("INSERT INTO chamado_eventos (id, chamado_id, tipo, de_valor, para_valor, created_at) VALUES (?, 'lem-r', 'status', 'em atendimento', 'aberto', ?)")
+      .bind('ev-lem-r', volta).run();
+    assert.deepStrictEqual((await lembrar(e, volta + 5 * MIN)).quem, [], 'recém-reaberto não avisa');
+    assert.deepStrictEqual((await lembrar(e, volta + 16 * MIN)).quem, ['eve']);
+  });
+  await test('lembrete: os envios por rodada são divididos com o alerta de SLA', async () => {
+    const e = await slaEnv({ aparelhos: ['a', 'b', 'c', 'd'].map(n => [n, SLA_EVERSON]) });
+    for (let i = 0; i < 2; i++) await chamadoSla(e, `div-s${i}`, QUARTA_10H + (i + 1) * MIN);
+    for (let i = 0; i < 3; i++) await chamadoParado(e, `div-l${i}`, 20);
+    adminPushCalls.length = 0;
+    await worker.scheduled({ scheduledTime: QUARTA_10H }, e, {});
+    assert.strictEqual(adminPushCalls.length, 8, '2 avisos de SLA x 4 aparelhos; o lembrete não cabe nos 10 envios');
+  });
+  await test('lembrete: respeita o teto de avisos da rodada', async () => {
+    const e = await slaEnv();
+    for (let i = 0; i < 4; i++) await chamadoParado(e, `lem-t${i}`, 20 + i);
+    assert.strictEqual((await lembrar(e, QUARTA_10H, 0)).avisos, 0);
+    assert.strictEqual((await lembrar(e, QUARTA_10H, 3)).avisos, 3);
+    assert.strictEqual((await lembrar(e, QUARTA_10H)).avisos, 1);
+  });
+  await test('lembrete: o cron dispara o alerta de SLA e o lembrete na mesma rodada', async () => {
+    const e = await slaEnv();
+    await chamadoSla(e, 'cron-sla', QUARTA_10H + 10 * MIN);
+    await chamadoParado(e, 'cron-lem', 20);
+    adminPushCalls.length = 0;
+    await worker.scheduled({ scheduledTime: QUARTA_10H }, e, {});
+    assert.strictEqual(adminPushCalls.length, 2);
+  });
 
   await test('alerta de SLA: perto do prazo avisa só o atendente, e não repete', async () => {
     const e = await slaEnv();
