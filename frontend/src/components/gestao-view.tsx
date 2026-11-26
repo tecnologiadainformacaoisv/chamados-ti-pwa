@@ -61,7 +61,7 @@ export function GestaoView() {
 
   const solicitantesQuery = useQuery({
     queryKey: ["solicitantes"],
-    queryFn: fetchSolicitanteNomes,
+    queryFn: () => fetchSolicitanteNomes(secret),
     staleTime: 5 * 60_000,
   })
 

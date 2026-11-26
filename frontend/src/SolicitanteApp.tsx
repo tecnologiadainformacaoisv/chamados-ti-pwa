@@ -103,6 +103,8 @@ function SolicitanteShell() {
     queryKey: ["my-tasks"],
     queryFn: () => fetchMyTasks(sessionToken),
     refetchInterval: LISTA_POLL_MS,
+    // sessão revogada cai na hora, sem as tentativas repetidas
+    retry: (tentativas, erro) => !isAuthExpired(erro) && tentativas < 3,
   })
 
   useEffect(() => {
@@ -235,22 +237,7 @@ function SolicitanteShell() {
 
 function SolicitanteBoot() {
   const { state } = useSessionAuth()
-  if (state === "app") return <SolicitanteShell />
-  // Tela de "Carregando…" enquanto o boot decide se há sessão válida (achado de UX
-  // 2026-10-16): antes caía direto no formulário de login, e quem já estava logado via
-  // "o app me deslogou" por alguns segundos (e podia começar a digitar a senha).
-  if (state === "loading") {
-    return (
-      <div className="relative flex min-h-svh items-center justify-center p-4" role="status" aria-live="polite">
-        <div className="bg-brand-gradient fixed inset-0 z-0" />
-        <div className="relative z-10 flex flex-col items-center gap-4 text-center text-primary-foreground">
-          <img src={logoIsv} alt="Instituto São Vicente" className="h-12 w-auto brightness-0 invert" />
-          <p className="text-sm">Carregando…</p>
-        </div>
-      </div>
-    )
-  }
-  return <SolicitanteSetup />
+  return state === "app" ? <SolicitanteShell /> : <SolicitanteSetup />
 }
 
 // Abas sublinhadas (redesign 2026-11-10): menos "caixa", mais leve; a aba atual ganha o traço azul.

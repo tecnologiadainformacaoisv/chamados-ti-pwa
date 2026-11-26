@@ -235,11 +235,10 @@ export function getCF(task: Task, fieldId: string): number | string | null {
 // pela TI numa tela própria no admin) em vez do campo customizado da ClickUp — não
 // existe mais orderindex nenhum, `task.solicitante` (ver Task acima) já vem com o nome
 // resolvido direto do servidor.
-const APP_SHARED_SECRET = "isv-chamados-2k26-9fQ3vM7xZp"
 
-export async function fetchSolicitanteNomes(): Promise<string[]> {
+export async function fetchSolicitanteNomes(secret: string): Promise<string[]> {
   const res = await fetch(`${ADMIN_BASE.replace("/admin", "/api")}/solicitantes`, {
-    headers: { "X-App-Secret": APP_SHARED_SECRET },
+    headers: { "X-Admin-Secret": secret },
   })
   if (!res.ok) throw new AdminApiError(`Erro HTTP ${res.status} ao buscar solicitantes`, res.status)
   const data = await res.json()

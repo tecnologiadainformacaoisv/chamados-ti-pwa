@@ -350,6 +350,14 @@ async function requireSession(request, env) {
   // (momento da revogação); sessão criada antes (ou sem `createdAt`, as antigas) morre.
   const ver = await env.SUBSCRIPTIONS.get(`sessver_${session.name}`);
   if (ver && (session.createdAt ?? 0) <= Number(ver)) return null;
+  // Quem foi desativado antes de existir a revogação não tem `sessver_`: confere no cadastro.
+  // Falha na consulta não derruba o acesso de todo mundo.
+  try {
+    const row = await env.CHAMADOS_DB?.prepare('SELECT ativo FROM solicitantes WHERE name = ?').bind(session.name).first();
+    if (row && !row.ativo) return null;
+  } catch (err) {
+    console.log('requireSession: não conferiu o cadastro:', err.message);
+  }
   return session;
 }
 
@@ -831,8 +839,12 @@ async function handleRegisterExterno(request, env, ctx) {
     return jsonRes({ error: 'Muitos cadastros a partir deste IP. Aguarde um pouco e tente de novo.' }, 429);
   }
 
+  // Resposta "já existe" também gasta a cota: sem isso dava pra testar nomes e e-mails à vontade.
+  const gastarCota = () => env.SUBSCRIPTIONS.put(rateKey, String(rateCount + 1), { expirationTtl: REGISTER_EXTERNO_WINDOW_SECONDS });
+
   const existente = await d1GetSolicitanteByEmail(env, email);
   if (existente) {
+    await gastarCota();
     return jsonRes({ error: 'Já existe um cadastro com esse e-mail. Tente entrar em vez de cadastrar de novo.' }, 409);
   }
 
@@ -850,10 +862,11 @@ async function handleRegisterExterno(request, env, ctx) {
   // pra completar o nome em vez de mascarar com sufixo automático, que confundiria
   // a TI olhando o Kanban/Tabela depois.
   if (!inserted) {
+    await gastarCota();
     return jsonRes({ error: 'Já existe um cadastro com esse nome. Inclua um sobrenome adicional ou fale com a TI.' }, 409);
   }
 
-  await env.SUBSCRIPTIONS.put(rateKey, String(rateCount + 1), { expirationTtl: REGISTER_EXTERNO_WINDOW_SECONDS });
+  await gastarCota();
 
   await setAuthRecord(name, password, env);
   const token = await createSession(name, env);
@@ -2556,12 +2569,11 @@ async function d1SetSolicitanteEmail(env, name, email) {
 }
 
 // =====================================================================
-// GET /api/solicitantes — substitui GET /api/field pro app de solicitantes e pro
-// filtro do painel de admin (Fase M1). Mesma auth pública de sempre (X-App-Secret) —
-// não precisa do ADMIN_SECRET, é só a lista de nomes ativos, sem dado sensível.
+// GET /api/solicitantes — nomes ativos pros filtros do painel. Só a equipe da TI (chave do
+// painel): com o segredo público qualquer um listava o nome de todos.
 // =====================================================================
 async function handleListSolicitantes(request, env) {
-  if (!hasValidSecret(request, env)) return unauthorized();
+  if (!(await isStaff(request, env))) return unauthorized();
   const rows = await d1ListSolicitantes(env, { ativos: true });
   return jsonRes({ names: rows.map(r => r.name) });
 }

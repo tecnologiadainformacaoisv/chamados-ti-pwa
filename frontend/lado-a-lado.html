@@ -110,7 +110,7 @@
 
       async function montar() {
         try {
-          const ping = await fetch(`${API}/api/solicitantes`, { headers: { "X-App-Secret": APP_SECRET } })
+          const ping = await fetch(`${API}/api/solicitantes`, { headers: { "X-Admin-Secret": ADMIN_SECRET } })
           if (!ping.ok) throw new Error("backend respondeu " + ping.status)
           localStorage.setItem("admin_secret", ADMIN_SECRET)
           await entrarComoUsuario()

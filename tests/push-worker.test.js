@@ -730,9 +730,9 @@ async function test(name, fn) {
   // 46 anexos/41 chamados migrados, ver CLAUDE.md) — sem rota, sem teste.
 
   console.log('--- falha fechada se o Worker não tiver SUBSCRIBE_SECRET configurado ---');
-  await test('sem SUBSCRIBE_SECRET no ambiente, /api/solicitantes fica bloqueado (não aberto)', async () => {
+  await test('sem SUBSCRIBE_SECRET no ambiente, /auth/login fica bloqueado (não aberto)', async () => {
     const envSemSecret = { ...env, SUBSCRIBE_SECRET: undefined };
-    const res = await worker.fetch(req('GET', '/api/solicitantes'), envSemSecret);
+    const res = await worker.fetch(req('POST', '/auth/login', { body: JSON.stringify({ email: 'a@b.com', password: 'x' }) }), envSemSecret);
     assert.strictEqual(res.status, 403);
   });
 
@@ -864,7 +864,17 @@ async function test(name, fn) {
     }), env);
     assert.strictEqual(res2.status, 200, 'rodar de novo não deveria falhar (CREATE ... IF NOT EXISTS)');
   });
-  await test('GET /api/solicitantes sem X-App-Secret dá 403', async () => {
+  await test('GET /api/solicitantes só com o segredo público do app dá 403 (lista só para a TI)', async () => {
+    const res = await worker.fetch(req('GET', '/api/solicitantes', { headers: SECRET_HEADERS }), env);
+    assert.strictEqual(res.status, 403);
+    assert.ok(!('names' in await res.json()));
+  });
+  await test('GET /api/solicitantes aceita a chave de operador', async () => {
+    const opEnv = { ...env, OPERADOR_SECRETS: JSON.stringify({ 170628721: 'chave-do-operador' }) };
+    const res = await worker.fetch(req('GET', '/api/solicitantes', { headers: { 'X-Admin-Secret': 'chave-do-operador' } }), opEnv);
+    assert.strictEqual(res.status, 200);
+  });
+  await test('GET /api/solicitantes sem nenhuma chave dá 403', async () => {
     const res = await worker.fetch(req('GET', '/api/solicitantes'), env);
     assert.strictEqual(res.status, 403);
   });
@@ -880,7 +890,7 @@ async function test(name, fn) {
         headers: { 'X-Admin-Secret': solEnv.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: nome }),
       }), solEnv);
     }
-    const res = await worker.fetch(req('GET', '/api/solicitantes', { headers: { 'X-App-Secret': solEnv.SUBSCRIBE_SECRET } }), solEnv);
+    const res = await worker.fetch(req('GET', '/api/solicitantes', { headers: { 'X-Admin-Secret': solEnv.ADMIN_SECRET } }), solEnv);
     const { names } = await res.json();
     // A ordem exata entre "Márcio"/"Mariana" é uma nuance fina de colação (o próprio
     // localeCompare('pt-BR') do Node — mesmo mecanismo que a versão ClickUp-based
@@ -891,7 +901,7 @@ async function test(name, fn) {
     assert.deepStrictEqual([...names].sort((a, b) => a.localeCompare(b, 'pt-BR')), names, 'a lista já deveria estar na ordem que localeCompare(pt-BR) produz');
   });
   await test('GET /api/solicitantes devolve só os ativos, ordenados', async () => {
-    const res = await worker.fetch(req('GET', '/api/solicitantes', { headers: SECRET_HEADERS }), env);
+    const res = await worker.fetch(req('GET', '/api/solicitantes', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
     assert.strictEqual(res.status, 200);
     const { names } = await res.json();
     assert.deepStrictEqual(names, ['Ariele Santo', 'Bruno Guilherme', 'Michael Vasconcelos']);
@@ -905,7 +915,7 @@ async function test(name, fn) {
       headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Carlos Eduardo', email: emailFor('Carlos Eduardo') }),
     }), env);
     assert.strictEqual(res.status, 200);
-    const res2 = await worker.fetch(req('GET', '/api/solicitantes', { headers: SECRET_HEADERS }), env);
+    const res2 = await worker.fetch(req('GET', '/api/solicitantes', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env);
     const { names } = await res2.json();
     assert.ok(names.includes('Carlos Eduardo'));
   });
@@ -921,7 +931,7 @@ async function test(name, fn) {
     }), env);
     assert.strictEqual(res.status, 200);
 
-    const publica = await worker.fetch(req('GET', '/api/solicitantes', { headers: SECRET_HEADERS }), env).then(r => r.json());
+    const publica = await worker.fetch(req('GET', '/api/solicitantes', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json());
     assert.ok(!publica.names.includes('Carlos Eduardo'), 'desativado não deveria aparecer na lista pública (login)');
 
     const admin = await worker.fetch(req('GET', '/admin/solicitantes', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json());
@@ -933,7 +943,7 @@ async function test(name, fn) {
     await worker.fetch(req('POST', `/admin/solicitantes/${encodeURIComponent('Carlos Eduardo')}/ativo`, {
       headers: { 'X-Admin-Secret': env.ADMIN_SECRET, 'Content-Type': 'application/json' }, body: JSON.stringify({ ativo: true }),
     }), env);
-    const publica = await worker.fetch(req('GET', '/api/solicitantes', { headers: SECRET_HEADERS }), env).then(r => r.json());
+    const publica = await worker.fetch(req('GET', '/api/solicitantes', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET } }), env).then(r => r.json());
     assert.ok(publica.names.includes('Carlos Eduardo'));
   });
   await test('ativar/desativar um nome que não existe dá 404', async () => {
@@ -1356,6 +1366,26 @@ async function test(name, fn) {
     assert.strictEqual((await tentar({ telefone: '9'.repeat(31) })).status, 400);
     assert.strictEqual((await tentar({ email: `${'a'.repeat(250)}@gmail.com` })).status, 400);
     assert.strictEqual((await tentar({})).status, 200, 'o e-mail continua livre depois das recusas');
+  });
+
+  await test('sessão de quem está desativado no cadastro é recusada, mesmo sem revogação gravada', async () => {
+    const reg = await worker.fetch(req('POST', '/auth/register-externo', {
+      headers: { ...SECRET_HEADERS, 'CF-Connecting-IP': '198.51.100.91' },
+      body: JSON.stringify({ name: 'Pessoa Antiga Inativa', email: 'antiga.inativa@gmail.com', password: 'senhaboa123' }),
+    }), env);
+    const h = { ...SECRET_HEADERS, 'X-Session-Token': (await reg.json()).token };
+    assert.strictEqual((await worker.fetch(req('GET', '/api/my-tasks', { headers: h }), env)).status, 200);
+    // desativação direta no banco, como as feitas antes de existir `sessver_`
+    await env.CHAMADOS_DB.prepare('UPDATE solicitantes SET ativo = 0 WHERE name = ?').bind('Pessoa Antiga Inativa').run();
+    assert.strictEqual((await worker.fetch(req('GET', '/api/my-tasks', { headers: h }), env)).status, 401);
+  });
+  await test('cadastro externo: respostas "já existe" também gastam o limite por IP', async () => {
+    const h = { ...SECRET_HEADERS, 'CF-Connecting-IP': '198.51.100.92' };
+    const tentar = () => worker.fetch(req('POST', '/auth/register-externo', {
+      headers: h, body: JSON.stringify({ name: 'Fornecedor Externo', email: 'outro.palpite@gmail.com', password: 'senhaboa123' }),
+    }), env);
+    for (let i = 0; i < 5; i++) assert.strictEqual((await tentar()).status, 409);
+    assert.strictEqual((await tentar()).status, 429);
   });
 
   console.log('--- POST /admin/migrate-schema-solicitantes-origem (2026-09-17) ---');
@@ -2248,7 +2278,7 @@ async function test(name, fn) {
     const pre = await worker.fetch(req('OPTIONS', '/api/solicitantes', { headers: { Origin: origin } }), env);
     assert.strictEqual(pre.headers.get('Access-Control-Allow-Origin'), origin);
     assert.ok((pre.headers.get('Vary') || '').includes('Origin'));
-    const res = await worker.fetch(req('GET', '/api/solicitantes', { headers: { ...SECRET_HEADERS, Origin: origin } }), env);
+    const res = await worker.fetch(req('GET', '/api/solicitantes', { headers: { 'X-Admin-Secret': env.ADMIN_SECRET, Origin: origin } }), env);
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.headers.get('Access-Control-Allow-Origin'), origin);
   });

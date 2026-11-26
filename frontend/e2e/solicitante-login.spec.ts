@@ -79,26 +79,16 @@ test.describe("Login/cadastro do solicitante", () => {
     await expect(page.getByText("Primeiro acesso?")).toBeVisible()
   })
 
-  test("enquanto o boot carrega, mostra 'Carregando…' em vez do formulário de login", async ({ page }) => {
+  test("a tela de entrada não consulta a lista de solicitantes", async ({ page }) => {
     await mockSolicitanteRoutes(page)
-    // atrasa a lista de solicitantes (o boot depende dela) pra dar tempo de ver a tela de espera
-    await page.route("**/api/solicitantes", async (route) => {
-      await new Promise((r) => setTimeout(r, 1500))
-      return route.fallback()
+    const pedidos: string[] = []
+    page.on("request", (r) => {
+      if (r.url().includes("/api/solicitantes")) pedidos.push(r.url())
     })
     await page.goto("/")
-    await expect(page.getByText("Carregando…")).toBeVisible()
-    await expect(page.locator("#setup-email")).toHaveCount(0)
-    await expect(page.locator("#setup-email")).toBeVisible({ timeout: 10_000 })
-  })
-
-  test("erro de boot mostra orientação em português, não o erro técnico", async ({ page }) => {
-    await mockSolicitanteRoutes(page)
-    await page.route("**/api/solicitantes", (route) => route.fulfill({ status: 500, contentType: "application/json", body: "{}" }))
-    await page.goto("/")
-    await expect(page.getByText("Não foi possível conectar ao sistema.")).toBeVisible()
-    await expect(page.getByText("Se continuar, fale com a TI.")).toBeVisible()
-    await expect(page.getByRole("button", { name: "Tentar de novo" })).toBeVisible()
+    await expect(page.locator("#setup-email")).toBeVisible()
+    await page.waitForLoadState("networkidle")
+    expect(pedidos).toEqual([])
   })
 
   // Primeiro acesso com confirmação (2026-11-11): login 404 não cadastra na hora, pede a senha
@@ -184,11 +174,15 @@ test.describe("Login/cadastro do solicitante", () => {
     await expect(link).toHaveAttribute("href", /^https:\/\/wa\.me\/\d+\?text=.*senha/)
   })
 
-  test("quem já tem sessão salva entra mesmo com a lista de solicitantes fora do ar", async ({ page }) => {
+  test("quem já tem sessão salva entra direto, sem consultar a lista de solicitantes", async ({ page }) => {
     await mockSolicitanteRoutes(page)
-    await page.route("**/api/solicitantes", (route) => route.fulfill({ status: 500, contentType: "application/json", body: "{}" }))
+    const pedidos: string[] = []
+    page.on("request", (r) => {
+      if (r.url().includes("/api/solicitantes")) pedidos.push(r.url())
+    })
     await gotoSolicitanteLoggedIn(page)
     await expect(page.getByRole("tab", { name: "Novo Chamado" })).toBeVisible()
+    expect(pedidos).toEqual([])
   })
 
   test("login normal entra direto na tela principal", async ({ page }) => {
@@ -274,19 +268,5 @@ test.describe("Login/cadastro do solicitante", () => {
     await page.locator("#setup-ext-password").fill("senha12345")
     await page.getByRole("button", { name: "Cadastrar e entrar" }).click()
     await expect(page.getByText(/use a tela de entrada normal/)).toBeVisible()
-  })
-
-  test("erro ao carregar lista de solicitantes mostra tela de boot-error com retry", async ({ page }) => {
-    await mockSolicitanteRoutes(page)
-    // Registrado DEPOIS dos defaults — tem prioridade (LIFO), sobrescreve só este endpoint.
-    // A lista de nomes ainda é buscada no boot (usada só pra validar sessão salva, ver
-    // use-session-auth.tsx) — deixou de alimentar um <Select>, mas o boot-error nesse
-    // cenário continua valendo.
-    await page.route("**/api/solicitantes", (route) => {
-      if (route.request().method() === "OPTIONS") return route.fallback()
-      return route.fulfill({ status: 500, contentType: "application/json", body: "{}" })
-    })
-    await page.goto("/")
-    await expect(page.getByRole("button", { name: "Tentar de novo" })).toBeVisible()
   })
 })

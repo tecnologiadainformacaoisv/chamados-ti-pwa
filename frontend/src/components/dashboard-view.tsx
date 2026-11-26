@@ -76,7 +76,7 @@ export function DashboardView() {
     // enquanto um filtro novo carrega, continua mostrando os números anteriores (sem piscar o painel)
     placeholderData: (anterior) => anterior,
   })
-  const solicitantesQuery = useQuery({ queryKey: ["solicitantes"], queryFn: fetchSolicitanteNomes, staleTime: 5 * 60_000 })
+  const solicitantesQuery = useQuery({ queryKey: ["solicitantes"], queryFn: () => fetchSolicitanteNomes(secret), staleTime: 5 * 60_000 })
   const alternar = <K extends keyof FiltrosMetricas>(chave: K, valor: FiltrosMetricas[K]) =>
     setFiltros((f) => {
       const novo = { ...f }

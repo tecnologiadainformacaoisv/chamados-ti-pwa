@@ -143,12 +143,10 @@ function PasswordInput({ id, autoComplete, placeholder, value, onChange, inputRe
 // digitada agora vira a senha de acesso (ver loginOrRegister em app-api.ts).
 //
 // Login por e-mail (2026-09-16, pedido da diretoria) — antes disso era um <Select>
-// escolhendo o próprio nome numa lista de todo mundo (`nomes`, ainda usado aqui só
-// pra validar se a sessão salva continua correspondendo a alguém ativo, ver
-// use-session-auth.tsx). Trocar pra e-mail fecha o risco de escolher o nome de
+// escolhendo o próprio nome numa lista de todo mundo. Trocar pra e-mail fecha o risco de escolher o nome de
 // OUTRA pessoa sem querer — cada um só sabe o próprio e-mail.
 export function SolicitanteSetup() {
-  const { bootError, retryBoot, login } = useSessionAuth()
+  const { login } = useSessionAuth()
   const [modoExterno, setModoExterno] = useState(false)
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -166,18 +164,6 @@ export function SolicitanteSetup() {
   const emailRef = useRef<HTMLInputElement>(null)
   const passwordRef = useRef<HTMLInputElement>(null)
   const confirmacaoRef = useRef<HTMLInputElement>(null)
-
-  if (bootError) {
-    return (
-      <LoginShell>
-        <p role="alert" className="mb-1 text-base font-semibold text-destructive">Não foi possível conectar ao sistema.</p>
-        <p className="mb-5 text-sm text-muted-foreground">
-          Verifique sua internet e tente de novo. Se continuar, fale com a TI.
-        </p>
-        <Button onClick={retryBoot} className="h-11 w-full">Tentar de novo</Button>
-      </LoginShell>
-    )
-  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()

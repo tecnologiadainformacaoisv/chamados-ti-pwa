@@ -365,6 +365,13 @@ test.describe("Gestão — ordem de atendimento, erro/vazio honestos e celular",
     expect([...ordem].sort((a, b) => a - b)).toEqual(ordem)
   })
 
+  test("a lista de solicitantes é pedida com a chave do painel", async ({ page }) => {
+    await mockAdminRoutes(page, { tasks: [] })
+    const pedido = page.waitForRequest((r) => r.url().endsWith("/api/solicitantes") && r.method() === "GET")
+    await gotoAdminLoggedIn(page)
+    expect((await pedido).headers()["x-admin-secret"]).toBeTruthy()
+  })
+
   test("chamado em espera com prazo vencido não é marcado como atrasado", async ({ page }) => {
     const tasks = [
       makeTask({ id: "p1", name: "Em espera vencido", status: { status: "pendente" }, due_date: Date.now() - 10 * MIN }),

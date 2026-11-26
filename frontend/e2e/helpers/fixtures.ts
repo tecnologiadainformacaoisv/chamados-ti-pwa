@@ -42,11 +42,10 @@ function fulfillJson(route: Route, body: unknown, status = 200) {
 /** Mocks padrão pro app do SOLICITANTE — lista de nomes, sessão, my-tasks, criar chamado. */
 export async function mockSolicitanteRoutes(
   page: Page,
-  opts: { tasks?: ReturnType<typeof makeTask>[]; solicitantes?: string[]; equipamentos?: Record<string, unknown>[]; avaliacaoRespondida?: boolean; avaliacaoElegivel?: boolean; solicitacoes?: Record<string, unknown>[] } = {}
+  opts: { tasks?: ReturnType<typeof makeTask>[]; equipamentos?: Record<string, unknown>[]; avaliacaoRespondida?: boolean; avaliacaoElegivel?: boolean; solicitacoes?: Record<string, unknown>[] } = {}
 ) {
   await installFloor(page)
   const tasks = opts.tasks ?? []
-  const solicitantes = opts.solicitantes ?? SOLICITANTES
   // Avaliação mensal da TI: por padrão já respondida (a faixa não aparece e não atrapalha os outros testes).
   await on(page, "**/api/avaliacao-mensal", "GET", (route) =>
     fulfillJson(route, { competencia: "2026-11", respondida: opts.avaliacaoRespondida ?? true, elegivel: opts.avaliacaoElegivel ?? true, respostas: null, comentario: null }),
@@ -58,7 +57,6 @@ export async function mockSolicitanteRoutes(
   // Lista enxuta do select "Equipamento" do Novo Chamado (vazia por padrão: o campo fica escondido).
   await on(page, "**/api/equipamentos", "GET", (route) => fulfillJson(route, { equipamentos: opts.equipamentos ?? [] }))
 
-  await on(page, "**/api/solicitantes", "GET", (route) => fulfillJson(route, { names: solicitantes }))
   await on(page, "**/api/presence", "POST", (route) => fulfillJson(route, { ok: true }))
   await on(page, "**/auth/login", "POST", (route) => fulfillJson(route, { token: "fake-session-token", name: "Fulano de Tal" }))
   await on(page, "**/auth/register", "POST", (route) => fulfillJson(route, { token: "fake-session-token", name: "Fulano de Tal" }))

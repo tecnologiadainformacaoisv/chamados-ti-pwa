@@ -171,32 +171,6 @@ export async function fetchAnexoBlob(sessionToken: string, url: string): Promise
   return res.blob()
 }
 
-// Lista de solicitantes — mesmo endpoint público (X-App-Secret) que o painel de admin
-// usa pro filtro, aqui usado pro select de nome na tela de login/cadastro. Fase M1
-// (2026-08-13, migração de saída da ClickUp): passou a ler de uma tabela própria no D1
-// (`solicitantes`, gerida pela TI numa tela nova no admin) em vez do campo customizado
-// da ClickUp — já vem ordenado do servidor, sem precisar reconstruir orderindex/nome.
-//
-// Tempo limite (2026-11-11): sem isso, uma rede que "pendura" deixava a tela de
-// "Carregando…" girando pra sempre. Passados BOOT_TIMEOUT_MS vira erro, e o app mostra
-// "Não foi possível conectar" com o botão de tentar de novo.
-const BOOT_TIMEOUT_MS = 12_000
-export async function fetchSolicitanteNomes(): Promise<string[]> {
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), BOOT_TIMEOUT_MS)
-  try {
-    const res = await fetch(`${API_BASE}/solicitantes`, { headers: { "X-App-Secret": APP_SHARED_SECRET }, signal: ctrl.signal })
-    if (!res.ok) throw new Error(`Erro HTTP ${res.status} ao buscar solicitantes`)
-    const data = await res.json()
-    return data.names ?? []
-  } catch (err) {
-    if (ctrl.signal.aborted) throw new Error("A conexão demorou demais para responder.")
-    throw err
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
 // Heartbeat de presença (ver hooks/use-presenca.ts). `keepalive` deixa o envio de
 // "saindo" terminar mesmo com a página fechando. Nunca lança: presença não pode quebrar o app.
 export async function sendPresence(sessionToken: string, estado: { tabId: string; ts: number; visivel?: boolean; saindo?: boolean }): Promise<number | null> {

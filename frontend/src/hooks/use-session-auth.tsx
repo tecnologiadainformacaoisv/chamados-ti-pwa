@@ -1,18 +1,15 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react"
-import { fetchSolicitanteNomes, loginOrRegister, logoutFromServer, registerExterno } from "@/lib/app-api"
+import { createContext, useCallback, useContext, useState, type ReactNode } from "react"
+import { loginOrRegister, logoutFromServer, registerExterno } from "@/lib/app-api"
 
 const TOKEN_KEY = "session_token"
 const NAME_KEY = "user_name"
 
-type BootState = "loading" | "boot-error" | "setup" | "app"
+type BootState = "setup" | "app"
 
 type SessionAuthValue = {
   state: BootState
   sessionToken: string
   userName: string
-  nomes: string[]
-  bootError: string | null
-  retryBoot: () => void
   login: (email: string, password: string, confirmacao?: string, nome?: string) => Promise<void>
   // Autocadastro externo (2026-09-17) — quem não está na lista pré-aprovada pela TI
   // digita o próprio nome/e-mail em vez de escolher/entrar com um já cadastrado.
@@ -25,53 +22,18 @@ type SessionAuthValue = {
 
 const SessionAuthContext = createContext<SessionAuthValue | null>(null)
 
-// Porta boot()/onSetupSubmit() de app.js. Diferença deliberada de use-admin-auth.tsx: aqui
-// NÃO existe ping de validação no boot — a versão vanilla também não faz isso, confia na
-// sessão salva até a primeira chamada real de API (que aí sim trata 401).
+// Porta boot()/onSetupSubmit() de app.js. Com sessão salva o app abre direto: não há consulta no
+// boot. Quem foi desativado, renomeado ou excluído tem a sessão revogada no servidor, e a primeira
+// chamada real de API devolve 401 (handleSessionExpired).
 export function SessionAuthProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<BootState>("loading")
-  const [sessionToken, setSessionToken] = useState("")
-  const [userName, setUserName] = useState("")
-  const [nomes, setNomes] = useState<string[]>([])
-  const [bootError, setBootError] = useState<string | null>(null)
-  const bootedOnce = useRef(false)
-
-  const boot = useCallback(async () => {
-    setState("loading")
-    setBootError(null)
-    try {
-      const lista = await fetchSolicitanteNomes()
-      setNomes(lista)
-      const storedToken = localStorage.getItem(TOKEN_KEY)
-      const storedName = localStorage.getItem(NAME_KEY)
-      if (storedToken && storedName && lista.includes(storedName)) {
-        setSessionToken(storedToken)
-        setUserName(storedName)
-        setState("app")
-      } else {
-        setState("setup")
-      }
-    } catch (err) {
-      // Quem já tem sessão salva entra mesmo com a lista de nomes fora do ar: o login nem usa
-      // mais essa lista, e a primeira chamada real da API trata uma sessão expirada (401).
-      const storedToken = localStorage.getItem(TOKEN_KEY)
-      const storedName = localStorage.getItem(NAME_KEY)
-      if (storedToken && storedName) {
-        setSessionToken(storedToken)
-        setUserName(storedName)
-        setState("app")
-        return
-      }
-      setBootError(err instanceof Error ? err.message : "Não foi possível carregar a lista de solicitantes.")
-      setState("boot-error")
-    }
-  }, [])
-
-  useEffect(() => {
-    if (bootedOnce.current) return
-    bootedOnce.current = true
-    boot()
-  }, [boot])
+  const [salva] = useState(() => {
+    const token = localStorage.getItem(TOKEN_KEY)
+    const name = localStorage.getItem(NAME_KEY)
+    return token && name ? { token, name } : null
+  })
+  const [state, setState] = useState<BootState>(salva ? "app" : "setup")
+  const [sessionToken, setSessionToken] = useState(salva?.token ?? "")
+  const [userName, setUserName] = useState(salva?.name ?? "")
 
   const login = useCallback(async (email: string, password: string, confirmacao?: string, nome?: string) => {
     const result = await loginOrRegister(email, password, confirmacao, nome)
@@ -102,7 +64,7 @@ export function SessionAuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <SessionAuthContext.Provider
-      value={{ state, sessionToken, userName, nomes, bootError, retryBoot: boot, login, loginExterno, logout, handleSessionExpired: logout }}
+      value={{ state, sessionToken, userName, login, loginExterno, logout, handleSessionExpired: logout }}
     >
       {children}
     </SessionAuthContext.Provider>
