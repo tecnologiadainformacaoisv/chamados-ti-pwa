@@ -7,6 +7,9 @@ const MIN = 60_000
 const DIA = 24 * 60 * MIN
 
 test.describe("Gestão — O que atacar agora", () => {
+  // no celular esse papel é da tela inicial (admin-tela-inicial.spec.ts)
+  test.skip(({ isMobile }) => isMobile, "o bloco só existe no computador")
+
   const tarefas = () => [
     makeTask({ id: "atr", name: "Atrasado com atendente", status: { status: "aberto" }, due_date: Date.now() - 10 * MIN, assignees: [{ id: 200498355 }] }),
     makeTask({ id: "logo", name: "Vence logo", status: { status: "em atendimento" }, due_date: Date.now() + 5 * MIN, assignees: [{ id: 170628721 }] }),

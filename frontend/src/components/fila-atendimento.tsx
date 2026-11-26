@@ -114,10 +114,12 @@ export function FilaAtendimento({
               >
                 <span className="self-stretch" style={{ background: cor }} aria-hidden="true" />
                 <div className="min-w-0">
-                  <p className="m-0 truncate font-bold" title={t.name}>
-                    {numeroChamado(t) && <span className="mr-2 font-bold tabular-nums" style={{ color: MUTED }}>{numeroChamado(t)}</span>}
+                  {/* O título é o problema em si: no celular quebra em até 3 linhas. Antes, um título comprido
+                      sumia inteiro (botão que não quebra dentro de texto cortado) e sobrava só o número. */}
+                  <p className="m-0 flex min-w-0 items-start font-bold" title={t.name}>
+                    {numeroChamado(t) && <span className="mr-2 shrink-0 font-bold tabular-nums" style={{ color: MUTED }}>{numeroChamado(t)}</span>}
                     {/* botão de verdade: abre o resumo pelo teclado/leitor de tela (a linha toda continua clicável com o mouse) */}
-                    <button type="button" aria-expanded={expandido} className="max-w-full cursor-pointer truncate text-left font-bold focus-visible:outline focus-visible:outline-[3px] focus-visible:outline-offset-2 focus-visible:outline-[#0A3D62]">
+                    <button type="button" aria-expanded={expandido} className="line-clamp-3 min-w-0 cursor-pointer text-left font-bold break-words md:line-clamp-1 focus-visible:outline focus-visible:outline-[3px] focus-visible:outline-offset-2 focus-visible:outline-[#0A3D62]">
                       {t.name || "(sem título)"}
                     </button>
                     <AnexoTag task={t} />

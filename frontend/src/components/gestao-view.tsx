@@ -18,13 +18,19 @@ import { useAdminAuth } from "@/hooks/use-admin-auth"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { getCF, compararUrgencia, isAtrasado, venceLogo, fetchSolicitanteNomes, fetchTasks, isSessionError, postTaskUpdate, postBulkUpdate, createAdminTask, type CreateTaskPayload, type Filtros, type Task, type UpdatePayload } from "@/lib/api"
 import { LISTA_POLL_MS, OPERADORES, SOLUCAO_FIELD_ID, STATUS_ORDER } from "@/lib/constants"
+import { TelaInicial, casaFiltroInicial, ROTULO_INICIAL, type FiltroInicial } from "@/components/tela-inicial"
 import { downloadTasksCsv } from "@/lib/export-csv"
 import { bateNumero } from "@/lib/ticket-helpers"
 
 type ViewMode = "fila" | "quadro" | "tabela"
 
+const rotuloDoFiltro = (f: string) => (ROTULO_FILTRO as Record<string, string>)[f] ?? (ROTULO_INICIAL as Record<string, string>)[f] ?? f
+
+// Marca "tela inicial já vista" enquanto o app estiver aberto (sessionStorage some ao fechar).
+const INICIO_VISTO = "admin_inicio_visto"
+
 export function GestaoView() {
-  const { secret, logout } = useAdminAuth()
+  const { secret, logout, operadorId } = useAdminAuth()
   const queryClient = useQueryClient()
 
   const [filtros, setFiltros] = useState<Filtros>({})
@@ -49,10 +55,44 @@ export function GestaoView() {
   const [createError, setCreateError] = useState<string | null>(null)
   // Fase 3 do redesign de UX (2026-10-19): foco do teclado, filtro rápido, paleta e "Desfazer" seguro
   const [focoId, setFocoId] = useState<string | null>(null)
-  const [rapido, setRapido] = useState<"todos" | "hora" | FiltroRapido>("todos")
+  const [rapido, setRapido] = useState<"todos" | "hora" | FiltroRapido | FiltroInicial>("todos")
   const [paletaAberta, setPaletaAberta] = useState(false)
   const [acaoErro, setAcaoErro] = useState<string | null>(null)
   const desfazer = useDesfazer()
+
+  const [inicioVisto, setInicioVisto] = useState(() => {
+    // Aberto por uma notificação: quem tocou no aviso quer ir direto aos chamados.
+    if (window.location.hash === "#aviso") {
+      sessionStorage.setItem(INICIO_VISTO, "1")
+      window.history.replaceState(null, "", window.location.pathname + window.location.search)
+    }
+    // Decide uma vez, na entrada: quem abriu em tela larga não ganha a tela inicial no meio do uso
+    // só por estreitar a janela ou girar o aparelho.
+    if (window.innerWidth >= 768) sessionStorage.setItem(INICIO_VISTO, "1")
+    return sessionStorage.getItem(INICIO_VISTO) === "1"
+  })
+  function sairDoInicio(filtro?: FiltroInicial) {
+    sessionStorage.setItem(INICIO_VISTO, "1")
+    setInicioVisto(true)
+    if (filtro) setRapido(filtro)
+  }
+  // App já aberto na tela inicial: tocar numa notificação ou no sino leva aos chamados.
+  useEffect(() => {
+    const dispensar = () => {
+      sessionStorage.setItem(INICIO_VISTO, "1")
+      setInicioVisto(true)
+    }
+    const ouvir = (e: MessageEvent) => {
+      if (e.data?.type === "ABRIR_CHAMADOS") dispensar()
+    }
+    const sw = navigator.serviceWorker
+    sw?.addEventListener("message", ouvir)
+    window.addEventListener("admin-ver-chamados", dispensar)
+    return () => {
+      sw?.removeEventListener("message", ouvir)
+      window.removeEventListener("admin-ver-chamados", dispensar)
+    }
+  }, [])
 
   function changeViewMode(mode: ViewMode) {
     setViewMode(mode)
@@ -112,6 +152,7 @@ export function GestaoView() {
     const rapidos = rapido === "todos"
       ? filtrados
       : filtrados.filter((t) => {
+          if (rapido === "aguardando" || rapido === "atendimento" || rapido === "espera") return casaFiltroInicial(rapido, t)
           if (rapido !== "hora") return casaFiltro(rapido, t, agora)
           const st = (t.status?.status || "").toLowerCase()
           if (st !== "aberto" && st !== "em atendimento") return false
@@ -287,7 +328,12 @@ export function GestaoView() {
   // efeito) pra enxergar sempre o estado mais novo sem reinscrever o listener. Ignora campo em foco, diálogo
   // aberto e QUALQUER controle Radix (Select/menu): lá as teclas são typeahead/escolha de opção, não nossas.
   const teclaRef = useRef<(e: KeyboardEvent) => void>(() => {})
+  // Tela inicial do celular. Com erro e sem dado nenhum ela não aparece (os zeros pareceriam "tudo em
+  // dia"); `errorUpdateCount` evita alternar com a tela de erro a cada nova tentativa.
+  const mostrarInicio = isMobile && !inicioVisto && !(!tasksQuery.data && (tasksQuery.isError || tasksQuery.errorUpdateCount > 0))
+
   function aoTeclar(e: KeyboardEvent) {
+    if (mostrarInicio) return // atalhos não agem sobre chamados que não estão na tela
     const alvo = e.target as HTMLElement | null
     const emCampo = alvo?.tagName === "INPUT" || alvo?.tagName === "TEXTAREA" || alvo?.tagName === "SELECT" || !!alvo?.isContentEditable
     const haDialogo = !!document.querySelector('[role="dialog"]')
@@ -368,6 +414,19 @@ export function GestaoView() {
     },
   })
 
+  if (mostrarInicio) {
+    return (
+      <TelaInicial
+        tasks={tasks}
+        nome={operadorId ? OPERADORES[String(operadorId)] : undefined}
+        carregando={!tasksQuery.data}
+        desatualizado={tasksQuery.isError && !!tasksQuery.data}
+        onEscolher={sairDoInicio}
+        onVerTodos={() => sairDoInicio()}
+      />
+    )
+  }
+
   return (
     <div className="flex flex-col gap-4">
       {/* Bloco fixo (2026-09-15, pedido do usuário: "a parte de cima fixa e
@@ -388,7 +447,8 @@ export function GestaoView() {
         <LinhaDoDia tasks={tasks} focoId={focoId} onOpenTask={(t) => { setFocoId(t.id); setSelectedTask(t) }} />
       )}
 
-      {!tasksQuery.isLoading && !!tasksQuery.data && (
+      {/* No celular quem faz esse papel é a tela inicial. */}
+      {!isMobile && !tasksQuery.isLoading && !!tasksQuery.data && (
         <AcoesPendentes tasks={tasks} ativo={rapido} onFiltrar={(f) => setRapido(rapido === f ? "todos" : f)} />
       )}
 
@@ -413,8 +473,8 @@ export function GestaoView() {
                 </Button>
               ))}
               {rapido !== "todos" && rapido !== "atrasados" && rapido !== "hora" && (
-                <Button size="sm" variant="default" aria-label={`Remover filtro: ${ROTULO_FILTRO[rapido]}`} onClick={() => setRapido("todos")}>
-                  {ROTULO_FILTRO[rapido]} <span aria-hidden>✕</span>
+                <Button size="sm" variant="default" aria-label={`Remover filtro: ${rotuloDoFiltro(rapido)}`} onClick={() => setRapido("todos")}>
+                  {rotuloDoFiltro(rapido)} <span aria-hidden>✕</span>
                 </Button>
               )}
             </div>
@@ -432,14 +492,14 @@ export function GestaoView() {
             <span className="hidden sm:inline">Exportar CSV</span>
             <span className="sm:hidden">CSV</span>
           </Button>
-          <div className="hidden gap-1 rounded-md border border-border p-1 md:flex">
-            <Button size="sm" variant={viewMode === "fila" ? "default" : "ghost"} onClick={() => changeViewMode("fila")}>
+          <div className="flex gap-1 rounded-md border border-border p-1" role="group" aria-label="Modo de visualização">
+            <Button size="sm" aria-pressed={modoVisao === "fila"} variant={modoVisao === "fila" ? "default" : "ghost"} onClick={() => changeViewMode("fila")}>
               <ListOrdered className="h-4 w-4" /> Fila
             </Button>
-            <Button size="sm" variant={viewMode === "quadro" ? "default" : "ghost"} onClick={() => changeViewMode("quadro")}>
+            <Button size="sm" aria-pressed={modoVisao === "quadro"} variant={modoVisao === "quadro" ? "default" : "ghost"} onClick={() => changeViewMode("quadro")}>
               <LayoutGrid className="h-4 w-4" /> Quadro
             </Button>
-            <Button size="sm" variant={viewMode === "tabela" ? "default" : "ghost"} onClick={() => changeViewMode("tabela")}>
+            <Button size="sm" className="hidden md:inline-flex" aria-pressed={modoVisao === "tabela"} variant={modoVisao === "tabela" ? "default" : "ghost"} onClick={() => changeViewMode("tabela")}>
               <List className="h-4 w-4" /> Tabela
             </Button>
           </div>

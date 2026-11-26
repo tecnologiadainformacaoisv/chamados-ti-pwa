@@ -86,6 +86,7 @@ function AdminShell() {
   // Sino do header: vai pra Gestão e destaca a coluna "Aberto" do Quadro por 1,5 s (UX 2026-10-19).
   // Na Tabela não existe essa coluna: só troca de seção, sem erro.
   function irParaAbertos() {
+    window.dispatchEvent(new Event("admin-ver-chamados")) // fecha a tela inicial do celular, se aberta
     setSecaoAtiva("gestao")
     setTimeout(() => {
       const col = document.querySelector<HTMLElement>('[data-status="aberto"]')

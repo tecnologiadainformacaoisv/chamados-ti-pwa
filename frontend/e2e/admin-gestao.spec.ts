@@ -427,13 +427,17 @@ test.describe("Gestão — ordem de atendimento, erro/vazio honestos e celular",
     await expect(cards).toHaveCount(12)
   })
 
-  test("no celular só existe o Quadro (sem botão Tabela)", async ({ page }, info) => {
+  test("no celular dá pra alternar Fila e Quadro, sem Tabela", async ({ page }, info) => {
     test.skip(info.project.name !== "mobile", "regra só do viewport de celular")
     await mockAdminRoutes(page, { tasks: [makeTask({ id: "m1", name: "Chamado celular" })] })
-    await gotoAdminLoggedIn(page)
-    await expect(page.getByText("Chamado celular")).toBeVisible()
-    await expect(page.getByRole("button", { name: "Tabela" })).toHaveCount(0)
-    await expect(page.getByRole("button", { name: "Quadro" })).toHaveCount(0)
+    await gotoAdminLoggedIn(page, undefined, false, "fila")
+    const modos = page.getByRole("group", { name: "Modo de visualização" })
+    await expect(page.getByRole("region", { name: "Fila de atendimento" })).toBeVisible()
+    await expect(modos.getByRole("button", { name: "Tabela" })).toBeHidden()
+    await modos.getByRole("button", { name: "Quadro" }).click()
+    await expect(page.locator('[data-status="aberto"]')).toContainText("Chamado celular")
+    await modos.getByRole("button", { name: "Fila" }).click()
+    await expect(page.getByRole("region", { name: "Fila de atendimento" })).toContainText("Chamado celular")
   })
 
   test("filtro escolhido mantém o rótulo: 'Solicitante: Fulano'", async ({ page }, info) => {

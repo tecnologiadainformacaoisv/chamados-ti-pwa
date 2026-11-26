@@ -85,8 +85,12 @@ self.addEventListener("notificationclick", (e) => {
   e.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
       const appClient = list.find((c) => "url" in c && c.url.startsWith(adminUrl))
-      if (appClient && "focus" in appClient) return appClient.focus()
-      return self.clients.openWindow(adminUrl)
+      if (appClient && "focus" in appClient) {
+        appClient.postMessage({ type: "ABRIR_CHAMADOS" })
+        return appClient.focus()
+      }
+      // "#aviso": o painel pula a tela inicial do celular.
+      return self.clients.openWindow(adminUrl + "#aviso")
     })
   )
 })
