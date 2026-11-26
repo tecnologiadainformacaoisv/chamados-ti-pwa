@@ -347,6 +347,8 @@ export async function testAdminPush(secret: string, id: string): Promise<void> {
 export function isAtrasado(task: Task): boolean {
   if (!task.due_date) return false
   const status = (task.status?.status || "").toLowerCase()
+  // Em espera o prazo está parado: não conta como atrasado (mesma regra da Fila e do Dashboard).
+  if (status === "pendente") return false
   const dueDate = Number(task.due_date)
   const referencia = status === "encerrado" && task.date_closed ? Number(task.date_closed) : Date.now()
   return referencia > dueDate

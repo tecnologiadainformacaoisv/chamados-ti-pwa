@@ -732,7 +732,9 @@ async function handleRegister(request, env, ctx) {
     }
     try {
       await garantirEsquemaSolicitacoes(env);
+      await garantirEsquemaAvaliacao(env);
       await env.CHAMADOS_DB.batch([
+        ...moverAvaliacoes(env, name, nomeDigitado),
         env.CHAMADOS_DB.prepare('UPDATE solicitantes SET name = ? WHERE name = ?').bind(nomeDigitado, name),
         env.CHAMADOS_DB.prepare('UPDATE chamados SET solicitante = ? WHERE solicitante = ?').bind(nomeDigitado, name),
         env.CHAMADOS_DB.prepare('UPDATE solicitacoes SET solicitante = ? WHERE solicitante = ?').bind(nomeDigitado, name),
@@ -795,6 +797,11 @@ async function handleRegisterExterno(request, env, ctx) {
   if (!name || name.split(' ').length < 2) {
     return jsonRes({ error: 'Digite seu nome completo (nome e sobrenome)' }, 400);
   }
+  // Sem limite, um nome enorme estourava a chave do KV depois do INSERT e deixava o e-mail travado.
+  if (name.length > 100) return jsonRes({ error: 'Nome muito longo (máximo 100 caracteres)' }, 400);
+  if (new TextEncoder().encode(`auth_${name}`).length > 400) return jsonRes({ error: 'Nome muito longo' }, 400);
+  if (telefone && telefone.length > 30) return jsonRes({ error: 'Telefone muito longo' }, 400);
+  if (email && email.length > 254) return jsonRes({ error: 'E-mail inválido' }, 400);
   if (!email || !EMAIL_FORMATO_REGEX.test(email)) {
     return jsonRes({ error: 'E-mail inválido' }, 400);
   }
@@ -2790,6 +2797,8 @@ async function handleAdminExcluirSolicitante(request, env, name) {
     env.CHAMADOS_DB.prepare('DELETE FROM solicitacao_eventos WHERE solicitacao_id IN (SELECT id FROM solicitacoes WHERE solicitante = ?)').bind(nome),
     env.CHAMADOS_DB.prepare('DELETE FROM solicitacoes WHERE solicitante = ?').bind(nome),
   ]);
+  await garantirEsquemaAvaliacao(env);
+  await env.CHAMADOS_DB.prepare('DELETE FROM avaliacoes_mensais WHERE solicitante = ?').bind(nome).run();
   await env.CHAMADOS_DB.prepare('DELETE FROM solicitantes WHERE name = ?').bind(nome).run();
   await env.SUBSCRIPTIONS.delete(`auth_${nome}`);
   await env.SUBSCRIPTIONS.delete(`usub_${nome}`);
@@ -2820,7 +2829,9 @@ async function handleAdminRenomearSolicitante(request, env, name) {
   const ocupado = await env.CHAMADOS_DB.prepare('SELECT name FROM solicitantes WHERE name = ?').bind(novo).first();
   if (ocupado) return jsonRes({ error: 'já existe um solicitante com o novo nome' }, 409);
 
+  await garantirEsquemaAvaliacao(env);
   const stmts = [
+    ...moverAvaliacoes(env, antigo, novo),
     email !== undefined
       ? env.CHAMADOS_DB.prepare('UPDATE solicitantes SET name = ?, email = ? WHERE name = ?').bind(novo, email, antigo)
       : env.CHAMADOS_DB.prepare('UPDATE solicitantes SET name = ? WHERE name = ?').bind(novo, antigo),
@@ -3776,6 +3787,15 @@ function competenciaAtual(agora = Date.now()) {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
+// As avaliações guardam o nome como texto: acompanham a troca de nome. O que sobrar no nome de destino
+// é de alguém que não existe mais (o destino está livre em `solicitantes`) e sai antes, por causa da chave.
+function moverAvaliacoes(env, de, para) {
+  return [
+    env.CHAMADOS_DB.prepare('DELETE FROM avaliacoes_mensais WHERE solicitante = ?').bind(para),
+    env.CHAMADOS_DB.prepare('UPDATE avaliacoes_mensais SET solicitante = ? WHERE solicitante = ?').bind(para, de),
+  ];
+}
+
 const esquemaAvaliacaoGarantido = new WeakSet();
 async function garantirEsquemaAvaliacao(env) {
   if (esquemaAvaliacaoGarantido.has(env.CHAMADOS_DB)) return;
@@ -3794,13 +3814,15 @@ async function handleGetAvaliacaoMensal(request, env) {
   if (!session) return sessionInvalid();
   await garantirEsquemaAvaliacao(env);
   const competencia = competenciaAtual();
-  const row = await env.CHAMADOS_DB.prepare(
+  const externa = await contaExterna(env, session.name);
+  // Conta de fora nunca lê respostas, mesmo que exista linha antiga com o mesmo nome.
+  const row = externa ? null : await env.CHAMADOS_DB.prepare(
     `SELECT respostas, comentario FROM avaliacoes_mensais WHERE solicitante = ? AND competencia = ?`
   ).bind(session.name, competencia).first();
   let respostas = null;
   try { respostas = row ? JSON.parse(row.respostas) : null; } catch { respostas = null; }
   // Conta de fora (autocadastro) não avalia a TI da instituição: a faixa não aparece e o POST recusa.
-  return jsonRes({ competencia, respondida: !!row, elegivel: !(await contaExterna(env, session.name)), respostas, comentario: row?.comentario ?? null });
+  return jsonRes({ competencia, respondida: !!row, elegivel: !externa, respostas, comentario: row?.comentario ?? null });
 }
 
 async function handlePostAvaliacaoMensal(request, env) {

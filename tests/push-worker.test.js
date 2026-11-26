@@ -1347,6 +1347,17 @@ async function test(name, fn) {
     assert.strictEqual(res.status, 200, await res.text());
   });
 
+  await test('cadastro externo recusa nome, telefone ou e-mail gigantes sem gravar nada', async () => {
+    const tentar = (extra) => worker.fetch(req('POST', '/auth/register-externo', {
+      headers: { ...SECRET_HEADERS, 'CF-Connecting-IP': '198.51.100.90' },
+      body: JSON.stringify({ name: 'Pessoa Limite', email: 'pessoa.limite@gmail.com', password: 'senhaboa123', ...extra }),
+    }), env);
+    assert.strictEqual((await tentar({ name: `Pessoa ${'a'.repeat(100)}` })).status, 400);
+    assert.strictEqual((await tentar({ telefone: '9'.repeat(31) })).status, 400);
+    assert.strictEqual((await tentar({ email: `${'a'.repeat(250)}@gmail.com` })).status, 400);
+    assert.strictEqual((await tentar({})).status, 200, 'o e-mail continua livre depois das recusas');
+  });
+
   console.log('--- POST /admin/migrate-schema-solicitantes-origem (2026-09-17) ---');
   await test('sem X-Admin-Secret dá 403', async () => {
     const res = await worker.fetch(req('POST', '/admin/migrate-schema-solicitantes-origem'), env);
@@ -3503,6 +3514,33 @@ async function test(name, fn) {
     const outra = await sessaoDe(env, 'Pessoa Avalia C', '10.3.3.3');
     assert.strictEqual((await minha(env, outra)).respondida, false);
   });
+  await test('avaliação mensal: acompanha a troca de nome e some na exclusão da pessoa', async () => {
+    const env = eqEnv();
+    const h = await sessaoDe(env, 'Pessoa Muda Nome', '10.3.3.8');
+    assert.strictEqual((await avaliar(env, h, { respostas: RESP_OK })).status, 200);
+    const nomes = async () => (await env.CHAMADOS_DB.prepare('SELECT solicitante FROM avaliacoes_mensais').all()).results.map((r) => r.solicitante);
+    const adm = (rota, corpo) => worker.fetch(req('POST', rota, { headers: { 'X-Admin-Secret': env.ADMIN_SECRET }, body: JSON.stringify(corpo) }), env);
+    // sobra antiga no nome de destino não impede a troca
+    await env.CHAMADOS_DB.prepare('INSERT INTO avaliacoes_mensais (solicitante, competencia, respostas, created_at) VALUES (?, ?, ?, ?)')
+      .bind('Pessoa Nome Novo', competenciaAtual(), '{}', 1).run();
+    assert.strictEqual((await adm(`/admin/solicitantes/${encodeURIComponent('Pessoa Muda Nome')}/renomear`, { novoNome: 'Pessoa Nome Novo' })).status, 200);
+    assert.deepStrictEqual(await nomes(), ['Pessoa Nome Novo']);
+    assert.strictEqual((await adm(`/admin/solicitantes/${encodeURIComponent('Pessoa Nome Novo')}/excluir`, {})).status, 200);
+    assert.deepStrictEqual(await nomes(), []);
+  });
+  await test('avaliação mensal: conta externa não lê respostas que sobraram com o mesmo nome', async () => {
+    const env = eqEnv();
+    const reg = await worker.fetch(req('POST', '/auth/register-externo', {
+      headers: { ...SECRET_HEADERS, 'CF-Connecting-IP': '10.3.3.9' },
+      body: JSON.stringify({ name: 'Pessoa De Fora', email: 'pessoa.de.fora@gmail.com', password: 'senhaboa123' }),
+    }), env);
+    const h = comSessao((await reg.json()).token);
+    await minha(env, h); // cria a tabela
+    await env.CHAMADOS_DB.prepare('INSERT INTO avaliacoes_mensais (solicitante, competencia, respostas, comentario, created_at) VALUES (?, ?, ?, ?, ?)')
+      .bind('Pessoa De Fora', competenciaAtual(), JSON.stringify(RESP_OK), 'segredo', 1).run();
+    const r = await minha(env, h);
+    assert.deepStrictEqual([r.elegivel, r.respondida, r.respostas, r.comentario], [false, false, null, null]);
+  });
   await test('avaliação mensal: cada nota é validada (1-5, recomendação 0-10, inteiros) e nada é gravado se alguma falhar', async () => {
     const env = eqEnv();
     const h = await sessaoDe(env, 'Pessoa Avalia D', '10.3.3.4');
@@ -3591,7 +3629,7 @@ async function test(name, fn) {
     const desc = (env, h, impressoras) => worker.fetch(req('POST', '/agente/descobertas', { headers: h, body: JSON.stringify({ impressoras }) }), env);
     const lista = async (env) => (await (await worker.fetch(req('GET', '/admin/equipamentos', { headers: { 'X-Admin-Secret': 'admin-secret' } }), env)).json()).equipamentos;
     const toners = async (env) => (await (await worker.fetch(req('GET', '/admin/toners', { headers: { 'X-Admin-Secret': 'admin-secret' } }), env)).json()).toners;
-    const mono = { ip: '10.10.2.103', marca: 'Lexmark', modelo: 'MX622adhe', numero_serie: 'SERIE-A', suprimentos: [{ cor: 'preto', nivel: 42, codigo: '56F4U0E' }] };
+    const mono = { ip: '192.0.2.103', marca: 'Lexmark', modelo: 'MX622adhe', numero_serie: 'SERIE-A', suprimentos: [{ cor: 'preto', nivel: 42, codigo: '56F4U0E' }] };
     await test('sem segredo do agente (ou com o de admin) não cadastra nada', async () => {
       const env = agEnv();
       assert.strictEqual((await desc(env, {}, [mono])).status, 403);
@@ -3606,7 +3644,7 @@ async function test(name, fn) {
       assert.deepStrictEqual([r2.criadas, r2.atualizadas, r2.toners_criados, r2.toners_atualizados], [0, 1, 0, 1]);
       const eqs = await lista(env);
       assert.strictEqual(eqs.length, 1);
-      assert.deepStrictEqual([eqs[0].ip, eqs[0].modelo, eqs[0].numero_serie], ['10.10.2.103', 'MX622adhe', 'SERIE-A']);
+      assert.deepStrictEqual([eqs[0].ip, eqs[0].modelo, eqs[0].numero_serie], ['192.0.2.103', 'MX622adhe', 'SERIE-A']);
       const ts = await toners(env);
       assert.deepStrictEqual([ts.length, ts[0].codigo, ts[0].nivel_percentual], [1, '56F4U0E', 30]);
     });
@@ -3614,11 +3652,11 @@ async function test(name, fn) {
       const env = agEnv();
       await desc(env, AG, [mono]);
       const id = (await lista(env))[0].id;
-      await worker.fetch(req('POST', '/admin/equipamentos/' + id, { headers: { 'X-Admin-Secret': 'admin-secret' }, body: JSON.stringify({ tipo: 'impressora', modelo: 'Nome da TI', ip: '10.10.2.103' }) }), env);
-      await desc(env, AG, [{ ...mono, ip: '10.10.2.150' }]);
+      await worker.fetch(req('POST', '/admin/equipamentos/' + id, { headers: { 'X-Admin-Secret': 'admin-secret' }, body: JSON.stringify({ tipo: 'impressora', modelo: 'Nome da TI', ip: '192.0.2.103' }) }), env);
+      await desc(env, AG, [{ ...mono, ip: '192.0.2.150' }]);
       const eqs = await lista(env);
       assert.strictEqual(eqs.length, 1, 'não pode virar duas impressoras');
-      assert.deepStrictEqual([eqs[0].ip, eqs[0].modelo], ['10.10.2.150', 'Nome da TI']);
+      assert.deepStrictEqual([eqs[0].ip, eqs[0].modelo], ['192.0.2.150', 'Nome da TI']);
     });
     await test('dados inválidos são ignorados sem derrubar o lote', async () => {
       const env = agEnv();

@@ -9,11 +9,11 @@ Enquanto uma leitura é recente (menos de 48 h), o nível manda na situação do
 
 ## Cadastro automático (2026-11-25)
 
-O agente **descobre as impressoras sozinho**: varre a rede em que o computador está (até um /22, ex.: `10.10.0.0/22`),
+O agente **descobre as impressoras sozinho**: varre a rede em que o computador está (até um /22, ex.: `10.99.0.0/22`),
 pergunta por SNMP quem é impressora e **cadastra no painel** cada impressora (modelo, número de série, IP) e cada
 cartucho (cor, código quando a impressora informa, nível). Repetir não duplica; se a impressora trocar de IP ela é
 reconhecida pelo número de série; o que a TI editar na tela não é sobrescrito. A varredura roda na partida e a cada
-~12 horas. Setor a TI preenche uma vez na tela (a rede não informa). `REDES=10.10.0.0/22` força outra rede;
+~12 horas. Setor a TI preenche uma vez na tela (a rede não informa). `REDES=10.99.0.0/22` força outra rede;
 `--sem-descoberta` desliga; `--descobrir` só varre e sai; `--seco` mostra sem enviar.
 
 ## O que precisa ser feito uma vez

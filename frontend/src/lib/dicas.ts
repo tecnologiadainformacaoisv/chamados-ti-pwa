@@ -17,8 +17,33 @@ export type Dica = {
   exceto?: RegExp
 }
 
-// Água, queimado, faísca: nenhuma dica de "tente de novo". Só desligar e chamar a TI.
-const PERIGO = /\bagua\b|molh|liquido|derram|\b(cafe|suco)\b.*(caiu|notebook|teclado|computador)|(caiu|virou).*\b(cafe|suco)\b|queimad|queimando|fumaca|faisca|\bchoque|derret/
+// Água, fogo, bateria estufada, fio exposto: nenhuma dica de "tente de novo". Só desligar e chamar a TI.
+// Na dúvida entra aqui: um alerta a mais custa pouco, mandar ligar um aparelho em risco não.
+const PERIGO = new RegExp(
+  [
+    // líquido
+    /\bagua\b|molh|liquido|derram|entorn|encharc|goteira|\bumid|refrigerante|na (pia|privada)\b/,
+    /\b(cafe|suco)\b.*(caiu|notebook|teclado|computador)|(caiu|virou).*\b(cafe|suco)\b/,
+    /(levou|pegou|tomou) chuva|chuva.{0,20}(notebook|computador|\bpc\b|impressora)|pingando (em cima|sobre)/,
+    // calor, fogo, eletricidade
+    /queimad|queimando|queimou|fumac|fumeg|faisca|derret|\bfogo\b|incendi|explod|explos|caiu (um )?raio/,
+    /\bchoq(ue|uinho|uezinho)s?\b|eletrificad|cheiro (muito )?(forte|estranho|de (fio|plastico|queim))/,
+    /curto[- ]?circuito|\b(deu|dando|fechou|em|um) curto\b(?! (periodo|prazo|intervalo|espaco|tempo|atraso))/,
+    /\bpipoco\b|barulho de estouro/,
+    /(estour|estal|pipoc)\w*.{0,25}(fonte|tomada|bateria|estabilizador|nobreak|carregador)/,
+    /(fonte|tomada|bateria|estabilizador|nobreak|carregador)\b.{0,25}(estour|estal|pipoc)/,
+    /(fonte|tomada|cabo|carregador|estabilizador|nobreak)\b.{0,25}(esquent|\bquente|pretej|escurec)/,
+    // bateria e fios
+    /estuf|inchad|inchou|desencapad|cobre (aparecendo|a mostra)/,
+    /bateria.{0,30}(expand|inflad|inchan|levant)|(expand|inflad|levant)\w*.{0,30}bateria/,
+    /(fios?|cabos?)\b.{0,20}(descascad|expost|rasgad)/,
+  ]
+    .map((r) => r.source)
+    .join("|"),
+)
+// Parecem perigo mas não são: saem do texto antes do teste acima.
+const FALSO_PERIGO =
+  /\b(contas?|faturas?|boletos?|despesas?|consumo( mensal)?|planilhas?|relatorios?) (de|da|das) agua\b|\b(valor|salario|peso) liquido\b|\bchoques? de (horarios?|agendas?|datas?|reunio\w*|interesses?|informac\w*)\b|\b(sistema|brigada|alarme|treinamento|plano) (de|contra) incendio\b/g
 export const DICA_PERIGO: Dica = {
   id: "perigo",
   titulo: "Pare e chame a TI",
@@ -151,7 +176,7 @@ export const DICAS: Dica[] = [
       "Deixe carregando por 10 minutos antes de tentar ligar.",
       "Segure o botão de ligar por 15 segundos, solte e ligue normalmente.",
     ],
-    aviso: "Se houver cheiro de queimado, líquido derramado ou o aparelho esquentar muito, desligue da tomada e chame a TI.",
+    aviso: "Se houver cheiro de queimado, líquido derramado, bateria estufada, fio exposto ou o aparelho esquentar muito, não carregue nem ligue: desligue da tomada e chame a TI.",
     tipos: [0],
     quando: [/nao (esta |ta |quer )?(liga|ligando)\b/, /tela preta/],
     exceto: /impressora|\bar\b|condicionado|telefone|\btv\b|televis|ventilador|\bluz/,
@@ -234,7 +259,7 @@ export function semAcento(texto: string): string {
 export function dicasPara(texto: string, tipo?: number): Dica[] {
   const t = semAcento(texto)
   if (t.length < 4) return []
-  if (PERIGO.test(t)) return [DICA_PERIGO]
+  if (PERIGO.test(t.replace(FALSO_PERIGO, " "))) return [DICA_PERIGO]
   if (PEDIDO.test(t) && !DEFEITO.test(t)) return []
   return DICAS.map((dica, ordem) => {
     if (dica.exceto?.test(t)) return { dica, ordem, pontos: 0 }

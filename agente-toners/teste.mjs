@@ -70,10 +70,10 @@ import { parseSysDescr, ipsDaRede } from './snmp-toner.mjs'
 assert.deepEqual(parseSysDescr('Lexmark MX622adhe version MXTCT.081.226 kernel 5.4'), { marca: 'Lexmark', modelo: 'MX622adhe' })
 assert.deepEqual(parseSysDescr('HP LaserJet Pro M404dn'), { marca: 'HP', modelo: 'LaserJet Pro M404dn' })
 assert.deepEqual(parseSysDescr(''), { marca: null, modelo: null })
-const ips = ipsDaRede('10.10.0.0/22')
+const ips = ipsDaRede('10.99.0.0/22')
 assert.equal(ips.length, 1022)
-assert.equal(ips[0], '10.10.0.1')
-assert.equal(ips.at(-1), '10.10.3.254')
+assert.equal(ips[0], '10.99.0.1')
+assert.equal(ips.at(-1), '10.99.3.254')
 assert.deepEqual(ipsDaRede('10.0.0.0/8'), []) // grande demais
 assert.deepEqual(ipsDaRede('lixo'), [])
 console.log('agente-toners: descoberta ok')

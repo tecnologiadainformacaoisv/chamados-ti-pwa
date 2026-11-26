@@ -406,6 +406,7 @@ function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
         <Label htmlFor="setup-ext-name">Nome completo</Label>
         <Input
           id="setup-ext-name"
+          maxLength={100}
           autoComplete="name"
           placeholder="Seu nome e sobrenome"
           className="h-11"
@@ -418,6 +419,7 @@ function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
         <Label htmlFor="setup-ext-email">Seu e-mail</Label>
         <Input
           id="setup-ext-email"
+          maxLength={254}
           type="email"
           autoComplete="username"
           placeholder="voce@email.com"
@@ -431,6 +433,7 @@ function SetupExterno({ onVoltar }: { onVoltar: () => void }) {
         <Label htmlFor="setup-ext-telefone">Telefone (opcional)</Label>
         <Input
           id="setup-ext-telefone"
+          maxLength={30}
           type="tel"
           autoComplete="tel"
           placeholder="(85) 90000-0000"

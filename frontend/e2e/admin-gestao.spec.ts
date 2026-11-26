@@ -365,6 +365,18 @@ test.describe("Gestão — ordem de atendimento, erro/vazio honestos e celular",
     expect([...ordem].sort((a, b) => a - b)).toEqual(ordem)
   })
 
+  test("chamado em espera com prazo vencido não é marcado como atrasado", async ({ page }) => {
+    const tasks = [
+      makeTask({ id: "p1", name: "Em espera vencido", status: { status: "pendente" }, due_date: Date.now() - 10 * MIN }),
+      makeTask({ id: "p2", name: "Aberto vencido", status: { status: "aberto" }, due_date: Date.now() - 10 * MIN }),
+    ]
+    await mockAdminRoutes(page, { tasks })
+    await gotoAdminLoggedIn(page)
+    await expect(page.locator('[data-task-id="p2"]')).toContainText("⚠")
+    await expect(page.locator('[data-task-id="p1"]')).toContainText("Prazo:")
+    await expect(page.locator('[data-task-id="p1"]')).not.toContainText("⚠")
+  })
+
   test("com a rede fora, mostra erro com 'Tentar de novo' em vez de colunas vazias com 0", async ({ page }) => {
     await mockAdminRoutes(page, { tasks: [makeTask({ id: "e1", name: "Qualquer" })] })
     await page.route("**/admin/tasks?*", (route) => (route.request().method() === "GET" ? route.abort() : route.fallback()))
